@@ -464,9 +464,26 @@ mkdir -p "${WORK_DIR}/xray-unzip" "${WORK_DIR}/singbox-untar"
 unzip -o -q "${WORK_DIR}/xray.zip" -d "${WORK_DIR}/xray-unzip"
 [ -x "${WORK_DIR}/xray-unzip/xray" ] || die "Xray archive did not contain an xray binary."
 install -m 0755 "${WORK_DIR}/xray-unzip/xray" /usr/local/bin/xray
+# Geo data: Xray looks for geoip.dat / geosite.dat NEXT TO its binary
+# (/usr/local/bin) — the config dir is not searched. The rendered and
+# minimal configs both use a geoip:private routing rule, so without
+# these files `xray run -test` fails at install time. Install them
+# beside the binary (and keep a copy in the config dir). If a future
+# Xray archive drops them, fetch them from the official geo repos.
 for dat in geoip.dat geosite.dat; do
-    [ -f "${WORK_DIR}/xray-unzip/${dat}" ] && \
+    if [ -f "${WORK_DIR}/xray-unzip/${dat}" ]; then
+        install -m 0644 "${WORK_DIR}/xray-unzip/${dat}" "/usr/local/bin/${dat}"
         install -m 0644 "${WORK_DIR}/xray-unzip/${dat}" "/usr/local/etc/xray/${dat}"
+    else
+        warn "Xray archive has no ${dat}; downloading it from the official geo repo ..."
+        case "$dat" in
+            geoip.dat)   _geo_url="https://github.com/v2fly/geoip/releases/latest/download/geoip.dat" ;;
+            geosite.dat) _geo_url="https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat" ;;
+        esac
+        curl -fsSL "$_geo_url" -o "/usr/local/bin/${dat}" && \
+            install -m 0644 "/usr/local/bin/${dat}" "/usr/local/etc/xray/${dat}" || \
+            die "Could not obtain ${dat} (needed for the geoip:private routing rule)."
+    fi
 done
 tar -xzf "${WORK_DIR}/sing-box.tar.gz" -C "${WORK_DIR}/singbox-untar"
 SINGBOX_BIN="$(find "${WORK_DIR}/singbox-untar" -type f -name sing-box | head -n 1)"
@@ -518,7 +535,9 @@ if [ -z "${WG_PRIVATE_KEY:-}" ]; then
     fi
 fi
 if [ -z "${SS_PASSWORD:-}" ]; then
-    SS_PASSWORD="$(openssl rand -base64 24 | tr -d '\n')"
+    # 2022-blake3-aes-128-gcm needs a base64 key of exactly 16 bytes —
+    # a longer token is rejected by Xray ("bad key") and by sing-box.
+    SS_PASSWORD="$(openssl rand -base64 16 | tr -d '\n')"
 fi
 if [ -z "${HY2_PASSWORD:-}" ]; then
     HY2_PASSWORD="$(openssl rand -base64 24 | tr -d '\n')"
@@ -605,12 +624,42 @@ CERT_FINGERPRINT="$(openssl x509 -noout -fingerprint -sha256 \
 # Hysteria2 in sing-box, WireGuard wg0). The panel re-renders these from
 # its database whenever users or inbounds change.
 # ---------------------------------------------------------------------------
+# Rendered configs only carry VPN inbounds when the DB has usable
+# clients; on a fresh install there are none yet, so the rendered
+# Xray config would contain only the api inbound. In that case keep
+# the minimal defaults (listening inbounds, empty client lists) — the
+# panel re-renders from the DB as soon as the first user is created.
+_rendered_has_vpn_inbounds() {
+    /opt/vpn-panel/venv/bin/python -c '
+import json, sys
+try:
+    cfg = json.load(open("/opt/vpn-panel/data/rendered/xray.json"))
+except Exception:
+    sys.exit(1)
+tags = [i.get("tag") for i in cfg.get("inbounds", []) if isinstance(i, dict)]
+sys.exit(0 if any(t and t != "api" for t in tags) else 1)
+'
+}
+
 RENDERED=0
 if [ -f /opt/vpn-panel/scripts/render_configs.py ]; then
     info "Rendering configs with the panel's render script ..."
     if VPN_PANEL_HOME=/opt/vpn-panel /opt/vpn-panel/venv/bin/python \
             /opt/vpn-panel/scripts/render_configs.py; then
-        RENDERED=1
+        if _rendered_has_vpn_inbounds; then
+            # The render script writes to data/rendered/ — copy the
+            # outputs to the live config paths the cores actually read.
+            cp /opt/vpn-panel/data/rendered/xray.json "$XRAY_CONFIG"
+            cp /opt/vpn-panel/data/rendered/sing-box.json "$SINGBOX_CONFIG"
+            if [ -f /opt/vpn-panel/data/rendered/wg0.conf ]; then
+                cp /opt/vpn-panel/data/rendered/wg0.conf "$WG_CONFIG"
+                chmod 0660 "$WG_CONFIG"
+                chown root:vpn-panel "$WG_CONFIG"
+            fi
+            RENDERED=1
+        else
+            info "Rendered configs have no VPN inbounds yet (no users); keeping minimal defaults."
+        fi
     else
         warn "Render script failed; falling back to minimal configs."
     fi
