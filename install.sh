@@ -534,9 +534,15 @@ if [ -z "${WG_PRIVATE_KEY:-}" ]; then
         WG_PUBLIC_KEY=""
     fi
 fi
-if [ -z "${SS_PASSWORD:-}" ]; then
-    # 2022-blake3-aes-128-gcm needs a base64 key of exactly 16 bytes —
-    # a longer token is rejected by Xray ("bad key") and by sing-box.
+# A valid 2022-blake3-aes-128-gcm key is base64 of exactly 16 bytes.
+# Older installs stored a 24-byte token, which Xray rejects ("bad
+# key") — and re-installs reuse it from install.env, so validate the
+# stored value and regenerate when it is not a valid 16-byte key.
+_ss_key_bytes() {
+    printf '%s' "$1" | base64 -d 2>/dev/null | wc -c | tr -d ' '
+}
+if [ -z "${SS_PASSWORD:-}" ] || [ "$(_ss_key_bytes "$SS_PASSWORD")" != "16" ]; then
+    [ -n "${SS_PASSWORD:-}" ] && warn "Stored Shadowsocks key is not a valid 16-byte 2022-blake3 key; generating a new one."
     SS_PASSWORD="$(openssl rand -base64 16 | tr -d '\n')"
 fi
 if [ -z "${HY2_PASSWORD:-}" ]; then
