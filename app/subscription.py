@@ -1,4 +1,4 @@
-"""Dual-format subscriptions for vpn-panel (DESIGN.md §6.1/§6.3).
+"""Dual-format subscriptions for sparky-manager (DESIGN.md §6.1/§6.3).
 
 Pure functions only: no database, no FastAPI, stdlib only.
 
@@ -109,12 +109,21 @@ def decode_v2rayng_feed(body: bytes) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def build_singbox_feed(outbounds: list[dict]) -> dict:
-    """Wrap outbound objects into a sing-box subscription document.
+    """Wrap sing-box objects into a subscription document.
 
-    Returns ``{"outbounds": [...]}`` — a fresh dict holding the same
-    outbound objects in order, ready for ``json.dumps``.
+    Returns ``{"outbounds": [...]}`` — and, when any WireGuard
+    object is present, ``{"outbounds": [...], "endpoints": [...]}``:
+    sing-box removed the WireGuard *outbound* in 1.13.0, so
+    WireGuard objects (``type == "wireguard"``) are endpoints and
+    must live under ``"endpoints"`` or ``sing-box check`` rejects
+    the feed (``unknown field "server"``).
     """
-    return {"outbounds": list(outbounds)}
+    endpoints = [o for o in outbounds if o.get("type") == "wireguard"]
+    plain = [o for o in outbounds if o.get("type") != "wireguard"]
+    feed: dict[str, list[dict]] = {"outbounds": list(plain)}
+    if endpoints:
+        feed["endpoints"] = list(endpoints)
+    return feed
 
 
 def subscription_userinfo(
@@ -276,12 +285,15 @@ def outbound_for_client(
     Returns ``None`` for:
 
     * ``ikev2`` and unknown protocols (no sing-box outbound exists);
-    * ``shadowtls`` — sing-box carries ShadowTLS as a server-side
-      inbound/detour, not as a client outbound, so there is no
-      per-client outbound object to emit; the user gets it through the
-      Shadowsocks entry in the v2rayNG feed instead;
     * VLESS over XHTTP — sing-box does not support XHTTP, so such
       inbounds are emitted in the v2rayNG feed only (DESIGN.md §6.3).
+
+    WireGuard returns an **endpoint** object, not an outbound:
+    sing-box removed the WireGuard outbound in 1.13.0 (deprecated
+    since 1.11.0), so the feed must carry it under ``"endpoints"``
+    — :func:`build_singbox_feed` does that split. ShadowTLS returns
+    the outer outbound only; its Shadowsocks detour outbound comes
+    from :func:`outbounds_for_client`.
     """
     protocol = (protocol or "").lower().strip()
     port = _validate_port(inbound.get("port"))
@@ -408,13 +420,32 @@ def outbound_for_client(
         return outbound
 
     if protocol == "shadowtls":
-        # No per-client outbound object exists: ShadowTLS is a
-        # server-side sing-box inbound with an SS detour, so it is
-        # carried in the server config, not in the client JSON feed.
-        return None
+        # Client-side ShadowTLS v3 outbound: the outer handshake
+        # layer. The inner Shadowsocks detour outbound is built by
+        # outbounds_for_client (the pair is only usable together).
+        password = _stream_value(stream, "password") or client.get("password")
+        if not password:
+            raise ValueError("missing required value: password")
+        outbound = _base_outbound("shadowtls", tag, host, port)
+        outbound["version"] = 3
+        outbound["password"] = password
+        outbound["tls"] = _tls_block(_tls_sni(stream) or host)
+        return outbound
 
     if protocol == "wireguard":
-        outbound = _base_outbound("wireguard", tag, host, port)
+        # WireGuard is an ENDPOINT since sing-box 1.13.0 (the old
+        # wireguard outbound was removed): `server`/`server_port`
+        # become peers[].address/port, `local_address` becomes
+        # `address`, `peer_public_key` becomes peers[].public_key.
+        # build_singbox_feed moves this object into "endpoints".
+        outbound = {
+            "type": "wireguard",
+            "tag": tag,
+            "address": [],
+            "private_key": "",
+            "peers": [],
+            "mtu": 1280,
+        }
         # The client's private key: `extra_json["private_key"]` when
         # set, else the client dict's own `private_key` — and, as a
         # last resort, `password`, which is where the panel itself
@@ -438,11 +469,60 @@ def outbound_for_client(
         if not peer_public_key:
             raise ValueError("missing required value: peer_public_key "
                              "(inbound stream_json)")
-        outbound["local_address"] = extra.get("local_address") or ["10.8.0.2/32"]
+        outbound["address"] = extra.get("local_address") or ["10.8.0.2/32"]
         outbound["private_key"] = private_key
-        outbound["peer_public_key"] = peer_public_key
-        outbound["mtu"] = 1280
+        outbound["peers"] = [{
+            "address": host,
+            "port": port,
+            "public_key": peer_public_key,
+            "allowed_ips": ["0.0.0.0/0", "::/0"],
+            # Keep the tunnel alive behind NAT (mobile clients).
+            # sing-box wants SECONDS as a number (uint16), not a
+            # duration string — "25s" is rejected at load.
+            "persistent_keepalive_interval": 25,
+        }]
         return outbound
 
     # ikev2 / unknown: no sing-box outbound exists.
     return None
+
+
+def outbounds_for_client(
+    protocol: str,
+    client: dict,
+    inbound: dict,
+    host: str,
+    tag: str,
+) -> list[dict]:
+    """Every sing-box object for one (client, inbound) pair.
+
+    Usually one object (the result of :func:`outbound_for_client`);
+    ShadowTLS needs two — the outer outbound plus the inner
+    Shadowsocks outbound that detours through it (the detour
+    outbound's ``detour`` field points at the ShadowTLS tag, so its
+    traffic is wrapped by the handshake layer). Returns ``[]`` when
+    the pair has no sing-box representation.
+    """
+    protocol = (protocol or "").lower().strip()
+    if protocol == "shadowtls":
+        stream = inbound.get("stream_json") or {}
+        if not isinstance(stream, dict):
+            stream = {}
+        password = _stream_value(stream, "password") or client.get("password")
+        if not password:
+            raise ValueError("missing required value: password")
+        method = (
+            _stream_value(stream, "method")
+            or client.get("method")
+            or "2022-blake3-aes-128-gcm"
+        )
+        outer = outbound_for_client(protocol, client, inbound, host, tag)
+        assert outer is not None  # shadowtls branch above always builds
+        port = _validate_port(inbound.get("port"))
+        inner = _base_outbound("shadowsocks", f"{tag}-ss", host, port)
+        inner["method"] = method
+        inner["password"] = password
+        inner["detour"] = tag
+        return [outer, inner]
+    outbound = outbound_for_client(protocol, client, inbound, host, tag)
+    return [outbound] if outbound is not None else []

@@ -7,11 +7,12 @@
 
 <div class="card">
   <h2>{{ t.add_inbound }}</h2>
-  <form method="post" action="{{ base_path }}/inbounds">
+  <p class="muted">{{ t.port_auto_hint }}</p>
+  <form method="post" action="{{ base_path }}/inbounds" id="add-inbound-form">
     <div class="field-grid">
       <label>
         {{ t.tag }}
-        <input type="text" name="tag" pattern="[a-zA-Z0-9_-]+" required>
+        <input type="text" name="tag" pattern="[a-zA-Z0-9_-]+" value="{{ suggested.tag }}">
       </label>
       <label>
         {{ t.core }}
@@ -38,7 +39,7 @@
       </label>
       <label>
         {{ t.port }}
-        <input type="number" name="port" min="1" max="65535" required>
+        <input type="number" name="port" id="inbound-port" min="1" max="65535" value="{{ suggested.port if suggested.port else '' }}">
       </label>
       <label>
         {{ t.network }}
@@ -52,7 +53,7 @@
       </label>
       <label>
         {{ t.sni }}
-        <input type="text" name="sni" placeholder="www.microsoft.com">
+        <input type="text" name="sni" placeholder="www.microsoft.com" value="{{ suggested.sni }}">
       </label>
       <label>
         {{ t.path }}
@@ -65,6 +66,7 @@
     </div>
     <div class="form-actions">
       <button type="submit" class="btn btn-primary">{{ t.create }}</button>
+      <a class="btn btn-small" href="{{ base_path }}/inbounds">🎲 {{ t.new_values }}</a>
     </div>
   </form>
 </div>

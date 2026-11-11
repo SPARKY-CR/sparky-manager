@@ -1,4 +1,4 @@
-# vpn-panel
+# sparky-manager
 
 A multi-core VPN panel built from scratch: **Xray-core + sing-box + native
 WireGuard**, managed through one Persian-first web UI. It is made for the
@@ -22,8 +22,8 @@ code from 3X-UI, vpn-ui, Marzban, or any other panel.
 - **Login like other panels:** a fresh install picks a **random panel
   port** (10000–60000) and a random admin password. The installer
   prints one big login box with the full URL, username and password,
-  and saves it to `/root/vpn-panel-login.txt`;
-  `sudo vpn-panel info` reprints it. Fix the port with `--port`.
+  and saves it to `/root/sparky-manager-login.txt`;
+  `sudo sparky-manager info` reprints it. Fix the port with `--port`.
 - **No domain needed.** It works with a bare server IP. The default
   first pair — **VLESS + Reality (TCP 443)** and **Hysteria2 (UDP 443)**,
   plus **WireGuard (UDP 51820)** — needs no domain and no certificate.
@@ -50,17 +50,17 @@ code from 3X-UI, vpn-ui, Marzban, or any other panel.
 Ubuntu 22.04/24.04/26.04 or Debian 12/13 only, as root:
 
 ```bash
-curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh | sudo bash
+curl -Ls https://raw.githubusercontent.com/SPARKY-CR/sparky-manager/main/install.sh | sudo bash
 ```
 
-> The repo URL above is a **placeholder** until James creates the
-> `SPARKY-CR/Zed-panel` repo. Until then, clone the repo and run
-> `sudo bash install.sh` from inside it.
+> The one-liner needs the GitHub repo named `SPARKY-CR/sparky-manager`
+> (rename it from `Zed-panel` in repo Settings → General). Until the
+> rename, clone the repo and run `sudo bash install.sh` from inside it.
 
 Unattended install with explicit options:
 
 ```bash
-curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh | sudo bash -s -- --yes --reality-sni www.microsoft.com
+curl -Ls https://raw.githubusercontent.com/SPARKY-CR/sparky-manager/main/install.sh | sudo bash -s -- --yes --reality-sni www.microsoft.com
 ```
 
 The installer is idempotent (safe to re-run) and verifies itself before
@@ -76,10 +76,10 @@ Open the URL from the login box (`https://<your-server-IP>:<port>`), username `a
 the login box. If you use a domain, `https://<domain>:<port>`.
 
 ```bash
-sudo vpn-panel info      # reprint the login box
-sudo vpn-panel status    # service status
-sudo vpn-panel restart   # restart panel + cores
-sudo vpn-panel backup    # backup to /root/vpn-panel-backup-<date>.tar.gz
+sudo sparky-manager info      # reprint the login box
+sudo sparky-manager status    # service status
+sudo sparky-manager restart   # restart panel + cores
+sudo sparky-manager backup    # backup to /root/sparky-manager-backup-<date>.tar.gz
 ```
 
 ## Default protocols (no domain needed)
@@ -109,15 +109,15 @@ free Let's Encrypt certificate for the bare server IP — valid ~6 days,
 renewed automatically — and then the browser trusts the panel with no
 warning. If it fell back to the self-signed certificate generated at
 install, compare its SHA256 fingerprint with the one in the login box
-(`/root/vpn-panel-login.txt`) before proceeding, then open TCP 80 and
+(`/root/sparky-manager-login.txt`) before proceeding, then open TCP 80 and
 re-run the installer to retry the trusted certificate.
 
 **How do I reprint the login details?**
-`sudo vpn-panel info`.
+`sudo sparky-manager info`.
 
 **How do I uninstall?**
 `sudo bash install.sh --uninstall` — it stops the services, keeps a
-backup tarball in `/root/`, and removes `/opt/vpn-panel`.
+backup tarball in `/root/`, and removes `/opt/sparky-manager`.
 
 **Does the panel run Psiphon, Tor, or DNS tunnels?**
 No, by design. Those are client-side or third-party networks that
@@ -131,7 +131,7 @@ ZedSecure already bundles; a server panel has nothing to run for them.
   "traffic: n/a" rather than an invented number.
 - No reseller / multi-admin / billing, no multi-node management.
 - The installer fetches the *latest* stable cores at install time and
-  records them in `/opt/vpn-panel/versions.env`; there is no auto-update.
+  records them in `/opt/sparky-manager/versions.env`; there is no auto-update.
 
 ## License
 

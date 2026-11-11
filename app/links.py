@@ -1,4 +1,4 @@
-"""Share-link builders and parsers for vpn-panel.
+"""Share-link builders and parsers for sparky-manager.
 
 Pure functions only: no database, no FastAPI, stdlib plus ``qrcode``
 (for :func:`make_qr_png`, imported lazily inside the function).

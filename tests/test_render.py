@@ -265,20 +265,27 @@ def test_singbox_all_tls_inbounds_present_with_cert(db, render_settings):
     assert by_tag["anytls"]["type"] == "anytls"
     assert by_tag["naive"]["type"] == "naive"
     assert by_tag["naive"]["users"][0]["username"] == "alice-naive"
-    for tag in ("tuic", "anytls", "naive", "shadowtls"):
+    for tag in ("tuic", "anytls", "naive"):
         assert by_tag[tag]["tls"]["server_name"] == HOST
         assert by_tag[tag]["tls"]["certificate_path"]
         assert by_tag[tag]["tls"]["key_path"]
+    # ShadowTLS needs no local certificate (it mimics a remote
+    # handshake), so it carries a `handshake`, not a `tls` block.
+    assert by_tag["shadowtls"]["handshake"]["server"] == HOST
+    assert "tls" not in by_tag["shadowtls"]
 
 
 def test_singbox_tls_inbounds_omitted_without_cert(db, no_cert_settings):
     """No domain / no certificate -> TLS inbounds are omitted with a
     warning, never rendered broken (DESIGN.md §5.2). Reality +
-    WireGuard carry the install instead."""
+    WireGuard carry the install instead. ShadowTLS is the exception:
+    it needs no local certificate (handshake only), so it still
+    renders."""
     cfg, warnings = _render_singbox(db, no_cert_settings)
     tags = _inbound_tags(cfg)
-    for tag in ("tuic", "anytls", "naive", "shadowtls"):
+    for tag in ("tuic", "anytls", "naive"):
         assert tag not in tags, tag
+    assert "shadowtls" in tags
     assert warnings, "expected warnings for the omitted TLS inbounds"
     assert any("certificate" in w for w in warnings)
     ok, errors = singbox.validate_singbox_config(cfg)
@@ -292,7 +299,14 @@ def test_singbox_shadowtls_detour_present(db, render_settings):
     assert outer["type"] == "shadowtls"
     assert outer["version"] == 3
     assert outer["strict_mode"] is True
-    assert outer["password"]
+    assert outer["users"][0]["password"]
+    assert outer["users"][0]["name"]
+    assert "password" not in outer  # v3 uses `users`, not `password`
+    # sing-box shadowtls inbounds have NO "tls" field (rejected as
+    # an unknown field); the handshake names the mimicked server.
+    assert "tls" not in outer
+    assert outer["handshake"]["server"] == HOST
+    assert outer["handshake"]["server_port"] == 443
     inner_tag = outer["detour"]
     assert inner_tag == "shadowtls-inner"
     inner = by_tag[inner_tag]
@@ -300,7 +314,7 @@ def test_singbox_shadowtls_detour_present(db, render_settings):
     assert inner["listen"] == "127.0.0.1"  # never exposed to the internet
     assert inner["listen_port"] == 28388
     assert inner["method"] == SS_METHOD
-    assert inner["password"] == outer["password"]
+    assert inner["password"] == outer["users"][0]["password"]
     ok, errors = singbox.validate_singbox_config(cfg)
     assert ok, errors
 
@@ -326,10 +340,10 @@ def test_singbox_validator_rejects_bad_configs():
     bad = json.loads(json.dumps(good))
     bad["inbounds"].append(
         {"type": "shadowtls", "tag": "st", "listen": "::",
-         "listen_port": 8447, "version": 3, "password": "pw",
+         "listen_port": 8447, "version": 3,
+         "users": [{"name": "u", "password": "pw"}],
          "detour": "no-such-inbound",
-         "tls": {"enabled": True, "server_name": HOST,
-                 "certificate_path": "/c.pem", "key_path": "/k.pem"}})
+         "handshake": {"server": HOST, "server_port": 443}})
     ok, errors = singbox.validate_singbox_config(bad)
     assert not ok and any("detour" in e for e in errors)
     # TUIC user without a password.

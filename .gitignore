@@ -24,10 +24,10 @@ certs/*.crt
 *.key
 
 # Installed / server paths (not repo content)
-/opt/vpn-panel/
-/opt/vpn-panel/data/
-/opt/vpn-panel/certs/
-/opt/vpn-panel/venv/
+/opt/sparky-manager/
+/opt/sparky-manager/data/
+/opt/sparky-manager/certs/
+/opt/sparky-manager/venv/
 
 # Logs
 *.log

@@ -1,4 +1,4 @@
-"""vpn-panel — FastAPI application (Phase 1 MVP).
+"""sparky-manager — FastAPI application (Phase 1 MVP).
 
 Original code, written from scratch for this project.
 
@@ -51,9 +51,9 @@ shown to the admin instead of crashing the request):
 
 Bootstrap secrets (installer contract): on first run
 ``ensure_defaults()`` prefers the environment variables the installer
-writes to ``panel.env`` — ``VPN_PANEL_ADMIN_PASSWORD``,
-``VPN_PANEL_REALITY_PRIVATE_KEY`` / ``_PUBLIC_KEY`` / ``_SHORT_ID``,
-``VPN_PANEL_WG_PRIVATE_KEY`` / ``_PUBLIC_KEY`` — and generates fresh
+writes to ``panel.env`` — ``SPARKY_ADMIN_PASSWORD``,
+``SPARKY_REALITY_PRIVATE_KEY`` / ``_PUBLIC_KEY`` / ``_SHORT_ID``,
+``SPARKY_WG_PRIVATE_KEY`` / ``_PUBLIC_KEY`` — and generates fresh
 values only when they are absent. The admin password is printed to
 stdout only when it was generated here; an env-supplied password is
 never printed (the installer prints it in its login box).
@@ -71,8 +71,10 @@ import base64
 import json
 import logging
 import os
+import random
 import re
 import secrets
+import shutil
 import subprocess
 import uuid
 from contextlib import asynccontextmanager
@@ -87,13 +89,13 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-logger = logging.getLogger("vpn-panel")
+logger = logging.getLogger("sparky-manager")
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 
-SESSION_COOKIE = "vpn_panel_session"
+SESSION_COOKIE = "sparky_manager_session"
 SESSION_MAX_AGE = 12 * 3600  # 12 hours
 NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
@@ -213,7 +215,7 @@ def _web_prefix() -> str:
     try:
         return normalize_web_path(str(raw))
     except ValueError:
-        logger.warning("invalid VPN_PANEL_WEB_PATH %r; panel served at root", raw)
+        logger.warning("invalid SPARKY_WEB_PATH %r; panel served at root", raw)
         return ""
 
 
@@ -221,7 +223,7 @@ WEB_PATH = _web_prefix()
 
 
 PANEL_PORT = _cfg_attr("PANEL_PORT", 2053)
-DATA_DIR = Path(_cfg_attr("DATA_DIR", "/opt/vpn-panel/data"))
+DATA_DIR = Path(_cfg_attr("DATA_DIR", "/opt/sparky-manager/data"))
 # app.config names these XRAY_CONFIG / SINGBOX_CONFIG / WG_CONFIG.
 XRAY_CONFIG_PATH = _cfg_attr("XRAY_CONFIG", "/usr/local/etc/xray/config.json")
 XRAY_BINARY = _cfg_attr("XRAY_BINARY", "/usr/local/bin/xray")
@@ -233,12 +235,12 @@ WG_CONFIG_PATH = _cfg_attr("WG_CONFIG", "/etc/wireguard/wg0.conf")
 # systemd unit's EnvironmentFile). ensure_defaults() prefers these over
 # generating fresh values, so the installer's login box always matches
 # what the app actually uses. Never logged.
-ENV_ADMIN_PASSWORD = "VPN_PANEL_ADMIN_PASSWORD"
-ENV_REALITY_PRIVATE_KEY = "VPN_PANEL_REALITY_PRIVATE_KEY"
-ENV_REALITY_PUBLIC_KEY = "VPN_PANEL_REALITY_PUBLIC_KEY"
-ENV_REALITY_SHORT_ID = "VPN_PANEL_REALITY_SHORT_ID"
-ENV_WG_PRIVATE_KEY = "VPN_PANEL_WG_PRIVATE_KEY"
-ENV_WG_PUBLIC_KEY = "VPN_PANEL_WG_PUBLIC_KEY"
+ENV_ADMIN_PASSWORD = "SPARKY_ADMIN_PASSWORD"
+ENV_REALITY_PRIVATE_KEY = "SPARKY_REALITY_PRIVATE_KEY"
+ENV_REALITY_PUBLIC_KEY = "SPARKY_REALITY_PUBLIC_KEY"
+ENV_REALITY_SHORT_ID = "SPARKY_REALITY_SHORT_ID"
+ENV_WG_PRIVATE_KEY = "SPARKY_WG_PRIVATE_KEY"
+ENV_WG_PUBLIC_KEY = "SPARKY_WG_PUBLIC_KEY"
 
 # ---------------------------------------------------------------------------
 # i18n — inline fa/en strings (no app.i18n dependency).
@@ -246,7 +248,7 @@ ENV_WG_PUBLIC_KEY = "VPN_PANEL_WG_PUBLIC_KEY"
 
 STRINGS: dict[str, dict[str, str]] = {
     "fa": {
-        "app_name": "پنل VPN",
+        "app_name": "Sparky Manager",
         "dashboard": "داشبورد",
         "inbounds": "اینباندها",
         "users": "کاربران",
@@ -277,6 +279,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "actions": "عملیات",
         "add_user": "افزودن کاربر",
         "add_inbound": "افزودن اینباند",
+        "new_values": "مقادیر جدید",
+        "port_auto_hint": "پورت و برچسب خودکار ساخته می‌شوند؛ کافیست ثبت کنید.",
+        "zedsecure_bundle": "خروجی ZedSecure",
+        "zedsecure_hint": "یک فایل JSON با همهٔ کانفیگ‌های این کاربر، مخصوص اپ ZedSecure.",
         "note": "یادداشت",
         "traffic_limit_gb": "سقف ترافیک (گیگابایت، خالی = نامحدود)",
         "expires_days": "انقضا (روز، خالی = بدون انقضا)",
@@ -329,7 +335,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "footer_note": "پنل VPN — فاز ۱",
     },
     "en": {
-        "app_name": "VPN Panel",
+        "app_name": "Sparky Manager",
         "dashboard": "Dashboard",
         "inbounds": "Inbounds",
         "users": "Users",
@@ -360,6 +366,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "actions": "Actions",
         "add_user": "Add user",
         "add_inbound": "Add inbound",
+        "new_values": "New values",
+        "port_auto_hint": "Port and tag are auto-generated — just submit.",
+        "zedsecure_bundle": "ZedSecure export",
+        "zedsecure_hint": "One JSON file with all of this user's configs, made for the ZedSecure app.",
         "note": "Note",
         "traffic_limit_gb": "Traffic limit (GB, empty = unlimited)",
         "expires_days": "Expiry (days, empty = never)",
@@ -635,11 +645,29 @@ def _links_for_user(
 # ---------------------------------------------------------------------------
 
 
+def _privileged_cmd(*args: str) -> list[str]:
+    """Prefix a privileged command with ``sudo -n`` when sudo exists.
+
+    The panel runs as the unprivileged ``sparky-manager`` user; the
+    installer grants it NOPASSWD sudo for exactly the commands it
+    needs (``systemctl restart/is-active/status`` for its services,
+    ``wg show wg0 transfer``). ``-n`` makes sudo fail immediately
+    instead of prompting for a password (a prompt would hang the
+    request until the subprocess timeout). When there is no sudo
+    binary (dev run), the plain command is used and the caller sees
+    the real error.
+    """
+    if shutil.which("sudo"):
+        return ["sudo", "-n", *args]
+    return list(args)
+
+
 def _restart_service(name: str) -> Optional[str]:
-    """``systemctl restart <name>``; returns an error string or None."""
+    """``systemctl restart <name>`` (via sudo when available); returns
+    an error string or None."""
     try:
         proc = subprocess.run(
-            ["systemctl", "restart", name],
+            _privileged_cmd("systemctl", "restart", name),
             timeout=30,
             capture_output=True,
             text=True,
@@ -734,14 +762,14 @@ def rerender_configs(db: Session) -> list[str]:
             # Real API: render_wg_config(server_private_key, peers, *,
             # address, listen_port, dns) -> str. Peers carry
             # public_key + allowed_ips; the server key lives in settings
-            # (seeded from VPN_PANEL_WG_PRIVATE_KEY by ensure_defaults).
+            # (seeded from SPARKY_WG_PRIVATE_KEY by ensure_defaults).
             server_key = (settings.get("wireguard_private_key") or "").strip()
             if not server_key:
-                server_key = os.environ.get(ENV_WG_PRIVATE_KEY, "").strip()
+                server_key = _env_secret(ENV_WG_PRIVATE_KEY)
             if not server_key:
                 errors.append(
                     "wireguard server key missing (setting "
-                    "wireguard_private_key / VPN_PANEL_WG_PRIVATE_KEY); "
+                    "wireguard_private_key / SPARKY_WG_PRIVATE_KEY); "
                     "wg0.conf was not updated"
                 )
             else:
@@ -855,10 +883,22 @@ def _default_inbounds(reality: Optional[dict[str, str]] = None) -> list[dict[str
     ]
 
 
+def _env_secret(key: str) -> str:
+    """Read a ``SPARKY_*`` secret env var, falling back to the
+    pre-rename ``VPN_PANEL_*`` spelling (same compat rule as
+    ``app.config._env``)."""
+    value = os.environ.get(key, "").strip()
+    if value:
+        return value
+    if key.startswith("SPARKY_"):
+        return os.environ.get("VPN_PANEL_" + key[len("SPARKY_"):], "").strip()
+    return ""
+
+
 def _env_or_generate(key: str, generator) -> tuple[str, bool]:
     """Value of env var ``key`` when set and non-blank, else a fresh
     generated value. Returns ``(value, came_from_env)``."""
-    value = os.environ.get(key, "").strip()
+    value = _env_secret(key)
     if value:
         return value, True
     return generator(), False
@@ -869,10 +909,10 @@ def ensure_defaults(db: Session) -> Optional[str]:
 
     Bootstrap rule (installer contract): secrets prefer the
     environment variables the installer wrote to
-    ``/opt/vpn-panel/data/panel.env`` (loaded via the systemd unit's
-    ``EnvironmentFile``) — ``VPN_PANEL_ADMIN_PASSWORD``,
-    ``VPN_PANEL_REALITY_PRIVATE_KEY`` / ``_PUBLIC_KEY`` / ``_SHORT_ID``,
-    ``VPN_PANEL_WG_PRIVATE_KEY`` / ``_PUBLIC_KEY``. Fresh values are
+    ``/opt/sparky-manager/data/panel.env`` (loaded via the systemd unit's
+    ``EnvironmentFile``) — ``SPARKY_ADMIN_PASSWORD``,
+    ``SPARKY_REALITY_PRIVATE_KEY`` / ``_PUBLIC_KEY`` / ``_SHORT_ID``,
+    ``SPARKY_WG_PRIVATE_KEY`` / ``_PUBLIC_KEY``. Fresh values are
     generated only when the env vars are absent (e.g. a dev run).
 
     Returns the admin password ONLY when it was generated here (the
@@ -893,14 +933,14 @@ def ensure_defaults(db: Session) -> Optional[str]:
             # No env password was supplied (dev run): print once so the
             # operator can log in. Never printed again afterwards.
             print("=" * 60, flush=True)
-            print("  vpn-panel — first run: admin account created", flush=True)
+            print("  sparky-manager — first run: admin account created", flush=True)
             print(f"  Panel:    http://<server-ip>:{PANEL_PORT}  (or https if TLS is set up)", flush=True)
             print("  Username: admin", flush=True)
             print(f"  Password: {generated_password}", flush=True)
             print("  Save this password — it is printed ONLY this once.", flush=True)
             print("=" * 60, flush=True)
         else:
-            logger.info("admin account created from VPN_PANEL_ADMIN_PASSWORD")
+            logger.info("admin account created from SPARKY_ADMIN_PASSWORD")
 
     # Reality keypair / short-id: env first, generate only if absent.
     # Stored in settings (Xray renderer reads reality_private_key from
@@ -917,9 +957,9 @@ def ensure_defaults(db: Session) -> Optional[str]:
     if "private_key" not in reality:
         # No usable stored keypair: prefer env, else generate a fresh
         # X25519 pair via the xray module when available.
-        env_private = os.environ.get(ENV_REALITY_PRIVATE_KEY, "").strip()
-        env_public = os.environ.get(ENV_REALITY_PUBLIC_KEY, "").strip()
-        env_short = os.environ.get(ENV_REALITY_SHORT_ID, "").strip()
+        env_private = _env_secret(ENV_REALITY_PRIVATE_KEY)
+        env_public = _env_secret(ENV_REALITY_PUBLIC_KEY)
+        env_short = _env_secret(ENV_REALITY_SHORT_ID)
         if env_private and env_public:
             reality["private_key"] = env_private
             reality["public_key"] = env_public
@@ -949,8 +989,8 @@ def ensure_defaults(db: Session) -> Optional[str]:
     # WireGuard server keypair: env first, generate only if absent.
     wg_now = {row.key: (row.value or "") for row in db.query(Setting).all()}
     if not wg_now.get("wireguard_private_key"):
-        env_wg_private = os.environ.get(ENV_WG_PRIVATE_KEY, "").strip()
-        env_wg_public = os.environ.get(ENV_WG_PUBLIC_KEY, "").strip()
+        env_wg_private = _env_secret(ENV_WG_PRIVATE_KEY)
+        env_wg_public = _env_secret(ENV_WG_PUBLIC_KEY)
         if env_wg_private:
             db.add(Setting(key="wireguard_private_key", value=env_wg_private))
             if env_wg_public:
@@ -1002,7 +1042,7 @@ async def _traffic_sync_loop() -> None:
             wg_text: Optional[str] = None
             try:
                 proc = subprocess.run(
-                    ["wg", "show", "wg0", "transfer"],
+                    _privileged_cmd("wg", "show", "wg0", "transfer"),
                     timeout=10,
                     capture_output=True,
                     text=True,
@@ -1065,7 +1105,7 @@ async def lifespan(app: FastAPI):
         task.cancel()
 
 
-app = FastAPI(title="vpn-panel", lifespan=lifespan)
+app = FastAPI(title="sparky-manager", lifespan=lifespan)
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -1307,6 +1347,117 @@ def _stream_transport(stream: dict[str, Any], protocol: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Inbound auto-generation (like 3X-UI: the add-inbound form comes
+# pre-filled and the admin can accept the values as-is — no port typing
+# required). The port is a random FREE one (10000-60000, not used by
+# any inbound on the same transport, not reserved, not the panel port,
+# and it must bind on the server); the tag is derived from protocol +
+# port and made unique; a VLESS+Reality inbound gets a fresh keypair +
+# short-id instead of sharing the installer's pair.
+# ---------------------------------------------------------------------------
+
+RESERVED_PORTS = frozenset({500, 4500})  # IKEv2 (kept free by design)
+SUGGESTED_PORT_MIN = 10000
+SUGGESTED_PORT_MAX = 60000
+
+
+def _used_ports_by_transport(db: Session) -> dict[str, set[int]]:
+    """Ports in use per transport, from the DB inbounds."""
+    used: dict[str, set[int]] = {"tcp": set(), "udp": set()}
+    for inbound in db.query(Inbound).all():
+        transport = _stream_transport(inbound.stream, inbound.protocol)
+        used.setdefault(transport, set()).add(int(inbound.port))
+    return used
+
+
+def _port_is_bindable(port: int) -> bool:
+    """True when nothing on this machine is listening on ``port``.
+
+    A quick bind probe (bind + close): a failed bind means another
+    process holds the port. Best-effort only — a port can be taken
+    between the probe and the real bind, so the create handler still
+    validates the clash against the DB.
+    """
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("0.0.0.0", port))
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
+def suggest_free_port(db: Session, transport: str = "tcp") -> int:
+    """Random free port for a new inbound (10000-60000).
+
+    Excludes the reserved ports (500/4500), the panel's own port, and
+    every port an existing inbound already uses on the same transport
+    (TCP and UDP inbounds may share a port — VLESS-Reality TCP 443 +
+    Hysteria2 UDP 443 — so only same-transport ports are excluded).
+    Candidates are also bind-probed so a port held by another process
+    is skipped. After 50 tries, any unused port in range is returned
+    without the bind probe.
+    """
+    used = _used_ports_by_transport(db).get(transport, set())
+    blocked = set(used) | set(RESERVED_PORTS) | {int(PANEL_PORT)}
+    for _ in range(50):
+        port = random.randint(SUGGESTED_PORT_MIN, SUGGESTED_PORT_MAX)
+        if port in blocked:
+            continue
+        if _port_is_bindable(port):
+            return port
+    for _ in range(200):
+        port = random.randint(SUGGESTED_PORT_MIN, SUGGESTED_PORT_MAX)
+        if port not in blocked:
+            return port
+    raise ValueError("no free port found in 10000-60000")
+
+
+def suggest_inbound_tag(db: Session, protocol: str, port: int) -> str:
+    """Unique tag for a new inbound: ``<protocol>-<port>``, with a
+    ``-2`` / ``-3`` … suffix while the tag is taken (same idea as
+    3X-UI's auto-composed inbound tags)."""
+    base = f"{protocol}-{port}"
+    taken = {row[0] for row in db.query(Inbound.tag).all()}
+    if base not in taken:
+        return base
+    for n in range(2, 100):
+        candidate = f"{base}-{n}"
+        if candidate not in taken:
+            return candidate
+    return f"{base}-{secrets.token_hex(3)}"
+
+
+def _new_reality_keypair() -> dict[str, str]:
+    """Fresh Reality keypair for one inbound (``xray x25519`` format).
+
+    Prefers ``app.xray.generate_reality_keypair``; falls back to the
+    WireGuard keypair generator re-encoded as base64url (same keys,
+    different alphabet). Returns ``{}`` when nothing works — the
+    caller then leaves the inbound on the installer's shared pair
+    (the renderer falls back to the settings keys).
+    """
+    try:
+        if xray_mod is not None and hasattr(xray_mod, "generate_reality_keypair"):
+            pair = xray_mod.generate_reality_keypair()
+            if isinstance(pair, dict) and pair.get("private_key") and pair.get("public_key"):
+                return {"private_key": str(pair["private_key"]), "public_key": str(pair["public_key"])}
+    except Exception:  # noqa: BLE001
+        logger.exception("reality keypair generation failed")
+    try:
+        if wireguard_mod is not None and hasattr(wireguard_mod, "generate_keypair"):
+            private_b64, public_b64 = wireguard_mod.generate_keypair()
+            encode = lambda k: base64.urlsafe_b64encode(base64.b64decode(k)).rstrip(b"=").decode("ascii")  # noqa: E731
+            return {"private_key": encode(private_b64), "public_key": encode(public_b64)}
+    except Exception:  # noqa: BLE001
+        logger.exception("reality keypair fallback failed")
+    return {}
+
+
+# ---------------------------------------------------------------------------
 # Public / health routes
 # ---------------------------------------------------------------------------
 
@@ -1515,6 +1666,7 @@ def user_detail(
                 "links": links,
                 "links_available": links_mod is not None,
                 "sub_url": f"{base}/sub/{user.sub_token}",
+                "zedsecure_url": f"{base}/sub/{user.sub_token}/zedsecure.json",
                 "user_url": f"{base}/u/{user.sub_token}",
                 "host": host,
             },
@@ -1591,18 +1743,31 @@ def inbounds_page(
     db: Session = Depends(db_session),
 ):
     inbounds = db.query(Inbound).order_by(Inbound.port, Inbound.tag).all()
+    settings = get_settings(db)
+    # Pre-fill the form like 3X-UI does: a free port, a unique tag and
+    # the configured Reality SNI, so the admin can submit as-is.
+    try:
+        suggested_port = suggest_free_port(db, "tcp")
+        suggested_tag = suggest_inbound_tag(db, "vless", suggested_port)
+    except ValueError:
+        suggested_port, suggested_tag = 0, "vless"
+    suggested = {
+        "tag": suggested_tag,
+        "port": suggested_port,
+        "sni": settings.get("reality_sni") or "www.microsoft.com",
+    }
     return templates.TemplateResponse(request, "inbounds.html",
-        _template_ctx(request, {"admin": admin, "inbounds": inbounds}),
+        _template_ctx(request, {"admin": admin, "inbounds": inbounds, "suggested": suggested}),
     )
 
 
 @app.post("/inbounds")
 def create_inbound(
     request: Request,
-    tag: str = Form(...),
+    tag: str = Form(""),
     core: str = Form(...),
     protocol: str = Form(...),
-    port: int = Form(...),
+    port: int = Form(0),
     remark: str = Form(""),
     sni: str = Form(""),
     path: str = Form(""),
@@ -1611,23 +1776,45 @@ def create_inbound(
     db: Session = Depends(db_session),
 ):
     t = t_for(get_lang(request))
-    tag = tag.strip()
+    tag = (tag or "").strip()
     core = core.strip().lower()
     protocol = protocol.strip().lower()
+    network = (network or "tcp").strip() or "tcp"
+    transport = _stream_transport({"transport": network}, protocol)
+    # Auto-generation: an empty port (0) means "pick a free one" and
+    # an empty tag means "derive it from protocol + port" — the form
+    # comes pre-filled with both, so accepting the defaults just works.
+    if not port:
+        try:
+            port = suggest_free_port(db, transport)
+        except ValueError:
+            return _redirect("/inbounds", request, err=t["invalid_port"])
+    if not 1 <= port <= 65535:
+        return _redirect("/inbounds", request, err=t["invalid_port"])
+    if port in RESERVED_PORTS:
+        return _redirect("/inbounds", request, err=t["port_reserved"])
+    if not tag:
+        tag = suggest_inbound_tag(db, protocol, port)
     if not NAME_RE.match(tag):
         return _redirect("/inbounds", request, err=t["invalid_name"])
     if db.query(Inbound).filter(Inbound.tag == tag).first() is not None:
         return _redirect("/inbounds", request, err=t["tag_exists"])
-    if not 1 <= port <= 65535:
-        return _redirect("/inbounds", request, err=t["invalid_port"])
-    if port in (500, 4500):
-        return _redirect("/inbounds", request, err=t["port_reserved"])
     stream: dict[str, Any] = {
-        "network": network.strip() or "tcp",
-        "transport": _stream_transport({"transport": network.strip()}, protocol),
+        "network": network,
+        "transport": transport,
     }
     if sni.strip():
-        stream["reality"] = {"sni": sni.strip(), "dest": f"{sni.strip()}:443"}
+        reality_block: dict[str, Any] = {"sni": sni.strip(), "dest": f"{sni.strip()}:443"}
+        if protocol == "vless":
+            # A fresh keypair per inbound (like 3X-UI's "Get New Cert"):
+            # the share links read public_key + short_id from here, so
+            # without them the links would miss pbk/sid entirely.
+            pair = _new_reality_keypair()
+            if pair:
+                reality_block["private_key"] = pair["private_key"]
+                reality_block["public_key"] = pair["public_key"]
+                reality_block["short_id"] = secrets.token_hex(4)
+        stream["reality"] = reality_block
         stream["tls"] = {"sni": sni.strip()}
         stream["security"] = "reality" if protocol == "vless" else "tls"
     if path.strip():
@@ -1776,12 +1963,172 @@ def user_page(request: Request, token: str, db: Session = Depends(db_session)):
                 "links": links,
                 "links_available": links_mod is not None,
                 "sub_url": f"{base}/sub/{user.sub_token}",
+                "zedsecure_url": f"{base}/sub/{user.sub_token}/zedsecure.json",
                 "user_url": f"{base}/u/{user.sub_token}",
                 "host": host,
                 "error": "" if usable else t_for(get_lang(request))["user_unusable"],
             },
         ),
     )
+
+
+def _userinfo_header(user: Any) -> str:
+    """``Subscription-Userinfo`` header value for ``user`` ("" on error)."""
+    if subscription_mod is None:
+        return ""
+    expires_unix = 0
+    if user.expires_at is not None:
+        exp = user.expires_at
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        expires_unix = int(exp.timestamp())
+    try:
+        return str(
+            subscription_mod.subscription_userinfo(
+                user.traffic_used_bytes or 0,
+                user.traffic_limit_bytes,
+                expires_unix,
+            )
+            or ""
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("subscription_userinfo failed")
+        return ""
+
+
+def _singbox_outbounds_for(
+    db: Session, client: Any, inbound: Any, user: Any, host: str, settings: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Every sing-box object for a (client, inbound) pair (``[]`` to skip).
+
+    Shared by the sing-box feed and the ZedSecure bundle. The
+    WireGuard server public key is not part of the inbound row — it
+    lives in settings — so it is handed to the outbound builder
+    through the inbound's stream, where ``outbounds_for_client``
+    looks for it. ShadowTLS contributes two objects (outer outbound
+    + inner SS detour outbound), so the feed must use this one.
+    """
+    if subscription_mod is None:
+        return []
+    try:
+        inbound_dict = _inbound_dict(inbound)
+        if inbound.protocol == "wireguard":
+            stream = dict(inbound_dict.get("stream_json") or {})
+            stream.setdefault(
+                "peer_public_key",
+                (settings.get("wireguard_public_key") or ""),
+            )
+            inbound_dict["stream_json"] = stream
+        outbounds = subscription_mod.outbounds_for_client(
+            inbound.protocol,
+            _client_dict(client, user),
+            inbound_dict,
+            host,
+            f"{user.name}-{inbound.tag}",
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("outbounds_for_client failed for %s", inbound.tag)
+        return []
+    return list(outbounds or [])
+
+
+def _wireguard_conf_for(
+    client: Any, inbound: Any, host: str, settings: dict[str, Any]
+) -> Optional[str]:
+    """Rendered WireGuard ``.conf`` for one client (None when unavailable)."""
+    if wireguard_mod is None:
+        return None
+    try:
+        client_dict = _client_dict(client, None)
+        extra = client_dict.get("extra_json") or {}
+        if not isinstance(extra, dict):
+            extra = {}
+        private_key = (client_dict.get("password") or "").strip()
+        address = str(extra.get("allowed_ips") or "").strip()
+        server_public = (settings.get("wireguard_public_key") or "").strip()
+        if not private_key or not address or not server_public:
+            return None
+        return wireguard_mod.render_peer_config(
+            private_key,
+            address,
+            server_public,
+            host,
+            server_port=int(inbound.port),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("wireguard peer config failed for %s", inbound.tag)
+        return None
+
+
+def _build_zedsecure_bundle(
+    db: Session, user: Any, host: str, settings: dict[str, Any]
+) -> dict[str, Any]:
+    """ZedSecure bundle: everything the app needs, in one document.
+
+    Schema (``format: "zedsecure-bundle"``, ``version: 1``): user
+    metadata (name / expiry / traffic), one ``configs`` entry per
+    usable (client, inbound) — share link when one exists, the
+    sing-box outbound object (``singbox_endpoint`` for WireGuard,
+    which is an endpoint since sing-box 1.13), and the WireGuard
+    ``.conf`` text for WireGuard inbounds — plus the flat ``links``
+    list and the whole sing-box feed under ``singbox`` (including
+    the ShadowTLS detour outbound and the WireGuard endpoint).
+    Built only from the existing per-user builders; no protocol
+    logic is duplicated here.
+    """
+    configs: list[dict[str, Any]] = []
+    links: list[str] = []
+    singbox_outbounds: list[dict[str, Any]] = []
+    link_by_tag = {e["inbound"].tag: e["link"] for e in _links_for_user(db, user, host)}
+    for client, inbound in _usable_clients(db, user):
+        entry: dict[str, Any] = {
+            "tag": inbound.tag,
+            "protocol": inbound.protocol,
+            "core": inbound.core,
+            "port": int(inbound.port),
+            "remark": getattr(inbound, "remark", "") or "",
+        }
+        link = link_by_tag.get(inbound.tag)
+        if link:
+            entry["share_link"] = link
+            links.append(link)
+        outbounds = _singbox_outbounds_for(db, client, inbound, user, host, settings)
+        if outbounds:
+            primary = outbounds[0]
+            if inbound.protocol == "wireguard":
+                # A WireGuard object is an endpoint, not an outbound
+                # (sing-box 1.13+): keep the bundle schema honest.
+                entry["singbox_endpoint"] = primary
+            else:
+                entry["singbox_outbound"] = primary
+            singbox_outbounds.extend(outbounds)
+        if inbound.protocol == "wireguard":
+            conf = _wireguard_conf_for(client, inbound, host, settings)
+            if conf:
+                entry["wireguard_conf"] = conf
+        configs.append(entry)
+    feed = {"outbounds": singbox_outbounds}
+    if subscription_mod is not None:
+        try:
+            feed = subscription_mod.build_singbox_feed(singbox_outbounds)
+        except Exception:  # noqa: BLE001
+            logger.exception("build_singbox_feed failed for bundle")
+    return {
+        "format": "zedsecure-bundle",
+        "version": 1,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "user": {
+            "name": user.name,
+            "expires_at": user.expires_at.isoformat() if user.expires_at else None,
+            "traffic_used_bytes": user.traffic_used_bytes or 0,
+            "traffic_limit_bytes": user.traffic_limit_bytes,
+            "traffic_unlimited": user.traffic_limit_bytes is None,
+        },
+        "server": {"host": host},
+        "configs": configs,
+        "links": links,
+        "singbox": feed,
+    }
 
 
 def _subscription_response(request: Request, token: str, db: Session) -> Response:
@@ -1803,58 +2150,17 @@ def _subscription_response(request: Request, token: str, db: Session) -> Respons
     if chosen not in ("v2rayng", "singbox"):
         chosen = "singbox" if "singbox" in chosen or "json" in chosen else "v2rayng"
 
-    expires_unix = 0
-    if user.expires_at is not None:
-        exp = user.expires_at
-        if exp.tzinfo is None:
-            exp = exp.replace(tzinfo=timezone.utc)
-        expires_unix = int(exp.timestamp())
-    userinfo = ""
-    try:
-        userinfo = str(
-            subscription_mod.subscription_userinfo(
-                user.traffic_used_bytes or 0,
-                user.traffic_limit_bytes,
-                expires_unix,
-            )
-            or ""
-        )
-    except Exception:  # noqa: BLE001
-        logger.exception("subscription_userinfo failed")
-
     headers: dict[str, str] = {}
+    userinfo = _userinfo_header(user)
     if userinfo:
         headers["Subscription-Userinfo"] = userinfo
 
     if chosen == "singbox":
         outbounds: list[dict[str, Any]] = []
         for client, inbound in _usable_clients(db, user):
-            try:
-                inbound_dict = _inbound_dict(inbound)
-                if inbound.protocol == "wireguard":
-                    # The server public key is not part of the inbound
-                    # row — it lives in settings (seeded from
-                    # VPN_PANEL_WG_PUBLIC_KEY). Hand it to the
-                    # outbound builder through the inbound's stream,
-                    # where outbound_for_client looks for it.
-                    stream = dict(inbound_dict.get("stream_json") or {})
-                    stream.setdefault(
-                        "peer_public_key",
-                        (settings.get("wireguard_public_key") or ""),
-                    )
-                    inbound_dict["stream_json"] = stream
-                outbound = subscription_mod.outbound_for_client(
-                    inbound.protocol,
-                    _client_dict(client, user),
-                    inbound_dict,
-                    host,
-                    f"{user.name}-{inbound.tag}",
-                )
-            except Exception:  # noqa: BLE001
-                logger.exception("outbound_for_client failed for %s", inbound.tag)
-                continue
-            if outbound:
-                outbounds.append(outbound)
+            outbounds.extend(
+                _singbox_outbounds_for(db, client, inbound, user, host, settings)
+            )
         try:
             feed = subscription_mod.build_singbox_feed(outbounds)
         except Exception:  # noqa: BLE001
@@ -1878,6 +2184,27 @@ def _subscription_response(request: Request, token: str, db: Session) -> Respons
 def subscription(request: Request, token: str, db: Session = Depends(db_session)):
     """Dual-format subscription: UA sniffing + ``?format=`` override."""
     return _subscription_response(request, token, db)
+
+
+@app.get("/sub/{token}/zedsecure.json")
+def zedsecure_bundle(request: Request, token: str, db: Session = Depends(db_session)):
+    """ZedSecure bundle: one JSON document with all of the user's
+    configs (share links + sing-box outbounds + WireGuard ``.conf``),
+    made for the ZedSecure app to import in one action. Same access
+    rules as the other feeds: unknown / disabled / expired /
+    over-quota user → 403 with an empty body. Rotating the token
+    invalidates the old bundle URL."""
+    user = db.query(User).filter(User.sub_token == token).first()
+    if user is None or not _user_usable(db, user):
+        return Response(content=b"", status_code=403)
+    settings = get_settings(db)
+    host = _sub_host(request, settings)
+    bundle = _build_zedsecure_bundle(db, user, host, settings)
+    headers: dict[str, str] = {}
+    userinfo = _userinfo_header(user)
+    if userinfo:
+        headers["Subscription-Userinfo"] = userinfo
+    return JSONResponse(content=bundle, headers=headers)
 
 
 @app.get("/sub/{token}/qr")
@@ -2024,7 +2351,7 @@ def _mount_web_path(panel_app: FastAPI, web_path: str) -> FastAPI:
     """Return ``panel_app`` mounted under ``web_path`` ("" = root, unchanged)."""
     if not web_path:
         return panel_app
-    root = FastAPI(title="vpn-panel", lifespan=lifespan)
+    root = FastAPI(title="sparky-manager", lifespan=lifespan)
     root.mount(web_path, panel_app)
     return root
 

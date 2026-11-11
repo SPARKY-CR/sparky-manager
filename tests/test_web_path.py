@@ -39,11 +39,11 @@ def test_normalize_web_path():
 
 
 def test_get_settings_web_path(monkeypatch):
-    monkeypatch.setenv("VPN_PANEL_WEB_PATH", "k7x9q2")
+    monkeypatch.setenv("SPARKY_WEB_PATH", "k7x9q2")
     assert get_settings().web_path == "/k7x9q2"
-    monkeypatch.setenv("VPN_PANEL_WEB_PATH", "")
+    monkeypatch.setenv("SPARKY_WEB_PATH", "")
     assert get_settings().web_path == ""
-    monkeypatch.delenv("VPN_PANEL_WEB_PATH", raising=False)
+    monkeypatch.delenv("SPARKY_WEB_PATH", raising=False)
     assert get_settings().web_path == ""
 
 

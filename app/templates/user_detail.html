@@ -54,6 +54,16 @@
   </div>
 
   <div class="card">
+    <h2>{{ t.zedsecure_bundle }}</h2>
+    <p class="muted">{{ t.zedsecure_hint }}</p>
+    <div class="copy-row">
+      <code dir="ltr" class="link-box">{{ zedsecure_url }}</code>
+      <button type="button" class="btn btn-small" data-copy="{{ zedsecure_url }}">{{ t.copy }}</button>
+    </div>
+    <img class="qr" src="{{ base_path }}/sub/{{ user.sub_token }}/qr?link={{ zedsecure_url | urlencode }}" alt="{{ t.qr_code }} — ZedSecure" loading="lazy">
+  </div>
+
+  <div class="card">
     <h2>{{ t.share_links }}</h2>
     {% if not links_available %}
       <p class="muted">{{ t.links_unavailable }}</p>

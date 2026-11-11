@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# vpn-panel installer — original work, written from scratch for this project.
+# sparky-manager installer — original work, written from scratch for this project.
 #
-# Installs vpn-panel (FastAPI panel + stock Xray-core + stock sing-box +
+# Installs sparky-manager (FastAPI panel + stock Xray-core + stock sing-box +
 # native WireGuard) on Ubuntu 22.04/24.04/26.04 or Debian 12/13.
 #
 # Domain-agnostic: works with a bare server IP and NO domain. The default
@@ -17,12 +17,12 @@
 #   sudo bash install.sh [--yes] [--port PORT] [--web-path PATH] [--domain example.com]
 #                        [--reality-sni www.microsoft.com]
 #                        [--admin-password 'secret']
-#   curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh | sudo bash
+#   curl -Ls https://raw.githubusercontent.com/SPARKY-CR/sparky-manager/main/install.sh | sudo bash
 #   sudo bash install.sh --uninstall
 #
-# The repo URL above is a PLACEHOLDER until James creates/confirms the
-# GitHub repo. Idempotent: safe to re-run; existing keys and the admin
-# password are reused instead of regenerated.
+# The repo URL above needs the GitHub repo named SPARKY-CR/sparky-manager
+# (renamed from Zed-panel). Idempotent: safe to re-run; existing keys
+# and the admin password are reused instead of regenerated.
 #
 # The panel port is randomised on a fresh install (like other panels),
 # re-used on re-install, and always printed before the install proceeds
@@ -33,7 +33,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Defaults (all printed before proceeding; overridable with flags)
 # ---------------------------------------------------------------------------
-REPO_URL="https://github.com/SPARKY-CR/Zed-panel.git"
+REPO_URL="https://github.com/SPARKY-CR/sparky-manager.git"
 PANEL_PORT=""        # empty = not given; resolved below (random on fresh install)
 PORT_GIVEN=0         # 1 when --port is passed
 WEB_PATH=""          # empty = not given; resolved below (random on fresh install)
@@ -47,18 +47,18 @@ UNINSTALL=0
 XRAY_CONFIG="/usr/local/etc/xray/config.json"
 SINGBOX_CONFIG="/etc/sing-box/config.json"
 WG_CONFIG="/etc/wireguard/wg0.conf"
-LOGIN_FILE="/root/vpn-panel-login.txt"
+LOGIN_FILE="/root/sparky-manager-login.txt"
 
-PANEL_VERSION="1.0.0"
+PANEL_VERSION="1.1.0"
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 # Log lines go to stderr so that command substitutions capturing a
 # function's stdout (e.g. the release tag from download_core) stay clean.
-info()  { printf '[vpn-panel] %s\n' "$*" >&2; }
-warn()  { printf '[vpn-panel] WARNING: %s\n' "$*" >&2; }
-die()   { printf '[vpn-panel] ERROR: %s\n' "$*" >&2; exit 1; }
+info()  { printf '[sparky-manager] %s\n' "$*" >&2; }
+warn()  { printf '[sparky-manager] WARNING: %s\n' "$*" >&2; }
+die()   { printf '[sparky-manager] ERROR: %s\n' "$*" >&2; exit 1; }
 
 usage() {
     cat <<'EOF'
@@ -78,7 +78,7 @@ Options:
   --reality-sni SNI         SNI for VLESS+Reality (default: www.microsoft.com).
   --admin-password PASS     Admin password (default: generated once and
                             printed in the login box).
-  --uninstall               Stop services, back up data, remove vpn-panel.
+  --uninstall               Stop services, back up data, remove sparky-manager.
   --help                    Show this help.
 EOF
 }
@@ -185,13 +185,13 @@ done
 uninstall_panel() {
     local stamp backup_file
     stamp="$(date +%F-%H%M%S)"
-    backup_file="/root/vpn-panel-backup-${stamp}.tar.gz"
+    backup_file="/root/sparky-manager-backup-${stamp}.tar.gz"
     info "Backing up data and configs to ${backup_file} ..."
     local -a paths=()
-    [ -d /opt/vpn-panel/data ] && paths+=("/opt/vpn-panel/data")
+    [ -d /opt/sparky-manager/data ] && paths+=("/opt/sparky-manager/data")
     [ -f /usr/local/etc/xray/config.json ] && paths+=("/usr/local/etc/xray/config.json")
     [ -f /etc/sing-box/config.json ] && paths+=("/etc/sing-box/config.json")
-    [ -f /opt/vpn-panel/versions.env ] && paths+=("/opt/vpn-panel/versions.env")
+    [ -f /opt/sparky-manager/versions.env ] && paths+=("/opt/sparky-manager/versions.env")
     if [ "${#paths[@]}" -gt 0 ]; then
         tar -czf "$backup_file" "${paths[@]}" 2>/dev/null || \
             warn "Backup tarball may be incomplete; check ${backup_file}"
@@ -200,24 +200,25 @@ uninstall_panel() {
     fi
 
     info "Stopping services ..."
-    systemctl stop vpn-panel xray sing-box 2>/dev/null || true
-    systemctl disable vpn-panel xray sing-box 2>/dev/null || true
+    systemctl stop sparky-manager xray sing-box 2>/dev/null || true
+    systemctl disable sparky-manager xray sing-box 2>/dev/null || true
     if [ -f /etc/wireguard/wg0.conf ]; then
         wg-quick down wg0 2>/dev/null || true
     fi
 
     info "Removing files, units and binaries ..."
-    rm -f /etc/systemd/system/vpn-panel.service \
+    rm -f /etc/systemd/system/sparky-manager.service \
           /etc/systemd/system/xray.service \
           /etc/systemd/system/sing-box.service
+    rm -f /etc/sudoers.d/sparky-manager /etc/sudoers.d/vpn-panel
     systemctl daemon-reload || true
-    rm -rf /opt/vpn-panel /usr/local/etc/xray /etc/sing-box
+    rm -rf /opt/sparky-manager /usr/local/etc/xray /etc/sing-box
     rm -f /etc/wireguard/wg0.conf
-    rm -f /usr/local/bin/xray /usr/local/bin/sing-box /usr/local/bin/vpn-panel
-    if id vpn-panel >/dev/null 2>&1; then
-        userdel vpn-panel 2>/dev/null || warn "Could not remove user vpn-panel."
+    rm -f /usr/local/bin/xray /usr/local/bin/sing-box /usr/local/bin/sparky-manager
+    if id sparky-manager >/dev/null 2>&1; then
+        userdel sparky-manager 2>/dev/null || warn "Could not remove user sparky-manager."
     fi
-    info "vpn-panel uninstalled. Backup kept at: ${backup_file}"
+    info "sparky-manager uninstalled. Backup kept at: ${backup_file}"
     info "The login file ${LOGIN_FILE} was left in place on purpose."
 }
 
@@ -267,12 +268,65 @@ for cmd in curl python3 openssl tar; do
     command -v "$cmd" >/dev/null 2>&1 || die "Required tool missing: $cmd"
 done
 
+# ---------------------------------------------------------------------------
+# Migration from the previous name (vpn-panel -> sparky-manager).
+# A server already running vpn-panel keeps its database, keys,
+# certificate and panel URL: stop the old service first (never copy a
+# live SQLite DB), copy the data over, translate the old VPN_PANEL_*
+# env keys to SPARKY_*, then remove the old unit and CLI wrapper. A
+# re-run finds the new panel.env already in place and skips the copy.
+# The old /opt/vpn-panel directory is left in place as a backup;
+# only the service is removed.
+# ---------------------------------------------------------------------------
+if [ -d /opt/vpn-panel ]; then
+    info "Found a previous vpn-panel install; migrating to sparky-manager ..."
+    mkdir -p /opt/sparky-manager/app /opt/sparky-manager/data /opt/sparky-manager/certs
+    if ! id sparky-manager >/dev/null 2>&1; then
+        useradd --system --no-create-home --home-dir /opt/sparky-manager \
+                --shell /usr/sbin/nologin sparky-manager
+    fi
+    systemctl stop vpn-panel 2>/dev/null || true
+    systemctl disable vpn-panel 2>/dev/null || true
+    if [ ! -f /opt/sparky-manager/data/panel.env ] && [ -d /opt/vpn-panel/data ]; then
+        cp -a /opt/vpn-panel/data/. /opt/sparky-manager/data/
+        if [ -f /opt/sparky-manager/data/panel.env ]; then
+            sed -i 's/^VPN_PANEL_/SPARKY_/' /opt/sparky-manager/data/panel.env
+        fi
+        chown -R sparky-manager:sparky-manager /opt/sparky-manager/data
+        chmod 0750 /opt/sparky-manager/data
+        info "Migrated panel data (database, keys, settings) from /opt/vpn-panel."
+    fi
+    if [ -d /opt/vpn-panel/certs ]; then
+        cp -a /opt/vpn-panel/certs/. /opt/sparky-manager/certs/ 2>/dev/null || true
+        chown -R root:sparky-manager /opt/sparky-manager/certs
+        chmod 0750 /opt/sparky-manager/certs
+    fi
+    if [ -f /opt/vpn-panel/versions.env ]; then
+        sed 's/^VPN_PANEL_VERSION=/SPARKY_VERSION=/' /opt/vpn-panel/versions.env > /opt/sparky-manager/versions.env
+        chmod 0644 /opt/sparky-manager/versions.env
+    fi
+    # The Let's Encrypt renewal hook still points at the old service
+    # and paths; point it at the new ones (obtain_le_ip_cert below
+    # re-installs the hook as well when the certificate is handled).
+    if [ -d "$HOME/.acme.sh" ]; then
+        for _conf in "$HOME"/.acme.sh/*/*.conf; do
+            [ -f "$_conf" ] || continue
+            sed -i -e 's|/opt/vpn-panel|/opt/sparky-manager|g' \
+                   -e 's|root:vpn-panel|root:sparky-manager|g' \
+                   -e 's|restart vpn-panel|restart sparky-manager|g' "$_conf" || true
+        done
+    fi
+    rm -f /etc/systemd/system/vpn-panel.service /usr/local/bin/vpn-panel
+    systemctl daemon-reload 2>/dev/null || true
+    info "Migration done; the old vpn-panel service is stopped and removed."
+fi
+
 # Panel port: randomised on a fresh install (like other panels), re-used
 # from panel.env on a re-install, --port always wins. The chosen port is
 # printed in the prompt below, in the summary and in the login box.
 if [ "$PORT_GIVEN" -eq 0 ]; then
-    if [ -f /opt/vpn-panel/data/panel.env ]; then
-        _saved_port="$(grep -E '^VPN_PANEL_PORT=' /opt/vpn-panel/data/panel.env | tail -n 1 | cut -d= -f2 | tr -d "'" || true)"
+    if [ -f /opt/sparky-manager/data/panel.env ]; then
+        _saved_port="$(grep -E '^SPARKY_PORT=' /opt/sparky-manager/data/panel.env | tail -n 1 | cut -d= -f2 | tr -d "'" || true)"
         if [ -n "$_saved_port" ]; then
             PANEL_PORT="$_saved_port"
         fi
@@ -288,8 +342,8 @@ fi
 # Web path: random on a fresh install (like 3X-UI's webBasePath),
 # re-used from panel.env on a re-install, --web-path always wins.
 if [ "$WEB_PATH_GIVEN" -eq 0 ]; then
-    if [ -f /opt/vpn-panel/data/panel.env ]; then
-        _saved_path="$(grep -E '^VPN_PANEL_WEB_PATH=' /opt/vpn-panel/data/panel.env | tail -n 1 | cut -d= -f2 | tr -d "'" || true)"
+    if [ -f /opt/sparky-manager/data/panel.env ]; then
+        _saved_path="$(grep -E '^SPARKY_WEB_PATH=' /opt/sparky-manager/data/panel.env | tail -n 1 | cut -d= -f2 | tr -d "'" || true)"
         if [ -n "$_saved_path" ]; then
             WEB_PATH="$_saved_path"
         fi
@@ -389,16 +443,42 @@ apt-get install -y -qq curl ca-certificates git unzip \
 # ---------------------------------------------------------------------------
 # Directories and system user
 # ---------------------------------------------------------------------------
-info "Creating directories and the vpn-panel system user ..."
-mkdir -p /opt/vpn-panel/app /opt/vpn-panel/data /opt/vpn-panel/certs \
+info "Creating directories and the sparky-manager system user ..."
+mkdir -p /opt/sparky-manager/app /opt/sparky-manager/data /opt/sparky-manager/certs \
          /usr/local/etc/xray /etc/sing-box /etc/wireguard
-if ! id vpn-panel >/dev/null 2>&1; then
-    useradd --system --no-create-home --home-dir /opt/vpn-panel \
-            --shell /usr/sbin/nologin vpn-panel
+if ! id sparky-manager >/dev/null 2>&1; then
+    useradd --system --no-create-home --home-dir /opt/sparky-manager \
+            --shell /usr/sbin/nologin sparky-manager
 fi
-chown -R vpn-panel:vpn-panel /opt/vpn-panel
-chmod 0750 /opt/vpn-panel/data /opt/vpn-panel/certs
-chmod 0755 /opt/vpn-panel/app
+chown -R sparky-manager:sparky-manager /opt/sparky-manager
+chmod 0750 /opt/sparky-manager/data /opt/sparky-manager/certs
+chmod 0755 /opt/sparky-manager/app
+
+# Privileges: the panel runs as the unprivileged sparky-manager user,
+# but it must restart its services and read WireGuard transfer stats.
+# Grant exactly that via sudo (NOPASSWD, validated with visudo), and
+# make /etc/wireguard group-writable so the panel can atomically
+# replace wg0.conf (write wg0.conf.tmp + rename) — the same reason
+# the Xray / sing-box config directories above are group-writable.
+# Without this, config rebuilds fail with "Access denied" (systemctl)
+# and "Permission denied: /etc/wireguard/wg0.conf.tmp".
+if command -v sudo >/dev/null 2>&1 && command -v visudo >/dev/null 2>&1; then
+    cat > /etc/sudoers.d/sparky-manager <<'EOF'
+# sparky-manager panel: restart its services and read WireGuard stats.
+# Installed by install.sh; validated with visudo -cf before use.
+sparky-manager ALL=(root) NOPASSWD: /usr/bin/systemctl restart xray, /usr/bin/systemctl restart sing-box, /usr/bin/systemctl restart sparky-manager, /usr/bin/systemctl restart wg-quick@wg0, /usr/bin/systemctl is-active xray, /usr/bin/systemctl is-active sing-box, /usr/bin/systemctl is-active sparky-manager, /usr/bin/systemctl is-active wg-quick@wg0, /usr/bin/systemctl status xray, /usr/bin/systemctl status sing-box, /usr/bin/systemctl status sparky-manager, /usr/bin/systemctl status wg-quick@wg0, /usr/bin/wg show wg0 transfer, /usr/bin/wg-quick up wg0, /usr/bin/wg-quick down wg0
+EOF
+    chmod 0440 /etc/sudoers.d/sparky-manager
+    chown root:root /etc/sudoers.d/sparky-manager
+    if ! visudo -cf /etc/sudoers.d/sparky-manager >/dev/null 2>&1; then
+        rm -f /etc/sudoers.d/sparky-manager
+        die "sudoers file failed validation — refusing to continue with a broken sudoers setup."
+    fi
+else
+    warn "sudo/visudo not found; the panel will not be able to restart services. Install sudo and re-run the installer."
+fi
+chown root:sparky-manager /etc/wireguard
+chmod 2770 /etc/wireguard
 
 # ---------------------------------------------------------------------------
 # App source: use the local repo checkout when present, else clone it.
@@ -421,33 +501,33 @@ fi
 
 if [ -f "${REPO_DIR}/app/__init__.py" ]; then
     PANEL_VERSION="$(grep -E '^__version__' "${REPO_DIR}/app/__init__.py" | cut -d'"' -f2 || true)"
-    PANEL_VERSION="${PANEL_VERSION:-1.0.0}"
+    PANEL_VERSION="${PANEL_VERSION:-1.1.0}"
 fi
 
-info "Copying the panel app to /opt/vpn-panel ..."
-cp -a "${REPO_DIR}/app/." /opt/vpn-panel/app/
-cp -a "${REPO_DIR}/requirements.txt" /opt/vpn-panel/requirements.txt
+info "Copying the panel app to /opt/sparky-manager ..."
+cp -a "${REPO_DIR}/app/." /opt/sparky-manager/app/
+cp -a "${REPO_DIR}/requirements.txt" /opt/sparky-manager/requirements.txt
 if [ -d "${REPO_DIR}/scripts" ]; then
-    mkdir -p /opt/vpn-panel/scripts
-    cp -a "${REPO_DIR}/scripts/." /opt/vpn-panel/scripts/
+    mkdir -p /opt/sparky-manager/scripts
+    cp -a "${REPO_DIR}/scripts/." /opt/sparky-manager/scripts/
 fi
 if [ -d "${REPO_DIR}/systemd" ]; then
-    mkdir -p /opt/vpn-panel/systemd
-    cp -a "${REPO_DIR}/systemd/." /opt/vpn-panel/systemd/
+    mkdir -p /opt/sparky-manager/systemd
+    cp -a "${REPO_DIR}/systemd/." /opt/sparky-manager/systemd/
 fi
-chown -R vpn-panel:vpn-panel /opt/vpn-panel/app /opt/vpn-panel/data
+chown -R sparky-manager:sparky-manager /opt/sparky-manager/app /opt/sparky-manager/data
 
 # ---------------------------------------------------------------------------
 # Python virtualenv
 # ---------------------------------------------------------------------------
 info "Creating the Python virtualenv and installing dependencies ..."
-if [ ! -x /opt/vpn-panel/venv/bin/python ]; then
-    python3 -m venv /opt/vpn-panel/venv
+if [ ! -x /opt/sparky-manager/venv/bin/python ]; then
+    python3 -m venv /opt/sparky-manager/venv
 fi
-/opt/vpn-panel/venv/bin/pip install --disable-pip-version-check --quiet \
+/opt/sparky-manager/venv/bin/pip install --disable-pip-version-check --quiet \
     --upgrade pip
-/opt/vpn-panel/venv/bin/pip install --disable-pip-version-check \
-    -r /opt/vpn-panel/requirements.txt
+/opt/sparky-manager/venv/bin/pip install --disable-pip-version-check \
+    -r /opt/sparky-manager/requirements.txt
 
 # ---------------------------------------------------------------------------
 # Core binaries: latest stable Xray-core + sing-box from GitHub releases.
@@ -552,19 +632,19 @@ install -m 0755 "$SINGBOX_BIN" /usr/local/bin/sing-box
 {
     printf 'XRAY_VERSION=%s\n' "$XRAY_TAG"
     printf 'SINGBOX_VERSION=%s\n' "$SINGBOX_TAG"
-    printf 'VPN_PANEL_VERSION=%s\n' "$PANEL_VERSION"
+    printf 'SPARKY_VERSION=%s\n' "$PANEL_VERSION"
     printf 'INSTALLED_AT=%s\n' "$(date -u +%FT%TZ)"
-} > /opt/vpn-panel/versions.env
-chmod 0644 /opt/vpn-panel/versions.env
-info "Installed versions recorded in /opt/vpn-panel/versions.env"
+} > /opt/sparky-manager/versions.env
+chmod 0644 /opt/sparky-manager/versions.env
+info "Installed versions recorded in /opt/sparky-manager/versions.env"
 
 # ---------------------------------------------------------------------------
 # Secrets — reuse existing ones on re-install (idempotent), else generate.
-# Stored in /opt/vpn-panel/data/install.env (0640, root:vpn-panel) so the
+# Stored in /opt/sparky-manager/data/install.env (0640, root:sparky-manager) so the
 # panel service user can read it on first run; no other user can.
 # Never printed to the terminal except the admin password in the login box.
 # ---------------------------------------------------------------------------
-INSTALL_ENV="/opt/vpn-panel/data/install.env"
+INSTALL_ENV="/opt/sparky-manager/data/install.env"
 if [ -f "$INSTALL_ENV" ]; then
     # shellcheck source=/dev/null
     . "$INSTALL_ENV"
@@ -629,31 +709,31 @@ umask 077
     printf 'HY2_PASSWORD=%s\n' "$(sq "$HY2_PASSWORD")"
 } > "$INSTALL_ENV"
 chmod 0640 "$INSTALL_ENV"
-chown root:vpn-panel "$INSTALL_ENV"
+chown root:sparky-manager "$INSTALL_ENV"
 
 # Panel runtime settings for the app (read by app/config.py via env vars).
 # The secret values below are ALSO in install.env; they are repeated here
-# as VPN_PANEL_* variables so the app can seed its database from them on
+# as SPARKY_* variables so the app can seed its database from them on
 # first run (admin password, Reality keypair, WireGuard keys) instead of
 # generating different ones. The app must read these on first run — see
 # the bootstrap note in the install report if it does not yet.
 {
-    printf 'VPN_PANEL_HOME=%s\n' "$(sq "/opt/vpn-panel")"
-    printf 'VPN_PANEL_PORT=%s\n' "$(sq "$PANEL_PORT")"
-    printf 'VPN_PANEL_WEB_PATH=%s\n' "$(sq "$WEB_PATH")"
-    printf 'VPN_PANEL_HOST=%s\n' "$(sq "0.0.0.0")"
-    printf 'VPN_PANEL_DOMAIN=%s\n' "$(sq "$DOMAIN")"
-    printf 'VPN_PANEL_SUBSCRIPTION_HOST=%s\n' "$(sq "$SUBSCRIPTION_HOST")"
-    printf 'VPN_PANEL_REALITY_SNI=%s\n' "$(sq "$REALITY_SNI")"
-    printf 'VPN_PANEL_ADMIN_PASSWORD=%s\n' "$(sq "$ADMIN_PASSWORD")"
-    printf 'VPN_PANEL_REALITY_PRIVATE_KEY=%s\n' "$(sq "$REALITY_PRIVATE_KEY")"
-    printf 'VPN_PANEL_REALITY_PUBLIC_KEY=%s\n' "$(sq "$REALITY_PUBLIC_KEY")"
-    printf 'VPN_PANEL_REALITY_SHORT_ID=%s\n' "$(sq "$REALITY_SHORT_ID")"
-    printf 'VPN_PANEL_WG_PRIVATE_KEY=%s\n' "$(sq "$WG_PRIVATE_KEY")"
-    printf 'VPN_PANEL_WG_PUBLIC_KEY=%s\n' "$(sq "$WG_PUBLIC_KEY")"
-} > /opt/vpn-panel/data/panel.env
-chmod 0640 /opt/vpn-panel/data/panel.env
-chown root:vpn-panel /opt/vpn-panel/data/panel.env
+    printf 'SPARKY_HOME=%s\n' "$(sq "/opt/sparky-manager")"
+    printf 'SPARKY_PORT=%s\n' "$(sq "$PANEL_PORT")"
+    printf 'SPARKY_WEB_PATH=%s\n' "$(sq "$WEB_PATH")"
+    printf 'SPARKY_HOST=%s\n' "$(sq "0.0.0.0")"
+    printf 'SPARKY_DOMAIN=%s\n' "$(sq "$DOMAIN")"
+    printf 'SPARKY_SUBSCRIPTION_HOST=%s\n' "$(sq "$SUBSCRIPTION_HOST")"
+    printf 'SPARKY_REALITY_SNI=%s\n' "$(sq "$REALITY_SNI")"
+    printf 'SPARKY_ADMIN_PASSWORD=%s\n' "$(sq "$ADMIN_PASSWORD")"
+    printf 'SPARKY_REALITY_PRIVATE_KEY=%s\n' "$(sq "$REALITY_PRIVATE_KEY")"
+    printf 'SPARKY_REALITY_PUBLIC_KEY=%s\n' "$(sq "$REALITY_PUBLIC_KEY")"
+    printf 'SPARKY_REALITY_SHORT_ID=%s\n' "$(sq "$REALITY_SHORT_ID")"
+    printf 'SPARKY_WG_PRIVATE_KEY=%s\n' "$(sq "$WG_PRIVATE_KEY")"
+    printf 'SPARKY_WG_PUBLIC_KEY=%s\n' "$(sq "$WG_PUBLIC_KEY")"
+} > /opt/sparky-manager/data/panel.env
+chmod 0640 /opt/sparky-manager/data/panel.env
+chown root:sparky-manager /opt/sparky-manager/data/panel.env
 
 # obtain_le_ip_cert — replace the self-signed panel certificate with a
 # TRUSTED Let's Encrypt certificate for the bare public IP, the same
@@ -735,29 +815,29 @@ obtain_le_ip_cert() {
     fi
     # Back up the self-signed pair before overwriting it, so a bad
     # install can be rolled back instead of breaking the panel's TLS.
-    cp /opt/vpn-panel/certs/fullchain.pem /opt/vpn-panel/certs/fullchain.pem.bak 2>/dev/null || true
-    cp /opt/vpn-panel/certs/privkey.pem /opt/vpn-panel/certs/privkey.pem.bak 2>/dev/null || true
+    cp /opt/sparky-manager/certs/fullchain.pem /opt/sparky-manager/certs/fullchain.pem.bak 2>/dev/null || true
+    cp /opt/sparky-manager/certs/privkey.pem /opt/sparky-manager/certs/privkey.pem.bak 2>/dev/null || true
     info "Installing the trusted certificate for the panel ..."
-    local _reload="chmod 0640 /opt/vpn-panel/certs/privkey.pem; chown root:vpn-panel /opt/vpn-panel/certs/privkey.pem /opt/vpn-panel/certs/fullchain.pem; systemctl restart vpn-panel sing-box"
+    local _reload="chmod 0640 /opt/sparky-manager/certs/privkey.pem; chown root:sparky-manager /opt/sparky-manager/certs/privkey.pem /opt/sparky-manager/certs/fullchain.pem; systemctl restart sparky-manager sing-box"
     if ! "$acme" --installcert -d "$SERVER_IP" "${_ecc_args[@]}" \
-            --key-file /opt/vpn-panel/certs/privkey.pem \
-            --fullchain-file /opt/vpn-panel/certs/fullchain.pem \
+            --key-file /opt/sparky-manager/certs/privkey.pem \
+            --fullchain-file /opt/sparky-manager/certs/fullchain.pem \
             --reloadcmd "$_reload" >/dev/null 2>&1; then
         warn "Could not install the Let's Encrypt certificate; keeping the self-signed one."
-        mv /opt/vpn-panel/certs/fullchain.pem.bak /opt/vpn-panel/certs/fullchain.pem 2>/dev/null || true
-        mv /opt/vpn-panel/certs/privkey.pem.bak /opt/vpn-panel/certs/privkey.pem 2>/dev/null || true
+        mv /opt/sparky-manager/certs/fullchain.pem.bak /opt/sparky-manager/certs/fullchain.pem 2>/dev/null || true
+        mv /opt/sparky-manager/certs/privkey.pem.bak /opt/sparky-manager/certs/privkey.pem 2>/dev/null || true
         return 1
     fi
-    chmod 0640 /opt/vpn-panel/certs/privkey.pem
-    chmod 0644 /opt/vpn-panel/certs/fullchain.pem
-    chown root:vpn-panel /opt/vpn-panel/certs/privkey.pem /opt/vpn-panel/certs/fullchain.pem
-    if ! openssl x509 -noout -issuer -in /opt/vpn-panel/certs/fullchain.pem 2>/dev/null | grep -qi "Let's Encrypt"; then
+    chmod 0640 /opt/sparky-manager/certs/privkey.pem
+    chmod 0644 /opt/sparky-manager/certs/fullchain.pem
+    chown root:sparky-manager /opt/sparky-manager/certs/privkey.pem /opt/sparky-manager/certs/fullchain.pem
+    if ! openssl x509 -noout -issuer -in /opt/sparky-manager/certs/fullchain.pem 2>/dev/null | grep -qi "Let's Encrypt"; then
         warn "Installed certificate is not from Let's Encrypt; restoring the self-signed one."
-        mv /opt/vpn-panel/certs/fullchain.pem.bak /opt/vpn-panel/certs/fullchain.pem 2>/dev/null || true
-        mv /opt/vpn-panel/certs/privkey.pem.bak /opt/vpn-panel/certs/privkey.pem 2>/dev/null || true
+        mv /opt/sparky-manager/certs/fullchain.pem.bak /opt/sparky-manager/certs/fullchain.pem 2>/dev/null || true
+        mv /opt/sparky-manager/certs/privkey.pem.bak /opt/sparky-manager/certs/privkey.pem 2>/dev/null || true
         return 1
     fi
-    rm -f /opt/vpn-panel/certs/fullchain.pem.bak /opt/vpn-panel/certs/privkey.pem.bak
+    rm -f /opt/sparky-manager/certs/fullchain.pem.bak /opt/sparky-manager/certs/privkey.pem.bak
     # Make sure acme.sh's renewal cron job exists (another panel may
     # have installed acme.sh without it).
     "$acme" --install-cronjob >/dev/null 2>&1 || true
@@ -782,11 +862,11 @@ CERT_CN="${DOMAIN:-$SERVER_IP}"
 # the cert is keyed to the domain and is left alone.
 _cert_cn() {
     openssl x509 -noout -subject -nameopt RFC2253 \
-        -in /opt/vpn-panel/certs/fullchain.pem 2>/dev/null | \
+        -in /opt/sparky-manager/certs/fullchain.pem 2>/dev/null | \
         sed -n 's/^subject=CN=//p' | cut -d, -f1
 }
 CERT_REGENERATED=0
-if [ ! -f /opt/vpn-panel/certs/fullchain.pem ] || [ ! -f /opt/vpn-panel/certs/privkey.pem ] \
+if [ ! -f /opt/sparky-manager/certs/fullchain.pem ] || [ ! -f /opt/sparky-manager/certs/privkey.pem ] \
    || { [ -z "$DOMAIN" ] && [ "$(_cert_cn)" != "$SERVER_IP" ]; }; then
     info "Generating a self-signed panel certificate (365 days, CN=${CERT_CN}) ..."
     CERT_REGENERATED=1
@@ -796,17 +876,17 @@ if [ ! -f /opt/vpn-panel/certs/fullchain.pem ] || [ ! -f /opt/vpn-panel/certs/pr
         SAN="IP:${SERVER_IP}"
     fi
     openssl req -x509 -newkey rsa:2048 -nodes \
-        -keyout /opt/vpn-panel/certs/privkey.pem \
-        -out /opt/vpn-panel/certs/fullchain.pem \
+        -keyout /opt/sparky-manager/certs/privkey.pem \
+        -out /opt/sparky-manager/certs/fullchain.pem \
         -days 365 -subj "/CN=${CERT_CN}" \
         -addext "subjectAltName=${SAN}" 2>/dev/null
-    # 0640, not 0600: the panel runs as user vpn-panel (see the
+    # 0640, not 0600: the panel runs as user sparky-manager (see the
     # systemd unit), so the key must be group-readable or uvicorn
     # dies with PermissionError in load_cert_chain. Still private:
-    # only root and the vpn-panel group can read it.
-    chmod 0640 /opt/vpn-panel/certs/privkey.pem
-    chmod 0644 /opt/vpn-panel/certs/fullchain.pem
-    chown root:vpn-panel /opt/vpn-panel/certs/privkey.pem /opt/vpn-panel/certs/fullchain.pem
+    # only root and the sparky-manager group can read it.
+    chmod 0640 /opt/sparky-manager/certs/privkey.pem
+    chmod 0644 /opt/sparky-manager/certs/fullchain.pem
+    chown root:sparky-manager /opt/sparky-manager/certs/privkey.pem /opt/sparky-manager/certs/fullchain.pem
 else
     info "Keeping the existing panel certificate."
 fi
@@ -815,9 +895,9 @@ fi
 LE_CERT_OK=0
 obtain_le_ip_cert || true
 CERT_FINGERPRINT="$(openssl x509 -noout -fingerprint -sha256 \
-    -in /opt/vpn-panel/certs/fullchain.pem | cut -d'=' -f2)"
-CERT_ISSUER="$(openssl x509 -noout -issuer -in /opt/vpn-panel/certs/fullchain.pem 2>/dev/null | sed 's/^issuer=//')"
-CERT_EXPIRY="$(openssl x509 -noout -enddate -in /opt/vpn-panel/certs/fullchain.pem 2>/dev/null | cut -d= -f2)"
+    -in /opt/sparky-manager/certs/fullchain.pem | cut -d'=' -f2)"
+CERT_ISSUER="$(openssl x509 -noout -issuer -in /opt/sparky-manager/certs/fullchain.pem 2>/dev/null | sed 's/^issuer=//')"
+CERT_EXPIRY="$(openssl x509 -noout -enddate -in /opt/sparky-manager/certs/fullchain.pem 2>/dev/null | cut -d= -f2)"
 
 # ---------------------------------------------------------------------------
 # Default configs: run the panel's render script when it exists, else
@@ -831,10 +911,10 @@ CERT_EXPIRY="$(openssl x509 -noout -enddate -in /opt/vpn-panel/certs/fullchain.p
 # the minimal defaults (listening inbounds, empty client lists) — the
 # panel re-renders from the DB as soon as the first user is created.
 _rendered_has_vpn_inbounds() {
-    /opt/vpn-panel/venv/bin/python -c '
+    /opt/sparky-manager/venv/bin/python -c '
 import json, sys
 try:
-    cfg = json.load(open("/opt/vpn-panel/data/rendered/xray.json"))
+    cfg = json.load(open("/opt/sparky-manager/data/rendered/xray.json"))
 except Exception:
     sys.exit(1)
 tags = [i.get("tag") for i in cfg.get("inbounds", []) if isinstance(i, dict)]
@@ -843,19 +923,19 @@ sys.exit(0 if any(t and t != "api" for t in tags) else 1)
 }
 
 RENDERED=0
-if [ -f /opt/vpn-panel/scripts/render_configs.py ]; then
+if [ -f /opt/sparky-manager/scripts/render_configs.py ]; then
     info "Rendering configs with the panel's render script ..."
-    if VPN_PANEL_HOME=/opt/vpn-panel /opt/vpn-panel/venv/bin/python \
-            /opt/vpn-panel/scripts/render_configs.py; then
+    if SPARKY_HOME=/opt/sparky-manager /opt/sparky-manager/venv/bin/python \
+            /opt/sparky-manager/scripts/render_configs.py; then
         if _rendered_has_vpn_inbounds; then
             # The render script writes to data/rendered/ — copy the
             # outputs to the live config paths the cores actually read.
-            cp /opt/vpn-panel/data/rendered/xray.json "$XRAY_CONFIG"
-            cp /opt/vpn-panel/data/rendered/sing-box.json "$SINGBOX_CONFIG"
-            if [ -f /opt/vpn-panel/data/rendered/wg0.conf ]; then
-                cp /opt/vpn-panel/data/rendered/wg0.conf "$WG_CONFIG"
+            cp /opt/sparky-manager/data/rendered/xray.json "$XRAY_CONFIG"
+            cp /opt/sparky-manager/data/rendered/sing-box.json "$SINGBOX_CONFIG"
+            if [ -f /opt/sparky-manager/data/rendered/wg0.conf ]; then
+                cp /opt/sparky-manager/data/rendered/wg0.conf "$WG_CONFIG"
                 chmod 0660 "$WG_CONFIG"
-                chown root:vpn-panel "$WG_CONFIG"
+                chown root:sparky-manager "$WG_CONFIG"
             fi
             RENDERED=1
         else
@@ -903,13 +983,13 @@ EOF
     {"type": "hysteria2", "tag": "hy2", "listen": "::", "listen_port": 443,
      "users": [{"password": "${HY2_PASSWORD}"}],
      "tls": {"enabled": true, "server_name": "${CERT_CN}",
-       "certificate_path": "/opt/vpn-panel/certs/fullchain.pem",
-       "key_path": "/opt/vpn-panel/certs/privkey.pem"}}
+       "certificate_path": "/opt/sparky-manager/certs/fullchain.pem",
+       "key_path": "/opt/sparky-manager/certs/privkey.pem"}}
   ],
   "outbounds": [{"type": "direct", "tag": "direct"}]
 }
 EOF
-    cat > /opt/vpn-panel/data/README-minimal-configs.txt <<'EOF'
+    cat > /opt/sparky-manager/data/README-minimal-configs.txt <<'EOF'
 Minimal configs (written by install.sh because no render script was
 found yet). The panel re-renders /usr/local/etc/xray/config.json and
 /etc/sing-box/config.json from its database whenever users or inbounds
@@ -920,13 +1000,13 @@ Default inbounds here: VLESS+Reality TCP 443, Shadowsocks 2022 TCP 8388
 because they need a real certificate for a hostname.
 EOF
 fi
-# Configs are group-writable by vpn-panel (0660) and live in group-writable
-# directories: the panel (running as user vpn-panel) re-renders them from
+# Configs are group-writable by sparky-manager (0660) and live in group-writable
+# directories: the panel (running as user sparky-manager) re-renders them from
 # its database with an atomic rename, which needs write access to both the
 # file and its directory. The cores run as root, so they can read them.
 chmod 0660 "$XRAY_CONFIG" "$SINGBOX_CONFIG"
-chown root:vpn-panel "$XRAY_CONFIG" "$SINGBOX_CONFIG"
-chown root:vpn-panel /usr/local/etc/xray /etc/sing-box
+chown root:sparky-manager "$XRAY_CONFIG" "$SINGBOX_CONFIG"
+chown root:sparky-manager /usr/local/etc/xray /etc/sing-box
 chmod 0770 /usr/local/etc/xray /etc/sing-box
 
 # WireGuard server config (native, not a core). Bring-up is best-effort:
@@ -939,7 +1019,7 @@ Address = 10.8.0.1/24
 ListenPort = 51820
 EOF
     chmod 0660 "$WG_CONFIG"
-    chown root:vpn-panel "$WG_CONFIG"
+    chown root:sparky-manager "$WG_CONFIG"
 fi
 if ! wg show wg0 >/dev/null 2>&1; then
     wg-quick up wg0 2>/dev/null || \
@@ -959,12 +1039,12 @@ info "Validating core configs ..."
 # ---------------------------------------------------------------------------
 install_unit() {
     local name="$1"
-    if [ -f "/opt/vpn-panel/systemd/${name}" ]; then
-        cp "/opt/vpn-panel/systemd/${name}" "/etc/systemd/system/${name}"
+    if [ -f "/opt/sparky-manager/systemd/${name}" ]; then
+        cp "/opt/sparky-manager/systemd/${name}" "/etc/systemd/system/${name}"
     else
         warn "systemd/${name} not in the repo; writing the built-in fallback unit."
         case "$name" in
-            vpn-panel.service) fallback_vpn_panel_unit > "/etc/systemd/system/${name}" ;;
+            sparky-manager.service) fallback_sparky_manager_unit > "/etc/systemd/system/${name}" ;;
             xray.service)      fallback_xray_unit > "/etc/systemd/system/${name}" ;;
             sing-box.service)  fallback_singbox_unit > "/etc/systemd/system/${name}" ;;
             *) die "No fallback unit for ${name}" ;;
@@ -973,24 +1053,24 @@ install_unit() {
     chmod 0644 "/etc/systemd/system/${name}"
 }
 
-fallback_vpn_panel_unit() {
+fallback_sparky_manager_unit() {
     cat <<'EOF'
 [Unit]
-Description=vpn-panel — multi-core VPN panel (FastAPI)
+Description=sparky-manager — multi-core VPN panel (FastAPI)
 After=network-online.target xray.service sing-box.service
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=vpn-panel
-Group=vpn-panel
-WorkingDirectory=/opt/vpn-panel
-EnvironmentFile=-/opt/vpn-panel/data/panel.env
+User=sparky-manager
+Group=sparky-manager
+WorkingDirectory=/opt/sparky-manager
+EnvironmentFile=-/opt/sparky-manager/data/panel.env
 # TLS is served by uvicorn itself: app.main does not configure SSL, so the
 # self-signed certificate (or a later Let's Encrypt one in the same paths)
 # is passed on the command line. The installer verifies
 # https://127.0.0.1:<panel-port>/health, so these flags are load-bearing.
-ExecStart=/opt/vpn-panel/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 2053 --ssl-certfile /opt/vpn-panel/certs/fullchain.pem --ssl-keyfile /opt/vpn-panel/certs/privkey.pem
+ExecStart=/opt/sparky-manager/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 2053 --ssl-certfile /opt/sparky-manager/certs/fullchain.pem --ssl-keyfile /opt/sparky-manager/certs/privkey.pem
 Restart=on-failure
 RestartSec=3
 
@@ -1002,7 +1082,7 @@ EOF
 fallback_xray_unit() {
     cat <<'EOF'
 [Unit]
-Description=Xray-core (vpn-panel)
+Description=Xray-core (sparky-manager)
 After=network-online.target
 Wants=network-online.target
 
@@ -1021,7 +1101,7 @@ EOF
 fallback_singbox_unit() {
     cat <<'EOF'
 [Unit]
-Description=sing-box (vpn-panel)
+Description=sing-box (sparky-manager)
 After=network-online.target
 Wants=network-online.target
 
@@ -1038,66 +1118,66 @@ EOF
 }
 
 info "Installing systemd units ..."
-install_unit vpn-panel.service
+install_unit sparky-manager.service
 install_unit xray.service
 install_unit sing-box.service
 # The shipped units default to port 2053; honour the chosen port.
-sed -i "s/--port 2053/--port ${PANEL_PORT}/" /etc/systemd/system/vpn-panel.service
+sed -i "s/--port 2053/--port ${PANEL_PORT}/" /etc/systemd/system/sparky-manager.service
 systemctl daemon-reload
 
 # ---------------------------------------------------------------------------
-# vpn-panel CLI wrapper (/usr/local/bin/vpn-panel): info / status /
+# sparky-manager CLI wrapper (/usr/local/bin/sparky-manager): info / status /
 # restart / backup. Non-interactive first; no hidden randomisation.
 # ---------------------------------------------------------------------------
-cat > /usr/local/bin/vpn-panel <<'EOF'
+cat > /usr/local/bin/sparky-manager <<'EOF'
 #!/usr/bin/env bash
-# vpn-panel CLI — small wrapper installed by install.sh.
+# sparky-manager CLI — small wrapper installed by install.sh.
 set -euo pipefail
 cmd="${1:-info}"
 case "$cmd" in
     info)
-        if [ -f /root/vpn-panel-login.txt ]; then
-            cat /root/vpn-panel-login.txt
+        if [ -f /root/sparky-manager-login.txt ]; then
+            cat /root/sparky-manager-login.txt
         else
-            echo "No login file found at /root/vpn-panel-login.txt."
-            echo "Reinstall or check /opt/vpn-panel/data/panel.env for the panel port."
+            echo "No login file found at /root/sparky-manager-login.txt."
+            echo "Reinstall or check /opt/sparky-manager/data/panel.env for the panel port."
             exit 1
         fi
         ;;
     status)
-        systemctl status vpn-panel xray sing-box --no-pager || true
+        systemctl status sparky-manager xray sing-box --no-pager || true
         ;;
     restart)
-        systemctl restart vpn-panel xray sing-box
-        echo "vpn-panel, xray and sing-box restarted."
+        systemctl restart sparky-manager xray sing-box
+        echo "sparky-manager, xray and sing-box restarted."
         ;;
     backup)
-        if [ -x /opt/vpn-panel/scripts/backup.sh ]; then
-            exec /opt/vpn-panel/scripts/backup.sh "${2:-}"
+        if [ -x /opt/sparky-manager/scripts/backup.sh ]; then
+            exec /opt/sparky-manager/scripts/backup.sh "${2:-}"
         fi
-        dest="${2:-/root/vpn-panel-backup-$(date +%F).tar.gz}"
-        tar -czf "$dest" /opt/vpn-panel/data /usr/local/etc/xray/config.json /etc/sing-box/config.json
+        dest="${2:-/root/sparky-manager-backup-$(date +%F).tar.gz}"
+        tar -czf "$dest" /opt/sparky-manager/data /usr/local/etc/xray/config.json /etc/sing-box/config.json
         echo "Backup written to: $dest"
         ;;
     *)
-        echo "Usage: vpn-panel {info|status|restart|backup [PATH]}"
+        echo "Usage: sparky-manager {info|status|restart|backup [PATH]}"
         exit 1
         ;;
 esac
 EOF
-chmod 0755 /usr/local/bin/vpn-panel
+chmod 0755 /usr/local/bin/sparky-manager
 
 # ---------------------------------------------------------------------------
 # Start services and VERIFY before finishing.
 # ---------------------------------------------------------------------------
-info "Enabling and starting xray, sing-box and vpn-panel ..."
+info "Enabling and starting xray, sing-box and sparky-manager ..."
 PANEL_WAS_ACTIVE=0
-systemctl is-active --quiet vpn-panel 2>/dev/null && PANEL_WAS_ACTIVE=1
-systemctl enable --now xray sing-box vpn-panel
+systemctl is-active --quiet sparky-manager 2>/dev/null && PANEL_WAS_ACTIVE=1
+systemctl enable --now xray sing-box sparky-manager
 # A regenerated certificate is only picked up when the panel
 # restarts (enable --now does not restart a running service).
 if [ "$CERT_REGENERATED" -eq 1 ] && [ "$PANEL_WAS_ACTIVE" -eq 1 ]; then
-    systemctl restart vpn-panel
+    systemctl restart sparky-manager
 fi
 # The Let's Encrypt IP certificate only lives ~6 days; acme.sh's cron
 # renews it, but only if the cron daemon is running.
@@ -1117,34 +1197,34 @@ for _ in $(seq 1 30); do
 done
 
 FAILED=""
-[ "$PANEL_OK" -eq 1 ] || FAILED="vpn-panel (health check https://127.0.0.1:${PANEL_PORT}/${WEB_PATH}/health did not return 200)"
+[ "$PANEL_OK" -eq 1 ] || FAILED="sparky-manager (health check https://127.0.0.1:${PANEL_PORT}/${WEB_PATH}/health did not return 200)"
 systemctl is-active --quiet xray || FAILED="${FAILED} xray"
 systemctl is-active --quiet sing-box || FAILED="${FAILED} sing-box"
 
 if [ -n "$FAILED" ]; then
     warn "Verification failed for:${FAILED}"
-    for svc in vpn-panel xray sing-box; do
+    for svc in sparky-manager xray sing-box; do
         if ! systemctl is-active --quiet "$svc"; then
             echo "--- last 20 lines: ${svc} ---"
             journalctl -u "$svc" -n 20 --no-pager || true
         fi
     done
     if [ "$PANEL_OK" -eq 0 ]; then
-        echo "--- last 20 lines: vpn-panel ---"
-        journalctl -u vpn-panel -n 20 --no-pager || true
+        echo "--- last 20 lines: sparky-manager ---"
+        journalctl -u sparky-manager -n 20 --no-pager || true
     fi
     die "Install verification failed. Fix the errors above and re-run the installer (it is idempotent)."
 fi
 info "Verification passed: panel answers 200 on /${WEB_PATH}/health, xray and sing-box are active."
 
 # ---------------------------------------------------------------------------
-# Login box — printed and saved to /root/vpn-panel-login.txt (0600).
+# Login box — printed and saved to /root/sparky-manager-login.txt (0600).
 # ---------------------------------------------------------------------------
 PANEL_URL="https://${SUBSCRIPTION_HOST}:${PANEL_PORT}/${WEB_PATH}"
 umask 077
 {
     echo "============================================================"
-    echo "  vpn-panel installed"
+    echo "  sparky-manager installed"
     echo "============================================================"
     echo "  Panel:     ${PANEL_URL}"
     echo "  Username:  admin"
@@ -1178,7 +1258,7 @@ umask 077
     echo "    Shadowsocks    TCP 8388"
     echo ""
     echo "  Subscriptions, QR codes and users are inside the panel."
-    echo "  Reprint this anytime:  sudo vpn-panel info"
+    echo "  Reprint this anytime:  sudo sparky-manager info"
     echo "  Installed versions:    Xray ${XRAY_TAG}, sing-box ${SINGBOX_TAG}"
     echo "============================================================"
 } > "$LOGIN_FILE"

@@ -426,6 +426,21 @@ def _build_shadowtls(
     Shadowsocks inbound that listens on ``127.0.0.1`` only, so the
     inner SS port is never exposed to the internet. Returns both
     inbound objects (outer first, inner second).
+
+    ShadowTLS inbounds have NO ``tls`` field (sing-box rejects it:
+    ``unknown field "tls"``) and need NO local certificate — the
+    ``handshake`` object names the real TLS server the handshake
+    mimics (the SNI, else the panel host, else www.microsoft.com),
+    on port 443.
+
+    ShadowTLS v3 inbounds carry ``users`` (a list of
+    ``{name, password}``), NOT a top-level ``password`` — sing-box
+    rejects the inbound at load with "missing users" otherwise.
+    The inbound has ONE effective password (the stream password,
+    else the first usable client's), so there is exactly one user;
+    the inner Shadowsocks detour reuses the same password, which is
+    why a ShadowTLS client's password must be a valid SS2022 key
+    (see ``app.main._new_client_credentials``).
     """
     tag = inbound["tag"]
     stream = _as_dict(inbound.get("stream_json"))
@@ -435,13 +450,12 @@ def _build_shadowtls(
     )
     if not password:
         return [], [f"shadowtls '{tag}': no password configured, omitted"]
-    tls = _tls_config(stream, settings)
-    if tls is None:
-        return [], [
-            f"shadowtls '{tag}': no TLS certificate configured, omitted "
-            "(set cert_path/key_path or self_signed_cert_path/"
-            "self_signed_key_path in settings)"
-        ]
+    user_name = (
+        _clean_str(usable[0].get("user_name")) if usable else ""
+    ) or tag
+    handshake_server = (
+        _server_name(stream, settings) or "www.microsoft.com"
+    )
     inner_tag = f"{tag}-inner"
     method = _first_str(
         stream.get("method"),
@@ -460,8 +474,11 @@ def _build_shadowtls(
             "listen_port": inbound["port"],
             "version": 3,
             "strict_mode": strict_mode,
-            "password": password,
-            "tls": tls,
+            "users": [{"name": user_name, "password": password}],
+            "handshake": {
+                "server": handshake_server,
+                "server_port": 443,
+            },
             "detour": inner_tag,
         },
         {
@@ -697,9 +714,21 @@ def validate_singbox_config(cfg: dict) -> tuple[bool, list[str]]:
         elif in_type == "naive":
             _check_users(users, tag, errors, need=("username", "password"))
         elif in_type == "shadowtls":
-            if not inbound.get("password"):
+            # v3 uses `users` (a top-level `password` is rejected by
+            # sing-box with "missing users"); accept the legacy
+            # `password` form too so hand-written configs still
+            # validate.
+            users = inbound.get("users")
+            has_user_password = (
+                isinstance(users, list)
+                and users
+                and isinstance(users[0], dict)
+                and bool(users[0].get("password"))
+            )
+            if not has_user_password and not inbound.get("password"):
                 errors.append(
-                    f"inbound '{tag}': shadowtls needs a 'password'"
+                    f"inbound '{tag}': shadowtls needs 'users' with a "
+                    "'password'"
                 )
             detour = inbound.get("detour")
             if not isinstance(detour, str) or not detour:

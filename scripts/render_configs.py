@@ -76,8 +76,8 @@ except ImportError as exc:  # pragma: no cover - import-time failure
     print(f"error: cannot import panel renderers: {exc}", file=sys.stderr)
     raise SystemExit(1)
 
-DEFAULT_DB = "/opt/vpn-panel/data/panel.db"
-DEFAULT_OUT_DIR = "/opt/vpn-panel/data/rendered"
+DEFAULT_DB = "/opt/sparky-manager/data/panel.db"
+DEFAULT_OUT_DIR = "/opt/sparky-manager/data/rendered"
 DEFAULT_WG_ADDRESS = "10.8.0.1/24"
 DEFAULT_WG_PORT = 51820
 
@@ -221,7 +221,7 @@ def _inject_panel_cert_paths(
     )
     if any(settings.get(key) for key in cert_keys):
         return
-    home = settings.get("home") or "/opt/vpn-panel"
+    home = settings.get("home") or "/opt/sparky-manager"
     cert = os.path.join(home, "certs", "fullchain.pem")
     key = os.path.join(home, "certs", "privkey.pem")
     if os.path.isfile(cert) and os.path.isfile(key):
@@ -461,12 +461,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--db",
-        default=os.environ.get("VPN_PANEL_DB", DEFAULT_DB),
+        default=os.environ.get("SPARKY_DB", os.environ.get("VPN_PANEL_DB", DEFAULT_DB)),
         help=f"panel SQLite DB (default: {DEFAULT_DB})",
     )
     parser.add_argument(
         "--out-dir",
-        default=os.environ.get("VPN_PANEL_OUT_DIR", DEFAULT_OUT_DIR),
+        default=os.environ.get("SPARKY_OUT_DIR", os.environ.get("VPN_PANEL_OUT_DIR", DEFAULT_OUT_DIR)),
         help=f"output directory (default: {DEFAULT_OUT_DIR})",
     )
     args = parser.parse_args(argv)

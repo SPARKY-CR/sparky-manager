@@ -23,7 +23,7 @@ from app.subscription import (
     outbound_for_client,
     subscription_userinfo,
 )
-from tests.conftest import HOST
+from tests.conftest import HOST, SHADOWTLS_STREAM_PASSWORD
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +127,7 @@ def test_build_singbox_feed_wraps_outbounds():
     ("tuic", "tuic"),
     ("anytls", "anytls"),
     ("naive", "naive"),
+    ("shadowtls", "shadowtls"),
     ("wireguard", "wireguard"),
 ])
 def test_outbound_for_client_every_protocol(seeded, tag, protocol):
@@ -135,9 +136,23 @@ def test_outbound_for_client_every_protocol(seeded, tag, protocol):
                                    f"alice-{tag}")
     assert outbound is not None, protocol
     assert outbound["type"] == protocol
+    assert outbound["tag"] == f"alice-{tag}"
+    if protocol == "wireguard":
+        # Endpoint shape (sing-box 1.13+): no "server" key.
+        assert "server" not in outbound
+        assert "local_address" not in outbound
+        assert "peer_public_key" not in outbound
+        assert outbound["address"] == ["10.8.0.2/32"]
+        assert outbound["private_key"] == seeded["alice_wg_private"]
+        peer = outbound["peers"][0]
+        assert peer["address"] == HOST
+        assert peer["port"] == inbound["port"]
+        assert peer["public_key"] == seeded["wg_server_public"]
+        assert peer["allowed_ips"] == ["0.0.0.0/0", "::/0"]
+        assert outbound["mtu"] == 1280
+        return
     assert outbound["server"] == HOST
     assert outbound["server_port"] == inbound["port"]
-    assert outbound["tag"] == f"alice-{tag}"
     if protocol == "vless":
         assert outbound["uuid"] == client["uuid"]
         assert outbound["flow"] == "xtls-rprx-vision"
@@ -166,18 +181,39 @@ def test_outbound_for_client_every_protocol(seeded, tag, protocol):
     elif protocol == "naive":
         assert outbound["username"] == "alice-naive"
         assert outbound["password"] == client["password"]
-    elif protocol == "wireguard":
-        assert outbound["private_key"] == seeded["alice_wg_private"]
-        assert outbound["peer_public_key"] == seeded["wg_server_public"]
-        assert outbound["local_address"] == ["10.8.0.2/32"]
-        assert outbound["mtu"] == 1280
+    elif protocol == "shadowtls":
+        assert outbound["version"] == 3
+        assert outbound["password"] == SHADOWTLS_STREAM_PASSWORD
+        assert outbound["tls"]["enabled"] is True
+        assert outbound["tls"]["server_name"] == HOST
+
+
+def test_outbounds_for_client_shadowtls_pair(seeded):
+    """ShadowTLS contributes TWO objects: the outer outbound plus
+    the inner Shadowsocks outbound that detours through it."""
+    from app.subscription import outbounds_for_client
+
+    client, inbound = _client_inbound(seeded, "shadowtls")
+    pair = outbounds_for_client("shadowtls", client, inbound, HOST,
+                                "alice-shadowtls")
+    assert [o["type"] for o in pair] == ["shadowtls", "shadowsocks"]
+    outer, inner = pair
+    assert outer["tag"] == "alice-shadowtls"
+    assert inner["tag"] == "alice-shadowtls-ss"
+    assert inner["detour"] == "alice-shadowtls"
+    assert inner["server"] == HOST
+    assert inner["server_port"] == inbound["port"]
+    assert inner["method"] == "2022-blake3-aes-128-gcm"
+    assert inner["password"] == outer["password"]
+    # Every other protocol contributes exactly one object.
+    client, inbound = _client_inbound(seeded, "vless-reality")
+    assert len(outbounds_for_client("vless", client, inbound, HOST,
+                                    "alice-vless")) == 1
+    assert outbounds_for_client("ikev2", client, inbound, HOST, "x") == []
 
 
 def test_outbound_for_client_none_cases(seeded):
-    client, inbound = _client_inbound(seeded, "shadowtls")
-    # ShadowTLS is a server-side inbound/detour, not a client outbound.
-    assert outbound_for_client("shadowtls", client, inbound, HOST,
-                               "alice-shadowtls") is None
+    client, inbound = _client_inbound(seeded, "vless-reality")
     # IKEv2 and unknown protocols have no sing-box outbound.
     assert outbound_for_client("ikev2", client, inbound, HOST, "x") is None
     assert outbound_for_client("bogus", client, inbound, HOST, "x") is None
@@ -236,15 +272,20 @@ def test_sub_singbox_feed_via_format_param(test_client, seeded):
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("application/json")
     feed = resp.json()
-    assert set(feed) == {"outbounds"}
+    assert set(feed) == {"outbounds", "endpoints"}
     types = {o["type"] for o in feed["outbounds"]}
-    # Every protocol with a sing-box outbound (ShadowTLS is
-    # server-side only; XHTTP is not in the seed).
+    # Every protocol with a sing-box outbound (XHTTP is not in the
+    # seed). ShadowTLS contributes two outbounds (outer + SS detour).
     assert types == {"vless", "vmess", "trojan", "shadowsocks",
-                     "hysteria2", "tuic", "anytls", "naive", "wireguard"}
+                     "hysteria2", "tuic", "anytls", "naive", "shadowtls"}
+    assert {o["tag"] for o in feed["outbounds"]} >= {
+        "alice-shadowtls", "alice-shadowtls-ss"}
     for outbound in feed["outbounds"]:
         assert outbound["server"] == HOST
         assert 1 <= outbound["server_port"] <= 65535
+    # WireGuard is an endpoint since sing-box 1.13, not an outbound.
+    assert [e["type"] for e in feed["endpoints"]] == ["wireguard"]
+    assert feed["endpoints"][0]["peers"][0]["address"] == HOST
     json.dumps(feed)  # valid JSON
 
 
@@ -311,13 +352,14 @@ def test_sub_singbox_feed_includes_wireguard_for_api_created_user(
     assert resp.status_code == 201, resp.text
     token = resp.json()["sub_token"]
     feed = authed_client.get(f"/sub/{token}?format=singbox").json()
-    types = {o["type"] for o in feed["outbounds"]}
-    assert "wireguard" in types
-    wg = next(o for o in feed["outbounds"] if o["type"] == "wireguard")
-    assert wg["server_port"] == 51820
-    assert wg["peer_public_key"]
+    # WireGuard is an endpoint since sing-box 1.13, not an outbound.
+    assert "endpoints" in feed
+    assert [e["type"] for e in feed["endpoints"]] == ["wireguard"]
+    wg = feed["endpoints"][0]
+    assert wg["peers"][0]["port"] == 51820
+    assert wg["peers"][0]["public_key"]
     assert wg["private_key"]
-    assert wg["local_address"] == ["10.8.0.2/32"]
+    assert wg["address"] == ["10.8.0.2/32"]
 
 
 def test_token_rotation_invalidates_old_token(authed_client, db, seeded):

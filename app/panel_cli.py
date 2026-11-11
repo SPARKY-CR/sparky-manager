@@ -1,20 +1,21 @@
-"""``vpn-panel`` command-line interface (DESIGN.md §8).
+"""``sparky-manager`` command-line interface (DESIGN.md §8).
 
 Usable as ``python -m app.panel_cli <command>`` from the install dir,
-and installed as the ``vpn-panel`` wrapper by install.sh::
+and installed as the ``sparky-manager`` wrapper by install.sh::
 
-    vpn-panel info | status | restart | update-cores | backup <path>
+    sparky-manager info | status | restart | update-cores | backup <path>
 
 Every command is tolerant of a missing service / file: it prints what
 it knows and returns a non-zero exit code instead of crashing. The
 admin password is NEVER printed from anywhere except the installer's
-login box (``/root/vpn-panel-login.txt``); it is not stored in the DB
+login box (``/root/sparky-manager-login.txt``); it is not stored in the DB
 in plaintext and cannot be recovered from anywhere else.
 """
 
 from __future__ import annotations
 
 import argparse
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -23,11 +24,11 @@ from pathlib import Path
 
 from app import config as _config
 
-LOGIN_FILE = Path("/root/vpn-panel-login.txt")
+LOGIN_FILE = Path("/root/sparky-manager-login.txt")
 DEFAULT_ADMIN_USERNAME = "admin"
 
 # Services the panel owns / depends on (checked and restarted here).
-PANEL_SERVICES = ("vpn-panel", "xray", "sing-box")
+PANEL_SERVICES = ("sparky-manager", "xray", "sing-box")
 # wg-quick is a template unit (wg-quick@wg0); checked by status only.
 WG_SERVICE = "wg-quick@wg0"
 
@@ -37,10 +38,19 @@ def _run_systemctl(*args: str) -> tuple[bool, str]:
 
     ``ok`` is False on any failure (missing systemctl, timeout, non-zero
     exit) — callers decide how to report it; nothing here raises.
+
+    ``restart`` goes through ``sudo -n`` when sudo exists: the CLI is
+    usually run as root (``sudo sparky-manager ...``), but the panel
+    user may run it too, and the installer grants that user NOPASSWD
+    sudo for exactly these restarts. Read-only queries (``is-active``,
+    ``status``) stay plain — they work unprivileged.
     """
+    argv = ["systemctl", *args]
+    if args and args[0] == "restart" and shutil.which("sudo"):
+        argv = ["sudo", "-n", *argv]
     try:
         proc = subprocess.run(
-            ["systemctl", *args],
+            argv,
             capture_output=True,
             text=True,
             timeout=10,
@@ -57,7 +67,7 @@ def _run_systemctl(*args: str) -> tuple[bool, str]:
 
 def cmd_info() -> int:
     """Print the panel URL + admin username; the password comes ONLY
-    from ``/root/vpn-panel-login.txt`` when that file exists.
+    from ``/root/sparky-manager-login.txt`` when that file exists.
 
     The password is generated once at install, saved to that root-only
     file, and never re-randomised — so if the file is gone, the honest
@@ -73,9 +83,9 @@ def cmd_info() -> int:
         try:
             print(LOGIN_FILE.read_text(encoding="utf-8").rstrip())
         except OSError:
-            print("password stored only in /root/vpn-panel-login.txt")
+            print("password stored only in /root/sparky-manager-login.txt")
     else:
-        print("Password: password stored only in /root/vpn-panel-login.txt")
+        print("Password: password stored only in /root/sparky-manager-login.txt")
     return 0
 
 
@@ -106,7 +116,7 @@ def cmd_status() -> int:
 
 
 def cmd_restart() -> int:
-    """``systemctl restart vpn-panel xray sing-box`` (tolerant).
+    """``systemctl restart sparky-manager xray sing-box`` (tolerant).
 
     Prints a line per service; returns 0 only if every restart
     succeeded, 1 otherwise — but never raises.
@@ -132,11 +142,11 @@ def cmd_backup(path: str | None = None) -> int:
 
     The DB is the source of truth, so restoring the DB + re-rendering
     is enough — the configs are included for convenience only.
-    Default path: ``/root/vpn-panel-backup-<UTC timestamp>.tar.gz``.
+    Default path: ``/root/sparky-manager-backup-<UTC timestamp>.tar.gz``.
     """
     settings = _config.get_settings()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    dest = Path(path) if path else Path(f"/root/vpn-panel-backup-{stamp}.tar.gz")
+    dest = Path(path) if path else Path(f"/root/sparky-manager-backup-{stamp}.tar.gz")
     sources: list[Path] = []
     if settings.data_dir.exists():
         sources.append(settings.data_dir)
@@ -185,8 +195,8 @@ def cmd_update_cores() -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="vpn-panel",
-        description="vpn-panel command-line interface",
+        prog="sparky-manager",
+        description="sparky-manager command-line interface",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -204,7 +214,7 @@ def build_parser() -> argparse.ArgumentParser:
         "path",
         nargs="?",
         default=None,
-        help="destination .tar.gz (default: /root/vpn-panel-backup-<ts>.tar.gz)",
+        help="destination .tar.gz (default: /root/sparky-manager-backup-<ts>.tar.gz)",
     )
     return parser
 

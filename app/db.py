@@ -1,6 +1,6 @@
 """Database engine / session handling (SQLAlchemy 2.0, sync, SQLite WAL).
 
-One file (``/opt/vpn-panel/data/panel.db`` by default), zero DB server.
+One file (``/opt/sparky-manager/data/panel.db`` by default), zero DB server.
 WAL mode so reads don't block the traffic syncer's writes. Sync engine
 on purpose: FastAPI runs sync endpoints in a threadpool and the DB is
 small and local, so async adds complexity for no gain (DESIGN.md §3).

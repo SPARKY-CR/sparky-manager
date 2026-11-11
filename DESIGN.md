@@ -1,7 +1,7 @@
-# vpn-panel — Design Document
+# sparky-manager — Design Document
 
 > **Status:** DESIGN ONLY — no code, no GitHub push, no server install yet.
-> **Date:** 2026-11-11 · **Working name:** `vpn-panel`
+> **Date:** 2026-11-11 · **Working name:** `sparky-manager`
 
 > **Decisions confirmed by James, 2026-11-11 (override any conflicting
 > suggestion below):**
@@ -62,9 +62,9 @@ James installed vpn-ui, got in, then deleted it as "not good".
 Exact pain points were never spelled out, so this design fixes the
 **known, verifiable** vpn-ui / 3X-UI weaknesses:
 
-| Pain point (vpn-ui / 3X-UI) | Fix in vpn-panel |
+| Pain point (vpn-ui / 3X-UI) | Fix in sparky-manager |
 |---|---|
-| Fresh install **randomises port, username, password and web path**; login info is hidden behind `/opt/vpn-ui/vpn-ui-amd64 info` (menu option 8) | **Like other panels** (see §7): fresh install randomises the panel port (10000–60000), the admin password and the secret web path; username `admin`. Installer prints one big, unmissable login box at the end (full URL + user + password), saves it to `/root/vpn-panel-login.txt`, and `vpn-panel info` reprints it. Port and password are re-used on re-install, never re-randomised. |
+| Fresh install **randomises port, username, password and web path**; login info is hidden behind `/opt/vpn-ui/vpn-ui-amd64 info` (menu option 8) | **Like other panels** (see §7): fresh install randomises the panel port (10000–60000), the admin password and the secret web path; username `admin`. Installer prints one big, unmissable login box at the end (full URL + user + password), saves it to `/root/sparky-manager-login.txt`, and `sparky-manager info` reprints it. Port and password are re-used on re-install, never re-randomised. |
 | Cluttered English UI; 3X-UI has 14 languages but no Persian-first design, and vpn-ui adds ~15 protocols, resellers, multi-admin, bulk ops — a huge surface for one person | **Persian-first RTL UI**, English as secondary toggle. One screen per job: Dashboard → Inbounds → Users → Subscriptions. No reseller/multi-admin in MVP. |
 | Heavy setup: vpn-ui is a Go monolith bundling patched Xray-core, RADIUS, procmgr, a dozen daemons (xl2tpd, strongSwan, pptpd, OpenVPN, ocserv, accel-ppp, telemt…), kernel-module builds (AmneziaWG DKMS fails on kernel ≥ 7.1 and on RHEL kernels) | **Two stock cores + Python backend, no patched core, no kernel builds in Phase 1.** Xray-core and sing-box are downloaded as official upstream binaries. AmneziaWG (needs a kernel module) is Phase 2, explicitly gated. |
 | Go + Vue build: editing the UI means a Node build step | **No Node/Vue build step.** Server-rendered pages (Jinja2) + one hand-written CSS file + a little vanilla JS. James can edit a template with copy-paste in Termux. |
@@ -78,9 +78,9 @@ Exact pain points were never spelled out, so this design fixes the
 
 ---
 
-## 2. Comparison: 3X-UI vs vpn-ui vs vpn-panel (planned)
+## 2. Comparison: 3X-UI vs vpn-ui vs sparky-manager (planned)
 
-| Feature | 3X-UI (MHSanaei) | vpn-ui (Sir-MmD) | vpn-panel (this design) |
+| Feature | 3X-UI (MHSanaei) | vpn-ui (Sir-MmD) | sparky-manager (this design) |
 |---|---|---|---|
 | Core(s) | Xray-core (stock) | Patched Xray-core + many daemons, single Go binary | **Xray-core (stock) + sing-box (stock), side by side** |
 | Xray protocols | VLESS, VMess, Trojan, SS, WG, AmneziaWG, TUIC v5, Hysteria2, MTProto, HTTP/SOCKS, TUN | All of 3X-UI + AnyTLS, NaiveProxy (in patched core) + PPTP/L2TP/OpenVPN/OpenConnect/SSTP/IKEv2/SSH/GRE/MTProto | Phase 1: VLESS, VMess, Trojan, SS, Hysteria2 (Xray) + TUIC, AnyTLS, Naive, ShadowTLS (sing-box) + WireGuard (native) |
@@ -105,9 +105,9 @@ Exact pain points were never spelled out, so this design fixes the
 | Choice | Why | Rejected alternative |
 |---|---|---|
 | **FastAPI** (not Flask) | Async-native (ASGI): the traffic-sync loop, Xray gRPC polling and expiry sweeper run as background tasks without blocking requests. Pydantic v2 validates every API payload (inbound/user forms) for free. Auto-generated OpenAPI docs (`/docs`) — useful when James later adds a Telegram bot. Type hints catch config-shape bugs before runtime. Now ahead of Flask in PyPI downloads; well documented. | Flask: sync WSGI, no built-in validation, needs extensions for everything FastAPI ships. Fine for a prototype, worse for background jobs + validation. |
-| **SQLAlchemy 2.0 sync + SQLite** | One file (`/opt/vpn-panel/data/panel.db`), zero DB server, trivial backup (`cp` the file). WAL mode so reads don't block the sweeper's writes. Sync engine (not async) keeps the code simple: FastAPI runs sync endpoints in a threadpool; the DB is small and local, so async adds complexity for no gain. | PostgreSQL: overkill for one server / one admin. aiosqlite/async SQLAlchemy: async-everywhere tax for a single-file DB. Raw `sqlite3`: no migrations. |
+| **SQLAlchemy 2.0 sync + SQLite** | One file (`/opt/sparky-manager/data/panel.db`), zero DB server, trivial backup (`cp` the file). WAL mode so reads don't block the sweeper's writes. Sync engine (not async) keeps the code simple: FastAPI runs sync endpoints in a threadpool; the DB is small and local, so async adds complexity for no gain. | PostgreSQL: overkill for one server / one admin. aiosqlite/async SQLAlchemy: async-everywhere tax for a single-file DB. Raw `sqlite3`: no migrations. |
 | **Jinja2 + hand-written CSS, no Node/Vue** | James edits in Termux by copy-paste. A template change is a file edit + `systemctl reload`, not `npm run build`. RTL + Vazirmatn font (system fallback if offline; CDN optional). | Vue/React SPA: needs a build step, exactly the friction vpn-ui has. Django: batteries-included but heavy; its admin is English-first and its ORM/migration ceremony is overkill here. |
-| **Uvicorn, single process, systemd unit** | One service `vpn-panel.service`. No Gunicorn workers (SQLite + multiple writers = lock contention). | Gunicorn multi-worker: wrong for SQLite. |
+| **Uvicorn, single process, systemd unit** | One service `sparky-manager.service`. No Gunicorn workers (SQLite + multiple writers = lock contention). | Gunicorn multi-worker: wrong for SQLite. |
 | **Xray-core + sing-box, official binaries** | No patched core. Upgrades = replace binary + restart. Each core owns its own `config.json`, generated by the panel. | Patched Xray-core (vpn-ui approach): carries AnyTLS/TUIC/Naive inside Xray but forks the project from upstream security fixes. |
 | **Deps (pinned in `requirements.txt`)** | `fastapi`, `uvicorn[standard]`, `sqlalchemy`, `jinja2`, `qrcode[pil]`, `passlib[argon2]` (or `argon2-cffi`), `python-multipart`, `httpx` (for version checks), `cryptography` (key gen). Nothing else in MVP. | — |
 
@@ -121,13 +121,13 @@ Exact pain points were never spelled out, so this design fixes the
                                    │ HTTPS :<random> (panel) / :2054 (sub, optional)
                                    ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  vpn-panel  (FastAPI + Uvicorn, systemd: vpn-panel.service)          │
+│  sparky-manager  (FastAPI + Uvicorn, systemd: sparky-manager.service)          │
 │                                                                      │
 │  routes:  / (Jinja2 UI) · /api/* (JSON) · /sub/<token> (dual fmt)    │
 │  services: users/inbounds · config renderers (xray/sing-box/wg)     │
 │            link builders (v2rayNG + sing-box JSON) · QR              │
 │            traffic syncer (60 s tick) · expiry sweeper (5 min tick) │
-│  storage:  SQLite WAL  /opt/vpn-panel/data/panel.db                  │
+│  storage:  SQLite WAL  /opt/sparky-manager/data/panel.db                  │
 └──────┬───────────────┬───────────────────┬───────────────────────────┘
        │               │                   │
        ▼               ▼                   ▼
@@ -328,8 +328,8 @@ Requires **sing-box ≥ 1.12** (AnyTLS). Validate with
   {"type": "hysteria2", "tag": "hy2", "listen": "::", "listen_port": 443,
    "users": [{"password": "<pw>"}],
    "tls": {"enabled": true, "server_name": "<domain>",
-           "certificate_path": "/opt/vpn-panel/certs/fullchain.pem",
-           "key_path": "/opt/vpn-panel/certs/privkey.pem"}},
+           "certificate_path": "/opt/sparky-manager/certs/fullchain.pem",
+           "key_path": "/opt/sparky-manager/certs/privkey.pem"}},
   {"type": "tuic", "tag": "tuic", "listen": "::", "listen_port": 8443,
    "users": [{"uuid": "<uuid>", "password": "<pw>"}],
    "congestion_control": "bbr",
@@ -365,7 +365,7 @@ Share links (sing-box schemes, all understood by ZedSecure):
 
 **Certificate sharing:** Hysteria2 / TUIC / AnyTLS / Naive / ShadowTLS all
 use the *same* TLS certificate (one domain, one cert pair in
-`/opt/vpn-panel/certs/`). Reality needs none. If no domain is given,
+`/opt/sparky-manager/certs/`). Reality needs none. If no domain is given,
 these TLS inbounds are **not created** in Phase 1 — Reality + WireGuard
 carry the install instead (see open question Q2).
 
@@ -528,7 +528,7 @@ and their subscription returns 403. No live-connection killing in MVP
   10000–60000, like other panels), plus a random secret web path (like
   3X-UI's webBasePath): the panel only answers under `/<random-path>`
   and the root returns 404. Printed in the login box,
-  saved to `/root/vpn-panel-login.txt`, reprintable with `vpn-panel info`.
+  saved to `/root/sparky-manager-login.txt`, reprintable with `sparky-manager info`.
   Re-used on re-install; `--port` fixes it. The firewall opens only the
   panel port + the inbound ports in use.
 - **Panel TLS:** installer asks for a domain (optional).
@@ -553,7 +553,7 @@ and their subscription returns 403. No live-connection killing in MVP
   validated 1–65535 and checked for clashes before render; usernames
   `[a-zA-Z0-9_-]` only (they appear in share-link fragments and file names).
 - **Updates:** installer pins Xray + sing-box versions in
-  `/opt/vpn-panel/versions.env`; `vpn-panel update-cores` downloads the
+  `/opt/sparky-manager/versions.env`; `sparky-manager update-cores` downloads the
   new binaries, validates configs, restarts. No auto-update (a bad core
   must never take the server down unattended).
 
@@ -564,8 +564,8 @@ and their subscription returns 403. No live-connection killing in MVP
 One-liner install:
 
 ```bash
-curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh | sudo bash
-# or pinned:  curl -Ls …/install.sh | sudo bash -s -- --version 1.0.0
+curl -Ls https://raw.githubusercontent.com/SPARKY-CR/sparky-manager/main/install.sh | sudo bash
+# or pinned:  curl -Ls …/install.sh | sudo bash -s -- --version 1.1.0
 ```
 
 `install.sh` outline (idempotent — safe to re-run):
@@ -574,11 +574,11 @@ curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh |
 2. `apt-get update`; install `curl, ca-certificates, qrencode?, python3.11+,
    python3-venv, wireguard, nftables, iproute2, ufw?` (no — use nftables
    directly; don't fight UFW).
-3. Create `/opt/vpn-panel/{app,data,certs}`, `vpn-panel` system user,
+3. Create `/opt/sparky-manager/{app,data,certs}`, `sparky-manager` system user,
    `xray`/`sing-box` config dirs; download pinned Xray-core + sing-box
    release tarballs (verify SHA256 from the release page), place binaries
    in `/usr/local/bin/`.
-4. Python venv at `/opt/vpn-panel/venv`, `pip install -r requirements.txt`.
+4. Python venv at `/opt/sparky-manager/venv`, `pip install -r requirements.txt`.
 5. Interactive prompts (with sane defaults, all skippable with flags
    for unattended install): panel port `[random]`, web path
    `[random]`, domain `[none]`, Reality SNI `[www.microsoft.com]`,
@@ -587,32 +587,32 @@ curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh |
    `--yes` accepts them.
 6. Generate Reality keypair, WireGuard server keypair, admin password
    (if not supplied), per-user subscription salt. Write
-   `/opt/vpn-panel/data/panel.db` (initialised by the app on first run).
+   `/opt/sparky-manager/data/panel.db` (initialised by the app on first run).
 7. Render the **default inbounds** (VLESS-Reality :443 TCP,
    Hysteria2 :443 UDP via whichever core owns it, Shadowsocks :8388,
    WireGuard :51820) + `xray`/`sing-box`/`wg0` configs; validate both
-   cores; `systemctl enable --now xray sing-box vpn-panel`.
+   cores; `systemctl enable --now xray sing-box sparky-manager`.
 8. If a domain was given: obtain the Let's Encrypt cert, then restart
    the panel once with TLS enabled.
 9. **Verify before finishing:** `curl -k https://127.0.0.1:<panel-port>/<web-path>/health`
    must return 200; `xray` and `sing-box` must be `active`. If any check
    fails, print the failing service's last 20 log lines and exit non-zero.
-10. **Print the login box** (and save it to `/root/vpn-panel-login.txt`):
+10. **Print the login box** (and save it to `/root/sparky-manager-login.txt`):
 ```
 ============================================================
-  vpn-panel installed ✓
+  sparky-manager installed ✓
   Panel:    https://<IP>:<random-port>/<web-path>   (or https://<domain>:<same-port>/<web-path>)
   Username: admin
   Password: <generated-or-supplied>
   Subscriptions, QR codes and users are inside the panel.
-  Reprint this anytime:  sudo vpn-panel info
-  Docs: /opt/vpn-panel/README.md
+  Reprint this anytime:  sudo sparky-manager info
+  Docs: /opt/sparky-manager/README.md
 ============================================================
 ```
 
-`vpn-panel` CLI (a small wrapper, like `vpn-ui`'s menu but non-interactive
-first): `vpn-panel info | status | restart | update-cores | backup | restore`.
-`backup` = tarball of `/opt/vpn-panel/data/` + both `config.json` files
+`sparky-manager` CLI (a small wrapper, like `vpn-ui`'s menu but non-interactive
+first): `sparky-manager info | status | restart | update-cores | backup | restore`.
+`backup` = tarball of `/opt/sparky-manager/data/` + both `config.json` files
 (DB is the source of truth, so restoring the DB + re-rendering is enough).
 
 ---
@@ -663,7 +663,7 @@ them; the panel's job is to give ZedSecure clean server-side configs.
 ## 10. MVP file tree
 
 ```
-vpn-panel/
+sparky-manager/
 ├── DESIGN.md                  # this file
 ├── README.md                  # install + login + FAQ (FA + EN)
 ├── README_FA.md
@@ -686,7 +686,7 @@ vpn-panel/
 │   ├── links.py               # share-link builders (§6.2) + QR (qrcode)
 │   ├── subscription.py        # /sub/ dual format + UA sniffing (§6.1/6.3)
 │   ├── traffic.py             # Xray gRPC client, wg/nftables pollers, sweeper
-│   ├── panel_cli.py           # `vpn-panel info/status/restart/update-cores/backup`
+│   ├── panel_cli.py           # `sparky-manager info/status/restart/update-cores/backup`
 │   ├── templates/             # Jinja2, RTL, Persian-first
 │   │   ├── base.html  dashboard.html  inbounds.html
 │   │   ├── users.html  user_detail.html  settings.html  login.html
@@ -697,7 +697,7 @@ vpn-panel/
 │   ├── render_configs.py      # render both cores from DB (used by installer + CLI)
 │   └── backup.sh
 ├── systemd/
-│   ├── vpn-panel.service
+│   ├── sparky-manager.service
 │   ├── xray.service           # or use the cores' shipped units
 │   └── sing-box.service
 ├── tests/
@@ -737,7 +737,7 @@ vpn-panel/
    They are real daemons with their own PKI; putting them in Phase 1
    roughly doubles the installer's scope. Confirm Phase 2 is acceptable,
    or say which of the two matters more.
-7. **Public repo?** Should vpn-panel be public from day one, or
+7. **Public repo?** Should sparky-manager be public from day one, or
    private until Phase 1 works?
    (Affects whether the install URL can be the public raw GitHub URL.)
 

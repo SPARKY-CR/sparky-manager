@@ -1,4 +1,4 @@
-"""SQLAlchemy 2.0 models for vpn-panel (see DESIGN.md §4).
+"""SQLAlchemy 2.0 models for sparky-manager (see DESIGN.md §4).
 
 Original code, written from scratch for this project.
 

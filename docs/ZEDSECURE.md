@@ -19,10 +19,79 @@ so a user never has to care which engine a protocol belongs to.
 | TUIC v5 | ✅ `tuic://` | ✅ `type: tuic` | Needs a domain + certificate |
 | AnyTLS | ✅ `anytls://` | ✅ `type: anytls` | Needs a domain + certificate; sing-box ≥ 1.12 |
 | Naive | ✅ `naive+https://` | ✅ `type: naive` | Needs a domain + certificate. **Note the `naive+https` scheme** — a common gotcha; verify against the real ZedSecure importer |
-| ShadowTLS v3 + SS | ⚠️ link form only | ✅ sing-box JSON | The bare share-link form is unreliable; ShadowTLS is offered via the sing-box JSON subscription. Verify against ZedSecure before relying on the link form |
-| WireGuard | ❌ no share-link standard | ✅ `type: wireguard` | Also exported as a standard `.conf` file + QR code of the file content |
+| ShadowTLS v3 + SS | ⚠️ link form only | ✅ sing-box JSON | Carried as TWO outbounds: `shadowtls` (outer handshake) + a `shadowsocks` outbound that detours through it. The bare share-link form is unreliable; prefer the sing-box JSON or the ZedSecure bundle. Verify against ZedSecure before relying on the link form |
+| WireGuard | ❌ no share-link standard | ✅ endpoint (`type: wireguard` under `endpoints`) | sing-box 1.13+ removed the WireGuard *outbound*; the feed carries it as an endpoint (`address` + `peers[]`), plus a standard `.conf` file + QR code of the file content |
 | IKEv2 | ❌ | ❌ | Phase 2 (native support, `.mobileconfig` export) |
 | OpenVPN / OpenConnect | ❌ | ❌ | Phase 2 (`.ovpn` file export) |
+
+## The ZedSecure bundle (`/sub/<token>/zedsecure.json`)
+
+One JSON document with **everything** the app needs for one user, so
+ZedSecure can import all of the user's configs in a single action
+instead of choosing between the two generic feeds. The panel also
+shows it on the user's page as a "ZedSecure export" card with its own
+QR code.
+
+**Endpoint:** `GET /sub/<token>/zedsecure.json` (the token is the
+same subscription token; rotating it invalidates the old bundle URL).
+Same access rules as the other feeds: unknown, disabled, expired, or
+over-quota user → HTTP 403 with an empty body. The
+`Subscription-Userinfo` header is sent as well.
+
+**Schema** (`format: "zedsecure-bundle"`, `version: 1`):
+
+```json
+{
+  "format": "zedsecure-bundle",
+  "version": 1,
+  "generated_at": "2026-11-11T08:00:00+00:00",
+  "user": {
+    "name": "alice",
+    "expires_at": "2026-12-01T00:00:00+00:00",
+    "traffic_used_bytes": 0,
+    "traffic_limit_bytes": null,
+    "traffic_unlimited": true
+  },
+  "server": {"host": "203.0.113.10"},
+  "configs": [
+    {
+      "tag": "vless-reality",
+      "protocol": "vless",
+      "core": "xray",
+      "port": 443,
+      "remark": "VLESS + Reality",
+      "share_link": "vless://...",
+      "singbox_outbound": {"type": "vless", "...": "..."}
+    },
+    {
+      "tag": "wireguard",
+      "protocol": "wireguard",
+      "core": "wireguard",
+      "port": 51820,
+      "remark": "WireGuard (native)",
+      "singbox_endpoint": {"type": "wireguard", "...": "..."},
+      "wireguard_conf": "[Interface]\nPrivateKey = ...\n..."
+    }
+  ],
+  "links": ["vless://...", "trojan://..."],
+  "singbox": {"outbounds": [{"type": "vless", "...": "..."}],
+              "endpoints": [{"type": "wireguard", "...": "..."}]}
+}
+```
+
+- `configs` has one entry per usable (client, inbound) pair:
+  `share_link` when the protocol has one (WireGuard has none —
+  there is no share-link standard for it), `singbox_outbound`
+  when a sing-box outbound could be built (`singbox_endpoint`
+  instead for WireGuard, which is an endpoint since sing-box
+  1.13), and `wireguard_conf` (the full `.conf` text) for
+  WireGuard inbounds. A ShadowTLS entry's companion
+  Shadowsocks detour outbound (tag `<tag>-ss`) lives in the
+  feed's `outbounds`, not on the entry — the pair is only usable
+  together.
+- `links` is the same flat list the v2rayNG feed carries.
+- `singbox` is the whole sing-box feed object, so the app can take
+  it wholesale.
 
 ## How to import (per user)
 

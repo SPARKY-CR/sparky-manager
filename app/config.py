@@ -1,6 +1,6 @@
 """Panel settings and paths.
 
-All paths derive from ``VPN_PANEL_HOME`` (default ``/opt/vpn-panel``),
+All paths derive from ``SPARKY_HOME`` (default ``/opt/sparky-manager``),
 so the panel can be installed anywhere. Nothing here hard-pins a
 core version: the installer fetches the latest stable Xray-core /
 sing-box and records what it installed in ``versions.env``.
@@ -21,9 +21,9 @@ from pathlib import Path
 # Defaults (overridable by environment at install / runtime time)
 # ---------------------------------------------------------------------------
 
-DEFAULT_HOME = "/opt/vpn-panel"
+DEFAULT_HOME = "/opt/sparky-manager"
 # Dev/run fallback only: the installer randomises the port on a fresh
-# install (10000-60000) and passes it via VPN_PANEL_PORT / --port.
+# install (10000-60000) and passes it via SPARKY_PORT / --port.
 DEFAULT_PANEL_PORT = 2053
 DEFAULT_PANEL_HOST = "0.0.0.0"
 DEFAULT_REALITY_SNI = "www.microsoft.com"
@@ -48,7 +48,7 @@ def normalize_web_path(raw: str) -> str:
     return "/" + seg
 
 # Login-box file written by the installer (root-only, 0600).
-LOGIN_FILE = Path("/root/vpn-panel-login.txt")
+LOGIN_FILE = Path("/root/sparky-manager-login.txt")
 
 
 @dataclass(frozen=True)
@@ -98,19 +98,30 @@ class Settings:
         return LOGIN_FILE
 
 
+def _env(name: str, default: str = "") -> str:
+    """Read ``SPARKY_<name>``, falling back to the pre-rename
+    ``VPN_PANEL_<name>`` (a migrated panel.env may still carry the
+    old keys; the installer translates them, but the fallback costs
+    nothing and keeps a half-migrated install working)."""
+    value = os.environ.get("SPARKY_" + name, "")
+    if value:
+        return value
+    return os.environ.get("VPN_PANEL_" + name, default)
+
+
 def get_settings() -> Settings:
     """Build Settings from the environment (with the defaults above)."""
-    home = Path(os.environ.get("VPN_PANEL_HOME", DEFAULT_HOME))
+    home = Path(_env("HOME", DEFAULT_HOME))
     return Settings(
         home=home,
-        panel_port=int(os.environ.get("VPN_PANEL_PORT", DEFAULT_PANEL_PORT)),
-        panel_host=os.environ.get("VPN_PANEL_HOST", DEFAULT_PANEL_HOST),
-        domain=os.environ.get("VPN_PANEL_DOMAIN", ""),
-        subscription_host=os.environ.get("VPN_PANEL_SUBSCRIPTION_HOST", ""),
-        reality_sni=os.environ.get(
-            "VPN_PANEL_REALITY_SNI", DEFAULT_REALITY_SNI
+        panel_port=int(_env("PORT", str(DEFAULT_PANEL_PORT))),
+        panel_host=_env("HOST", DEFAULT_PANEL_HOST),
+        domain=_env("DOMAIN", ""),
+        subscription_host=_env("SUBSCRIPTION_HOST", ""),
+        reality_sni=_env(
+            "REALITY_SNI", DEFAULT_REALITY_SNI
         ),
-        web_path=normalize_web_path(os.environ.get("VPN_PANEL_WEB_PATH", "")),
+        web_path=normalize_web_path(_env("WEB_PATH", "")),
     )
 
 

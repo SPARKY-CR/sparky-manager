@@ -1,15 +1,15 @@
-"""Shared fixtures for the vpn-panel test suite.
+"""Shared fixtures for the sparky-manager test suite.
 
 Everything here is written from scratch for this project, against the
 real interfaces in ``app/`` (see DESIGN.md §4/§6).
 
-Environment ordering matters: ``app.config`` reads ``VPN_PANEL_HOME``
+Environment ordering matters: ``app.config`` reads ``SPARKY_HOME``
 (and friends) at import time, so this module sets the test env vars
 *before* importing any ``app.*`` module. The home points at a fresh
 temp dir, the admin password and the Reality / WireGuard keys come
 from the installer env vars the app prefers
-(``VPN_PANEL_ADMIN_PASSWORD``, ``VPN_PANEL_REALITY_*``,
-``VPN_PANEL_WG_*``), so ``ensure_defaults()`` never has to generate
+(``SPARKY_ADMIN_PASSWORD``, ``SPARKY_REALITY_*``,
+``SPARKY_WG_*``), so ``ensure_defaults()`` never has to generate
 (and print) secrets during tests.
 
 Each test gets a *fresh* SQLite file: the fixture creates its own
@@ -22,7 +22,6 @@ away from the per-test engine mid-test.
 
 from __future__ import annotations
 
-import base64
 import json
 import os
 import secrets
@@ -38,12 +37,18 @@ import pytest
 # at import time).
 # ---------------------------------------------------------------------------
 
-_TEST_HOME = tempfile.mkdtemp(prefix="vpn-panel-test-home-")
+_TEST_HOME = tempfile.mkdtemp(prefix="sparky-manager-test-home-")
 
-# Reality keys are X25519 keys: base64 of 32 random bytes, same format
-# the cores themselves emit.
-_REALITY_PRIVATE = base64.b64encode(secrets.token_bytes(32)).decode()
-_REALITY_PUBLIC = base64.b64encode(secrets.token_bytes(32)).decode()
+# Reality keys are X25519 keys in base64url WITHOUT padding (43 chars) —
+# that is the only format `xray x25519` emits and the only format real
+# Xray accepts in realitySettings.privateKey (standard base64 with
+# '=' padding is rejected at load). Generate them with the app's own
+# generator so the test seeds match production keys exactly.
+from app import xray as _xray_mod  # noqa: E402  (env-independent)
+
+_REALITY_KEYS = _xray_mod.generate_reality_keypair()
+_REALITY_PRIVATE = _REALITY_KEYS["private_key"]
+_REALITY_PUBLIC = _REALITY_KEYS["public_key"]
 _REALITY_SHORT_ID = secrets.token_hex(4)  # 8 hex chars
 
 ADMIN_PASSWORD = "TestAdminPass123!"
@@ -53,19 +58,19 @@ ADMIN_USERNAME = "admin"
 # suite stays domain-agnostic (no domain is ever configured).
 HOST = "203.0.113.10"
 
-os.environ["VPN_PANEL_HOME"] = _TEST_HOME
-os.environ["VPN_PANEL_ADMIN_PASSWORD"] = ADMIN_PASSWORD
-os.environ["VPN_PANEL_REALITY_PRIVATE_KEY"] = _REALITY_PRIVATE
-os.environ["VPN_PANEL_REALITY_PUBLIC_KEY"] = _REALITY_PUBLIC
-os.environ["VPN_PANEL_REALITY_SHORT_ID"] = _REALITY_SHORT_ID
+os.environ["SPARKY_HOME"] = _TEST_HOME
+os.environ["SPARKY_ADMIN_PASSWORD"] = ADMIN_PASSWORD
+os.environ["SPARKY_REALITY_PRIVATE_KEY"] = _REALITY_PRIVATE
+os.environ["SPARKY_REALITY_PUBLIC_KEY"] = _REALITY_PUBLIC
+os.environ["SPARKY_REALITY_SHORT_ID"] = _REALITY_SHORT_ID
 
 # WireGuard server keypair: a real pair from the app's own generator
 # (public key derived from the private key, like `wg` would produce).
 from app import wireguard as _wireguard_mod  # noqa: E402  (env-independent)
 
 _WG_SERVER_PRIVATE, _WG_SERVER_PUBLIC = _wireguard_mod.generate_keypair()
-os.environ["VPN_PANEL_WG_PRIVATE_KEY"] = _WG_SERVER_PRIVATE
-os.environ["VPN_PANEL_WG_PUBLIC_KEY"] = _WG_SERVER_PUBLIC
+os.environ["SPARKY_WG_PRIVATE_KEY"] = _WG_SERVER_PRIVATE
+os.environ["SPARKY_WG_PUBLIC_KEY"] = _WG_SERVER_PUBLIC
 
 # ---------------------------------------------------------------------------
 # App imports (env is set now).
@@ -87,6 +92,11 @@ SS_METHOD = "2022-blake3-aes-128-gcm"
 # A random token string is NOT a valid key — real Xray rejects it at load
 # ("bad key"), so test seeds must use a real key too.
 SS_PASSWORD = "MTIzNDU2Nzg5MDEyMzQ1Ng=="
+# ShadowTLS stream password: also a valid SS2022 key (base64 of
+# "shadowtls-key-01", 16 bytes) — the inner Shadowsocks detour reuses
+# the ShadowTLS password as its own, so an arbitrary token string
+# breaks the inner SS inbound at load ("illegal base64 data").
+SHADOWTLS_STREAM_PASSWORD = "c2hhZG93dGxzLWtleS0wMQ=="
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +153,7 @@ def _inbound_rows() -> list[dict]:
          "port": 8447, "remark": "ShadowTLS v3 + inner SS",
          "stream_json": json.dumps(
              {"tls": {"sni": HOST}, "method": SS_METHOD,
-              "password": "shadowtls-stream-pw"})},
+              "password": SHADOWTLS_STREAM_PASSWORD})},
         {"tag": "wireguard", "core": "wireguard", "protocol": "wireguard",
          "port": 51820, "remark": "WireGuard (native)",
          "stream_json": json.dumps(

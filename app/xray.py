@@ -34,14 +34,17 @@ first; skipping here is a second line of defence, never a crash).
 
 from __future__ import annotations
 
+import base64
 import json
 import os
+import secrets
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
 __all__ = [
+    "generate_reality_keypair",
     "render_xray_config",
     "validate_xray_config",
     "write_and_validate",
@@ -53,7 +56,7 @@ __all__ = [
 
 API_PORT = 10085
 API_LISTEN = "127.0.0.1"
-DEFAULT_HOME = "/opt/vpn-panel"
+DEFAULT_HOME = "/opt/sparky-manager"
 DEFAULT_REALITY_SNI = "www.microsoft.com"
 DEFAULT_SS_METHOD = "2022-blake3-aes-128-gcm"
 
@@ -70,6 +73,26 @@ _CERT_KEY_PAIRS = (
 
 #: Protocols this renderer knows how to build (Xray side, Phase 1).
 _XRAY_PROTOCOLS = ("vless", "vmess", "trojan", "shadowsocks", "hysteria2")
+
+
+def generate_reality_keypair() -> dict[str, str]:
+    """Fresh Reality X25519 keypair, same format ``xray x25519`` emits.
+
+    Keys are base64url WITHOUT padding (43 chars) of 32 bytes. The
+    public key is derived from the private key with the pure-Python
+    X25519 in :mod:`app.wireguard` (verified to match ``xray x25519``
+    output for the same private key) — no xray binary is called, so
+    this works wherever the panel runs, including the test suite.
+    Used by ``ensure_defaults`` (via the ``xray_mod`` hook) and by the
+    inbound form, so every VLESS+Reality inbound gets its own keys
+    instead of sharing the installer's pair.
+    """
+    from app import wireguard as _wg
+
+    private_raw = secrets.token_bytes(32)
+    public_raw = _wg._x25519(private_raw, _wg._BASE_POINT)
+    encode = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")  # noqa: E731
+    return {"private_key": encode(private_raw), "public_key": encode(public_raw)}
 
 
 # ---------------------------------------------------------------------------

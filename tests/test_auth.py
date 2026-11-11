@@ -215,3 +215,29 @@ def test_protected_pages_redirect_to_login_when_logged_out(test_client):
         assert resp.status_code == 303, url
         assert resp.headers["location"].startswith("/login"), url
     assert test_client.get("/health").json() == {"status": "ok"}
+
+
+def test_settings_save_round_trip(authed_client, db, seeded):
+    """POST /settings persists and the page renders the new values.
+
+    The save itself must succeed even though the re-render it
+    triggers cannot restart services in the test environment
+    (no systemd here) — a restart failure is reported on the
+    redirect, never blocks the save.
+    """
+    from app.main import get_settings
+
+    resp = authed_client.post("/settings", data={
+        "domain": "example.com",
+        "subscription_host": "203.0.113.10",
+        "reality_sni": "www.cloudflare.com",
+    }, follow_redirects=False)
+    assert resp.status_code in (200, 303)
+    settings = get_settings(db)
+    assert settings["domain"] == "example.com"
+    assert settings["subscription_host"] == "203.0.113.10"
+    assert settings["reality_sni"] == "www.cloudflare.com"
+    page = authed_client.get("/settings")
+    assert page.status_code == 200
+    assert "example.com" in page.text
+    assert "www.cloudflare.com" in page.text

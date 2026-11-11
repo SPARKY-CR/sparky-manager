@@ -1,4 +1,4 @@
-# vpn-panel — راهنما (فارسی)
+# sparky-manager — راهنما (فارسی)
 
 پنل VPN چند هسته‌ای که از صفر ساخته شده است: **Xray-core + sing-box +
 WireGuard** با یک رابط وب فارسی. برای کلاینت
@@ -20,8 +20,8 @@ WireGuard** با یک رابط وب فارسی. برای کلاینت
 
 - **ورود ثابت و قابل پیش‌بینی:** پنل روی پورت **۲۰۵۳**، مسیر `/`،
   نام کاربری `admin`. نه پورت و نه رمز تصادفی. نصب‌کننده در پایان یک
-  جعبهٔ ورود بزرگ چاپ می‌کند و آن را در `/root/vpn-panel-login.txt`
-  ذخیره می‌کند؛ با `sudo vpn-panel info` دوباره چاپ می‌شود.
+  جعبهٔ ورود بزرگ چاپ می‌کند و آن را در `/root/sparky-manager-login.txt`
+  ذخیره می‌کند؛ با `sudo sparky-manager info` دوباره چاپ می‌شود.
 - **بدون دامنه کار می‌کند.** با یک IP خالی سرور کافی است. جفت پیش‌فرض
   — **VLESS + Reality (TCP 443)** و **Hysteria2 (UDP 443)**، به‌همراه
   **WireGuard (UDP 51820)** — نه دامنه می‌خواهد نه گواهی. خود پنل،
@@ -47,17 +47,17 @@ WireGuard** با یک رابط وب فارسی. برای کلاینت
 فقط Ubuntu 22.04/24.04/26.04 یا Debian 12/13، با دسترسی root:
 
 ```bash
-curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh | sudo bash
+curl -Ls https://raw.githubusercontent.com/SPARKY-CR/sparky-manager/main/install.sh | sudo bash
 ```
 
-> آدرس مخزن بالا **جای موقت** است تا وقتی جیمز مخزن
-> `SPARKY-CR/Zed-panel` را بسازد. تا آن موقع، مخزن را clone کنید و
-> از داخل آن `sudo bash install.sh` را اجرا کنید.
+> دستور یک‌خطی بالا به مخزنی با نام `SPARKY-CR/sparky-manager` نیاز دارد
+> (نام مخزن را از `Zed-panel` در Settings → General مخزن عوض کنید). تا قبل
+> از تغییر نام، مخزن را clone کنید و از داخل آن `sudo bash install.sh` را اجرا کنید.
 
 نصب بدون پرسش، با گزینه‌های مشخص:
 
 ```bash
-curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh | sudo bash -s -- --yes --reality-sni www.microsoft.com
+curl -Ls https://raw.githubusercontent.com/SPARKY-CR/sparky-manager/main/install.sh | sudo bash -s -- --yes --reality-sni www.microsoft.com
 ```
 
 نصب‌کننده قابل تکرار است (اجرای دوباره بی‌خطر است) و پیش از پایان،
@@ -73,10 +73,10 @@ curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh |
 هم در همان جعبه است. اگر دامنه دارید: `https://<domain>:<پورت>`.
 
 ```bash
-sudo vpn-panel info      # چاپ دوبارهٔ جعبهٔ ورود
-sudo vpn-panel status    # وضعیت سرویس‌ها
-sudo vpn-panel restart   # راه‌اندازی دوبارهٔ پنل و هسته‌ها
-sudo vpn-panel backup    # پشتیبان در /root/vpn-panel-backup-<date>.tar.gz
+sudo sparky-manager info      # چاپ دوبارهٔ جعبهٔ ورود
+sudo sparky-manager status    # وضعیت سرویس‌ها
+sudo sparky-manager restart   # راه‌اندازی دوبارهٔ پنل و هسته‌ها
+sudo sparky-manager backup    # پشتیبان در /root/sparky-manager-backup-<date>.tar.gz
 ```
 
 ## پروتکل‌های پیش‌فرض (بدون نیاز به دامنه)
@@ -105,16 +105,16 @@ ShadowTLS (8446) هم در دسترس‌اند — ببینید
 گواهی رایگان Let's Encrypt می‌گیرد — حدود ۶ روز اعتبار دارد و خودکار
 تمدید می‌شود — و بعد مرورگر بدون هیچ هشداری به پنل اعتماد می‌کند.
 اگر به گواهی self-signed برگشته باشد، پیش از ادامه اثر انگشت SHA256
-آن را با اثر انگشت جعبهٔ ورود (`/root/vpn-panel-login.txt`) مقایسه
+آن را با اثر انگشت جعبهٔ ورود (`/root/sparky-manager-login.txt`) مقایسه
 کنید، بعد پورت ۸۰ را باز کنید و نصب‌کننده را دوباره اجرا کنید تا
 گواهی معتبر را دوباره امتحان کند.
 
 **اطلاعات ورود را چطور دوباره چاپ کنم؟**
-`sudo vpn-panel info`.
+`sudo sparky-manager info`.
 
 **حذف نصب چطور است؟**
 `sudo bash install.sh --uninstall` — سرویس‌ها را متوقف می‌کند، یک
-نسخهٔ پشتیبان در `/root/` نگه می‌دارد و `/opt/vpn-panel` را حذف
+نسخهٔ پشتیبان در `/root/` نگه می‌دارد و `/opt/sparky-manager` را حذف
 می‌کند.
 
 **آیا پنل Psiphon، Tor یا تونل DNS اجرا می‌کند؟**
@@ -129,7 +129,7 @@ ShadowTLS (8446) هم در دسترس‌اند — ببینید
   sing-box، ترافیک «نامشخص» نمایش داده می‌شود، نه یک عدد ساختگی.
 - فروشندگی / چند مدیر / صورتحساب و مدیریت چند سرور وجود ندارد.
 - نصب‌کننده هنگام نصب، *آخرین* نسخهٔ پایدار هسته‌ها را می‌گیرد و در
-  `/opt/vpn-panel/versions.env` ثبت می‌کند؛ به‌روزرسانی خودکار وجود
+  `/opt/sparky-manager/versions.env` ثبت می‌کند؛ به‌روزرسانی خودکار وجود
   ندارد.
 
 ## مجوز

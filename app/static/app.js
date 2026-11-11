@@ -1,4 +1,4 @@
-/* vpn-panel — small vanilla JS. Core flows work without JS;
+/* sparky-manager — small vanilla JS. Core flows work without JS;
    this only adds copy-to-clipboard, delete confirmation and
    show/hide password. No framework, no fetch. */
 (function () {
@@ -42,6 +42,16 @@
       }
     });
   });
+
+  // Add-inbound form: an empty port means "auto-generate" — send 0
+  // so the server picks a free port instead of failing validation.
+  var inboundForm = document.getElementById("add-inbound-form");
+  if (inboundForm) {
+    inboundForm.addEventListener("submit", function () {
+      var port = document.getElementById("inbound-port");
+      if (port && port.value === "") port.value = "0";
+    });
+  }
 
   // Show/hide password: <button data-toggle-password="input-id">
   document.querySelectorAll("[data-toggle-password]").forEach(function (btn) {

@@ -1,7 +1,7 @@
-# vpn-panel Python dependencies.
+# sparky-manager Python dependencies.
 # Minimum versions only (">="), all of which exist on PyPI — no exact
 # patch pins are invented here. The installer does `pip install -r
-# requirements.txt` into /opt/vpn-panel/venv.
+# requirements.txt` into /opt/sparky-manager/venv.
 fastapi>=0.110
 uvicorn[standard]>=0.29
 sqlalchemy>=2.0
