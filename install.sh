@@ -294,9 +294,22 @@ case "$REALITY_SNI" in
         ;;
 esac
 
-SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+# Server IP: prefer the PUBLIC address — that is what the login box,
+# the self-signed certificate and the subscription links use, and a
+# private/VPC address (e.g. EC2 172.31.x.x from `hostname -I`) is
+# unreachable from outside. Cloud metadata first, then an external
+# IP service, then the local address. Each source must return a
+# dotted-quad IPv4 address or it is ignored.
+SERVER_IP=""
+for _ip_src in "http://169.254.169.254/latest/meta-data/public-ipv4" \
+               "https://checkip.amazonaws.com" "https://ifconfig.me"; do
+    _ip="$(curl -fsSL --max-time 5 -4 "$_ip_src" 2>/dev/null | tr -d '[:space:]' || true)"
+    case "$_ip" in
+        [0-9]*.[0-9]*.[0-9]*.[0-9]*) SERVER_IP="$_ip"; break ;;
+    esac
+done
 if [ -z "$SERVER_IP" ]; then
-    SERVER_IP="$(curl -fsS -4 https://ifconfig.me 2>/dev/null || true)"
+    SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 fi
 if [ -z "$SERVER_IP" ]; then
     SERVER_IP="127.0.0.1"
@@ -603,8 +616,21 @@ chown root:vpn-panel /opt/vpn-panel/data/panel.env
 # the panel settings afterwards, never a requirement at install time.
 # ---------------------------------------------------------------------------
 CERT_CN="${DOMAIN:-$SERVER_IP}"
-if [ ! -f /opt/vpn-panel/certs/fullchain.pem ] || [ ! -f /opt/vpn-panel/certs/privkey.pem ]; then
+# Regenerate the self-signed cert when it was made for a different
+# bare IP (e.g. an earlier install used the private/VPC address
+# before public-IP detection existed) — otherwise the browser shows
+# a name mismatch on top of the self-signed warning. With a domain
+# the cert is keyed to the domain and is left alone.
+_cert_cn() {
+    openssl x509 -noout -subject -nameopt RFC2253 \
+        -in /opt/vpn-panel/certs/fullchain.pem 2>/dev/null | \
+        sed -n 's/^subject=CN=//p' | cut -d, -f1
+}
+CERT_REGENERATED=0
+if [ ! -f /opt/vpn-panel/certs/fullchain.pem ] || [ ! -f /opt/vpn-panel/certs/privkey.pem ] \
+   || { [ -z "$DOMAIN" ] && [ "$(_cert_cn)" != "$SERVER_IP" ]; }; then
     info "Generating a self-signed panel certificate (365 days, CN=${CERT_CN}) ..."
+    CERT_REGENERATED=1
     if [ -n "$DOMAIN" ]; then
         SAN="DNS:${DOMAIN},IP:${SERVER_IP}"
     else
@@ -896,7 +922,14 @@ chmod 0755 /usr/local/bin/vpn-panel
 # Start services and VERIFY before finishing.
 # ---------------------------------------------------------------------------
 info "Enabling and starting xray, sing-box and vpn-panel ..."
+PANEL_WAS_ACTIVE=0
+systemctl is-active --quiet vpn-panel 2>/dev/null && PANEL_WAS_ACTIVE=1
 systemctl enable --now xray sing-box vpn-panel
+# A regenerated certificate is only picked up when the panel
+# restarts (enable --now does not restart a running service).
+if [ "$CERT_REGENERATED" -eq 1 ] && [ "$PANEL_WAS_ACTIVE" -eq 1 ]; then
+    systemctl restart vpn-panel
+fi
 
 PANEL_OK=0
 for _ in $(seq 1 30); do
