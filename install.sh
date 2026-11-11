@@ -338,7 +338,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq curl ca-certificates git unzip \
     python3 python3-venv python3-pip \
-    wireguard wireguard-tools nftables iproute2 openssl
+    wireguard wireguard-tools nftables iproute2 openssl cron socat
 
 # ---------------------------------------------------------------------------
 # Directories and system user
@@ -608,6 +608,76 @@ chown root:vpn-panel "$INSTALL_ENV"
 chmod 0640 /opt/vpn-panel/data/panel.env
 chown root:vpn-panel /opt/vpn-panel/data/panel.env
 
+# obtain_le_ip_cert — replace the self-signed panel certificate with a
+# TRUSTED Let's Encrypt certificate for the bare public IP, the same
+# trick 3x-ui's SSL menu uses (no domain needed). Since 2026-01-15
+# Let's Encrypt issues free certificates for public IP addresses, but
+# only under the `shortlived` profile: valid ~160 hours (~6 days).
+# acme.sh's cron renews it automatically and the --reloadcmd below
+# re-installs it and restarts the panel (and sing-box, whose Hysteria2
+# inbound serves the same certificate). Needs TCP 80 reachable from
+# the internet for the HTTP-01 challenge. Returns 0 on success, 1
+# otherwise — the caller keeps the self-signed certificate and the
+# install continues; re-running the installer retries it.
+obtain_le_ip_cert() {
+    [ -z "$DOMAIN" ] || return 1
+    case "$SERVER_IP" in
+        10.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*|192.168.*|127.*|169.254.*|0.*)
+            return 1 ;;
+    esac
+    if (exec 3<>/dev/tcp/127.0.0.1/80) 2>/dev/null; then
+        warn "Port 80 is already in use; skipping the trusted IP certificate (keeping the self-signed one)."
+        return 1
+    fi
+    # Default first (ask only overwrites it when the user types a reply;
+    # with no usable terminal the variable would otherwise stay unset
+    # and `set -u` would kill the script when it is read below).
+    LE_IP_CERT="Y"
+    ask LE_IP_CERT "Trusted Let's Encrypt certificate for ${SERVER_IP} (no browser warning)" "Y"
+    case "$LE_IP_CERT" in
+        Y|y|yes|YES|"") ;;
+        *) info "Skipping the trusted IP certificate (keeping the self-signed one)."; return 1 ;;
+    esac
+    local acme="$HOME/.acme.sh/acme.sh"
+    if [ ! -x "$acme" ]; then
+        info "Installing acme.sh (Let's Encrypt client) ..."
+        if ! curl -fsSL https://get.acme.sh | sh >/dev/null 2>&1; then
+            warn "Could not install acme.sh; keeping the self-signed certificate."
+            return 1
+        fi
+    fi
+    # acme.sh defaults to ZeroSSL (needs an email); force Let's Encrypt.
+    "$acme" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
+    info "Requesting a Let's Encrypt certificate for ${SERVER_IP} (HTTP-01 on port 80) ..."
+    local _acme_log
+    _acme_log="$(mktemp)"
+    if ! "$acme" --issue -d "$SERVER_IP" --standalone --server letsencrypt \
+            --certificate-profile shortlived --days 6 --httpport 80 >"$_acme_log" 2>&1; then
+        warn "Could not obtain the Let's Encrypt IP certificate. Is TCP 80 open in the firewall/security group? Last lines from acme.sh:"
+        tail -n 5 "$_acme_log" || true
+        warn "Keeping the self-signed certificate — open TCP 80 and re-run the installer to retry."
+        rm -f "$_acme_log"
+        return 1
+    fi
+    rm -f "$_acme_log"
+    info "Installing the trusted certificate for the panel ..."
+    local _reload="chmod 0640 /opt/vpn-panel/certs/privkey.pem; chown root:vpn-panel /opt/vpn-panel/certs/privkey.pem /opt/vpn-panel/certs/fullchain.pem; systemctl restart vpn-panel sing-box"
+    if ! "$acme" --installcert -d "$SERVER_IP" \
+            --key-file /opt/vpn-panel/certs/privkey.pem \
+            --fullchain-file /opt/vpn-panel/certs/fullchain.pem \
+            --reloadcmd "$_reload" >/dev/null 2>&1; then
+        warn "Could not install the Let's Encrypt certificate; keeping the self-signed one."
+        return 1
+    fi
+    chmod 0640 /opt/vpn-panel/certs/privkey.pem
+    chmod 0644 /opt/vpn-panel/certs/fullchain.pem
+    chown root:vpn-panel /opt/vpn-panel/certs/privkey.pem /opt/vpn-panel/certs/fullchain.pem
+    CERT_REGENERATED=1
+    LE_CERT_OK=1
+    info "Trusted Let's Encrypt certificate installed for ${SERVER_IP} (valid ~6 days, auto-renewed by acme.sh)."
+    return 0
+}
+
 # ---------------------------------------------------------------------------
 # Panel certificate — self-signed when no domain is given (DESIGN §7).
 # The browser WILL warn about it; the fingerprint is printed in the
@@ -651,8 +721,14 @@ if [ ! -f /opt/vpn-panel/certs/fullchain.pem ] || [ ! -f /opt/vpn-panel/certs/pr
 else
     info "Keeping the existing panel certificate."
 fi
+# Try for a trusted certificate (no domain needed); falls back to the
+# self-signed one above on any failure.
+LE_CERT_OK=0
+obtain_le_ip_cert || true
 CERT_FINGERPRINT="$(openssl x509 -noout -fingerprint -sha256 \
     -in /opt/vpn-panel/certs/fullchain.pem | cut -d'=' -f2)"
+CERT_ISSUER="$(openssl x509 -noout -issuer -in /opt/vpn-panel/certs/fullchain.pem 2>/dev/null | sed 's/^issuer=//')"
+CERT_EXPIRY="$(openssl x509 -noout -enddate -in /opt/vpn-panel/certs/fullchain.pem 2>/dev/null | cut -d= -f2)"
 
 # ---------------------------------------------------------------------------
 # Default configs: run the panel's render script when it exists, else
@@ -934,6 +1010,11 @@ systemctl enable --now xray sing-box vpn-panel
 if [ "$CERT_REGENERATED" -eq 1 ] && [ "$PANEL_WAS_ACTIVE" -eq 1 ]; then
     systemctl restart vpn-panel
 fi
+# The Let's Encrypt IP certificate only lives ~6 days; acme.sh's cron
+# renews it, but only if the cron daemon is running.
+if [ "${LE_CERT_OK:-0}" -eq 1 ]; then
+    systemctl enable --now cron 2>/dev/null || warn "Could not start cron — the trusted certificate will NOT auto-renew. Enable cron and re-run the installer."
+fi
 
 PANEL_OK=0
 for _ in $(seq 1 30); do
@@ -982,7 +1063,13 @@ umask 077
     echo ""
     echo "  Panel cert fingerprint (SHA256):"
     echo "  ${CERT_FINGERPRINT}"
-    if [ -z "$DOMAIN" ]; then
+    if printf '%s' "$CERT_ISSUER" | grep -qi "Let's Encrypt"; then
+        echo ""
+        echo "  Trusted Let's Encrypt certificate — no browser"
+        echo "  warning. Valid until: ${CERT_EXPIRY}"
+        echo "  (IP certificates last ~6 days and renew"
+        echo "  automatically; keep TCP 80 open.)"
+    elif [ -z "$DOMAIN" ]; then
         echo ""
         echo "  NOTE: no domain was given, so the panel uses a"
         echo "  SELF-SIGNED certificate. Your browser WILL warn"

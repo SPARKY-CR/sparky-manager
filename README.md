@@ -27,11 +27,14 @@ code from 3X-UI, vpn-ui, Marzban, or any other panel.
 - **No domain needed.** It works with a bare server IP. The default
   first pair — **VLESS + Reality (TCP 443)** and **Hysteria2 (UDP 443)**,
   plus **WireGuard (UDP 51820)** — needs no domain and no certificate.
-  The panel itself serves a self-signed certificate when there is no
-  domain (your browser will warn; the login box prints the fingerprint
-  so you can check it). If you later add a domain in the panel settings,
-  TLS inbounds and Let's Encrypt become available as an option — never
-  a requirement.
+  With no domain the installer tries for a trusted Let's Encrypt
+  certificate for the bare public IP instead (the same trick 3x-ui
+  uses — free since 2026, valid ~6 days, auto-renewed; needs TCP 80
+  open). If that fails it falls back to a self-signed certificate
+  (your browser will warn; the login box prints the fingerprint so
+  you can check it). If you later add a domain in the panel settings,
+  TLS inbounds and a 90-day Let's Encrypt certificate become
+  available as an option — never a requirement.
 - **Two cores, side by side:** Xray-core serves VLESS, VMess, Trojan,
   Shadowsocks 2022, and Hysteria2; sing-box serves TUIC, AnyTLS, Naive,
   and ShadowTLS. WireGuard runs natively (`wg0`).
@@ -100,9 +103,14 @@ No. A bare server IP is enough for the default setup. A domain only
 adds the TLS-based protocols and a real certificate for the panel.
 
 **The browser warns about the certificate — is that normal?**
-Yes, when no domain is given. The panel uses a self-signed certificate
-generated at install. Compare its SHA256 fingerprint with the one in
-the login box (`/root/vpn-panel-login.txt`) before proceeding.
+Only if the trusted-certificate step failed (usually TCP 80 closed in
+the firewall/security group). With no domain the installer asks for a
+free Let's Encrypt certificate for the bare server IP — valid ~6 days,
+renewed automatically — and then the browser trusts the panel with no
+warning. If it fell back to the self-signed certificate generated at
+install, compare its SHA256 fingerprint with the one in the login box
+(`/root/vpn-panel-login.txt`) before proceeding, then open TCP 80 and
+re-run the installer to retry the trusted certificate.
 
 **How do I reprint the login details?**
 `sudo vpn-panel info`.
