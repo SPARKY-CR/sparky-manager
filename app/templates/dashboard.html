@@ -26,18 +26,6 @@
   </div>
 </div>
 
-{% if ikev2_status %}
-<div class="card">
-  <h2>{{ t.ikev2_status }}</h2>
-  <p class="muted">{{ t.ikev2_note }}</p>
-  <dl class="kv">
-    {% for key, value in ikev2_status.items() %}
-      <dt>{{ key }}</dt><dd>{{ value }}</dd>
-    {% endfor %}
-  </dl>
-</div>
-{% endif %}
-
 <div class="card">
   <h2>{{ t.recent_users }}</h2>
   {% if users %}
@@ -48,11 +36,11 @@
     <tbody>
       {% for u in users %}
       <tr>
-        <td><a href="/users/{{ u.id }}">{{ u.name }}</a></td>
+        <td><a href="{{ base_path }}/users/{{ u.id }}">{{ u.name }}</a></td>
         <td>{{ t.enabled if u.enabled else t.disabled }}</td>
         <td>{{ (u.traffic_used_bytes / 1073741824) | round(2) }} GB</td>
         <td>{{ u.expires_at.strftime('%Y-%m-%d') if u.expires_at else t.never }}</td>
-        <td><a class="btn btn-small" href="/users/{{ u.id }}">{{ t.details }}</a></td>
+        <td><a class="btn btn-small" href="{{ base_path }}/users/{{ u.id }}">{{ t.details }}</a></td>
       </tr>
       {% endfor %}
     </tbody>
@@ -60,6 +48,6 @@
   {% else %}
   <p class="muted">{{ t.no_users }}</p>
   {% endif %}
-  <p><a class="btn btn-primary" href="/users">{{ t.users }}</a></p>
+  <p><a class="btn btn-primary" href="{{ base_path }}/users">{{ t.users }}</a></p>
 </div>
 {% endblock %}

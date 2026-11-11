@@ -5,7 +5,7 @@
 
 <div class="card">
   <h2>{{ t.add_inbound }}</h2>
-  <form method="post" action="/inbounds" class="form-inline">
+  <form method="post" action="{{ base_path }}/inbounds" class="form-inline">
     <label>
       {{ t.tag }}
       <input type="text" name="tag" pattern="[a-zA-Z0-9_-]+" required>
@@ -82,10 +82,10 @@
         <td>{{ t.enabled if i.enabled else t.disabled }}</td>
         <td>{{ i.remark or '' }}</td>
         <td class="row-actions">
-          <form method="post" action="/inbounds/{{ i.id }}/toggle" class="inline-form">
+          <form method="post" action="{{ base_path }}/inbounds/{{ i.id }}/toggle" class="inline-form">
             <button type="submit" class="btn btn-small">{{ t.toggle }}</button>
           </form>
-          <form method="post" action="/inbounds/{{ i.id }}/delete" class="inline-form" data-confirm="{{ t.confirm_delete }}">
+          <form method="post" action="{{ base_path }}/inbounds/{{ i.id }}/delete" class="inline-form" data-confirm="{{ t.confirm_delete }}">
             <button type="submit" class="btn btn-small btn-danger">{{ t.delete }}</button>
           </form>
         </td>

@@ -21,7 +21,7 @@ so a user never has to care which engine a protocol belongs to.
 | Naive | ✅ `naive+https://` | ✅ `type: naive` | Needs a domain + certificate. **Note the `naive+https` scheme** — a common gotcha; verify against the real ZedSecure importer |
 | ShadowTLS v3 + SS | ⚠️ link form only | ✅ sing-box JSON | The bare share-link form is unreliable; ShadowTLS is offered via the sing-box JSON subscription. Verify against ZedSecure before relying on the link form |
 | WireGuard | ❌ no share-link standard | ✅ `type: wireguard` | Also exported as a standard `.conf` file + QR code of the file content |
-| IKEv2 | ❌ | ❌ | Via Ikev2-manager (`.mobileconfig` export), not this panel |
+| IKEv2 | ❌ | ❌ | Phase 2 (native support, `.mobileconfig` export) |
 | OpenVPN / OpenConnect | ❌ | ❌ | Phase 2 (`.ovpn` file export) |
 
 ## How to import (per user)

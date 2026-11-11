@@ -64,17 +64,17 @@ Exact pain points were never spelled out, so this design fixes the
 
 | Pain point (vpn-ui / 3X-UI) | Fix in vpn-panel |
 |---|---|
-| Fresh install **randomises port, username, password and web path**; login info is hidden behind `/opt/vpn-ui/vpn-ui-amd64 info` (menu option 8) | **Like other panels** (see §7): fresh install randomises the panel port (10000–60000) and the admin password; path `/`, username `admin`. Installer prints one big, unmissable login box at the end (full URL + user + password), saves it to `/root/vpn-panel-login.txt`, and `vpn-panel info` reprints it. Port and password are re-used on re-install, never re-randomised. |
+| Fresh install **randomises port, username, password and web path**; login info is hidden behind `/opt/vpn-ui/vpn-ui-amd64 info` (menu option 8) | **Like other panels** (see §7): fresh install randomises the panel port (10000–60000), the admin password and the secret web path; username `admin`. Installer prints one big, unmissable login box at the end (full URL + user + password), saves it to `/root/vpn-panel-login.txt`, and `vpn-panel info` reprints it. Port and password are re-used on re-install, never re-randomised. |
 | Cluttered English UI; 3X-UI has 14 languages but no Persian-first design, and vpn-ui adds ~15 protocols, resellers, multi-admin, bulk ops — a huge surface for one person | **Persian-first RTL UI**, English as secondary toggle. One screen per job: Dashboard → Inbounds → Users → Subscriptions. No reseller/multi-admin in MVP. |
 | Heavy setup: vpn-ui is a Go monolith bundling patched Xray-core, RADIUS, procmgr, a dozen daemons (xl2tpd, strongSwan, pptpd, OpenVPN, ocserv, accel-ppp, telemt…), kernel-module builds (AmneziaWG DKMS fails on kernel ≥ 7.1 and on RHEL kernels) | **Two stock cores + Python backend, no patched core, no kernel builds in Phase 1.** Xray-core and sing-box are downloaded as official upstream binaries. AmneziaWG (needs a kernel module) is Phase 2, explicitly gated. |
-| Go + Vue build: editing the UI means a Node build step | **No Node/Vue build step.** Server-rendered pages (Jinja2) + one hand-written CSS file + a little vanilla JS. James can edit a template with copy-paste in Termux, like his Ikev2-manager. |
-| One-line install exists (`curl …/deploy.sh \| sudo bash`) but the *result* is hard to find | Same one-line install shape as his Ikev2-manager, but the installer **ends by printing the URL + login** and verifying the panel answers HTTP 200 before exiting. |
+| Go + Vue build: editing the UI means a Node build step | **No Node/Vue build step.** Server-rendered pages (Jinja2) + one hand-written CSS file + a little vanilla JS. James can edit a template with copy-paste in Termux. |
+| One-line install exists (`curl …/deploy.sh \| sudo bash`) but the *result* is hard to find | Same one-line install shape, but the installer **ends by printing the URL + login** and verifying the panel answers HTTP 200 before exiting. |
 
 ### Non-goals (MVP)
 - No reseller / multi-admin / billing. One admin account (Phase 2: optional second admin).
 - No multi-node / multi-server management (3X-UI has it; out of scope).
 - No WARP / outbound routing / load balancers / Clash-rule editor.
-- No Telegram bot (James already has one for Ikev2-manager; could be Phase 3).
+- No Telegram bot in Phase 1 (could be Phase 3).
 
 ---
 
@@ -85,7 +85,7 @@ Exact pain points were never spelled out, so this design fixes the
 | Core(s) | Xray-core (stock) | Patched Xray-core + many daemons, single Go binary | **Xray-core (stock) + sing-box (stock), side by side** |
 | Xray protocols | VLESS, VMess, Trojan, SS, WG, AmneziaWG, TUIC v5, Hysteria2, MTProto, HTTP/SOCKS, TUN | All of 3X-UI + AnyTLS, NaiveProxy (in patched core) + PPTP/L2TP/OpenVPN/OpenConnect/SSTP/IKEv2/SSH/GRE/MTProto | Phase 1: VLESS, VMess, Trojan, SS, Hysteria2 (Xray) + TUIC, AnyTLS, Naive, ShadowTLS (sing-box) + WireGuard (native) |
 | sing-box protocols | — (Xray only) | — (patched Xray only) | **TUIC, AnyTLS, Naive, ShadowTLS via real sing-box** |
-| IKEv2 | — | Bundled strongSwan | **Reuse Ikev2-manager, do not rewrite** (§5.3) |
+| IKEv2 | — | Bundled strongSwan | **Protocol label only in Phase 1** (§5.4) — native support is Phase 2 |
 | OpenVPN / OpenConnect | — | Bundled daemons | Phase 2 (§8) |
 | Subscription formats | v2rayNG-style links, JSON, Clash | Same + TXT/PDF export | **Dual: v2rayNG base64 links AND sing-box JSON** (§6), QR, per-user link |
 | Per-user quota / expiry / enable-disable | Yes | Yes + Freeze + bulk ops | Yes (MVP core); Freeze = enable/disable; bulk ops Phase 2 |
@@ -105,7 +105,7 @@ Exact pain points were never spelled out, so this design fixes the
 | Choice | Why | Rejected alternative |
 |---|---|---|
 | **FastAPI** (not Flask) | Async-native (ASGI): the traffic-sync loop, Xray gRPC polling and expiry sweeper run as background tasks without blocking requests. Pydantic v2 validates every API payload (inbound/user forms) for free. Auto-generated OpenAPI docs (`/docs`) — useful when James later adds a Telegram bot. Type hints catch config-shape bugs before runtime. Now ahead of Flask in PyPI downloads; well documented. | Flask: sync WSGI, no built-in validation, needs extensions for everything FastAPI ships. Fine for a prototype, worse for background jobs + validation. |
-| **SQLAlchemy 2.0 sync + SQLite** | One file (`/opt/vpn-panel/data/panel.db`), zero DB server, trivial backup (`cp` the file — same pattern as Ikev2-manager). WAL mode so reads don't block the sweeper's writes. Sync engine (not async) keeps the code simple: FastAPI runs sync endpoints in a threadpool; the DB is small and local, so async adds complexity for no gain. | PostgreSQL: overkill for one server / one admin. aiosqlite/async SQLAlchemy: async-everywhere tax for a single-file DB. Raw `sqlite3`: no migrations. |
+| **SQLAlchemy 2.0 sync + SQLite** | One file (`/opt/vpn-panel/data/panel.db`), zero DB server, trivial backup (`cp` the file). WAL mode so reads don't block the sweeper's writes. Sync engine (not async) keeps the code simple: FastAPI runs sync endpoints in a threadpool; the DB is small and local, so async adds complexity for no gain. | PostgreSQL: overkill for one server / one admin. aiosqlite/async SQLAlchemy: async-everywhere tax for a single-file DB. Raw `sqlite3`: no migrations. |
 | **Jinja2 + hand-written CSS, no Node/Vue** | James edits in Termux by copy-paste. A template change is a file edit + `systemctl reload`, not `npm run build`. RTL + Vazirmatn font (system fallback if offline; CDN optional). | Vue/React SPA: needs a build step, exactly the friction vpn-ui has. Django: batteries-included but heavy; its admin is English-first and its ORM/migration ceremony is overkill here. |
 | **Uvicorn, single process, systemd unit** | One service `vpn-panel.service`. No Gunicorn workers (SQLite + multiple writers = lock contention). | Gunicorn multi-worker: wrong for SQLite. |
 | **Xray-core + sing-box, official binaries** | No patched core. Upgrades = replace binary + restart. Each core owns its own `config.json`, generated by the panel. | Patched Xray-core (vpn-ui approach): carries AnyTLS/TUIC/Naive inside Xray but forks the project from upstream security fixes. |
@@ -135,7 +135,7 @@ Exact pain points were never spelled out, so this design fixes the
   :10085 API      config.json        wg0 · wg show
   (127.0.0.1)     no stats API (*)   per-peer counters
   gRPC stats      nftables/port      AmneziaWG: Phase 2
-  config.json     accounting (*)     IKEv2: Ikev2-manager
+  config.json     accounting (*)     IKEv2: not provided
                                      OpenVPN/ocserv: Phase 2
        │               │                   │
        └───────────────┴───────────────────┘
@@ -385,21 +385,18 @@ carry the install instead (see open question Q2).
   message rather than fail silently. ZedSecure supports it, so it stays
   on the roadmap, not in MVP.
 
-### 5.4 IKEv2 — reuse, don't rewrite
+### 5.4 IKEv2 — protocol label only in Phase 1
 
-James already owns **Ikev2-manager** (IKEv2/strongSwan, v1.3.0, CI green,
-server install tested 2026-11-11). **The panel does NOT reimplement IKEv2.**
-Design: the panel treats IKEv2 as an *external, integrated* service —
-- Phase 1: the panel shows the Ikev2-manager status and a link/button
-  ("Open Ikev2-manager") and, if both are on the same server, reserves
-  ports so they don't clash (IKEv2 uses UDP 500/4500 — no clash with the
-  port plan above). No shared user DB in MVP.
-- Phase 2: optional read-only import — panel reads Ikev2-manager's user
-  list (from its own data files, with James's approval on the exact path)
-  so the dashboard shows IKEv2 users alongside Xray/sing-box users, and
-  can deep-link to Ikev2-manager to add/remove them. No writes into
-  Ikev2-manager's config from the panel until that integration is
-  designed separately.
+The panel is built from scratch and does not detect, show, link to, or
+depend on any other project. `ikev2` exists in the panel only as a
+**protocol/core label** in the data model (for a future native IKEv2
+implementation): there is no IKEv2 status card, no external-manager
+link, and the panel never reads another project's files.
+
+Port plan note: if strongSwan/IKEv2 runs on the same server it uses
+UDP 500/4500 — the panel never assigns those ports to its own inbounds
+(the inbound form rejects them, and the defaults are 443 TCP/UDP,
+51820 UDP, 8388 TCP).
 
 ### 5.5 What the panel does NOT run (by design)
 
@@ -460,7 +457,7 @@ Only the user's *enabled* inbounds are included.
 | AnyTLS | `anytls://<password>@<host>:8444?sni=<host>#<name>` |
 | Naive | `naive+https://<user>:<password>@<host>:8445#<name>` |
 | WireGuard | No share-link standard — export `.conf` file + QR of the file content (§6.3) |
-| IKEv2 / OpenVPN | No share link — `.mobileconfig` / `.ovpn` file export (Phase 2 for OpenVPN; IKEv2 via Ikev2-manager) |
+| IKEv2 / OpenVPN | No share link — `.mobileconfig` / `.ovpn` file export (Phase 2 for both) |
 
 URL-encode the `#name` fragment and any password containing `@`, `#`,
 `?`, `/`. Base64 is **encoding, not encryption** — anyone with the link
@@ -510,7 +507,7 @@ feature done (see §10, Q5).
 | Xray inbounds | gRPC Stats API on `127.0.0.1:10085` (`QueryStats` per `user>>>…>>>traffic>>>uplink/downlink` + `inbound>>>…`). Poll every 60 s. | Per user, per inbound. Accurate. |
 | WireGuard | `wg show wg0 transfer` (bytes per peer public key → map to client). Poll every 60 s. | Per peer. Accurate. |
 | sing-box inbounds | **No stats API.** Per-user dedicated port + nftables counter per port (`nft add rule … counter`), polled every 60 s. | Per user *only if* the user has a dedicated port for that protocol. Shared-port sing-box inbounds cannot be attributed per user — the UI must say "traffic: n/a (shared port)" rather than invent a number. |
-| IKEv2 | Via Ikev2-manager's own accounting (Phase 2 read-only import). | Per user (as Ikev2-manager reports it). |
+| IKEv2 | Not in Phase 1 (native support is Phase 2). | — |
 | Online status | Xray: a user with non-zero traffic delta in the last 60–120 s, or present in `QueryStats` with recent activity → "online". WireGuard: `latest handshake < 3 min ago`. sing-box: no live sessions API — show "last seen" from traffic deltas only, never fake "online". | Best-effort, labelled as such. |
 
 Enforcement runs in the sweeper (every 5 min): expired or over-quota
@@ -528,7 +525,9 @@ and their subscription returns 403. No live-connection killing in MVP
   it. Login rate-limit: 5 failed attempts → 15 min lockout for that IP.
   No "remember me" in MVP.
 - **Panel port:** TCP, randomised on a fresh install (free port in
-  10000–60000, like other panels), path `/`. Printed in the login box,
+  10000–60000, like other panels), plus a random secret web path (like
+  3X-UI's webBasePath): the panel only answers under `/<random-path>`
+  and the root returns 404. Printed in the login box,
   saved to `/root/vpn-panel-login.txt`, reprintable with `vpn-panel info`.
   Re-used on re-install; `--port` fixes it. The firewall opens only the
   panel port + the inbound ports in use.
@@ -540,9 +539,10 @@ and their subscription returns 403. No live-connection killing in MVP
     install, fingerprint printed in the login box) and Reality +
     WireGuard carry the VPN side, since neither needs a domain or cert.
     The browser will warn — the login box says so plainly, with the
-    fingerprint to check. No "Real SSL for a bare IP" magic in MVP
-    (vpn-ui advertises it; it depends on Let's Encrypt IP certs and is
-    a support burden for one person).
+    fingerprint to check. Since v8 the installer instead obtains a
+    free Let's Encrypt IP certificate automatically (shortlived,
+    ~6 days, via acme.sh — the same trick 3X-UI uses), so a bare-IP
+    install is trusted with no browser warning.
 - **Core APIs are loopback-only:** Xray API `127.0.0.1:10085`, sing-box
   has no API port at all, panel DB `0600`, rendered configs `0640`.
 - **Secrets:** Reality keys, SS passwords, WireGuard keys generated with
@@ -561,7 +561,7 @@ and their subscription returns 403. No live-connection killing in MVP
 
 ## 8. Install script (Ubuntu / Debian)
 
-One-liner, same shape as Ikev2-manager:
+One-liner install:
 
 ```bash
 curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh | sudo bash
@@ -580,10 +580,11 @@ curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh |
    in `/usr/local/bin/`.
 4. Python venv at `/opt/vpn-panel/venv`, `pip install -r requirements.txt`.
 5. Interactive prompts (with sane defaults, all skippable with flags
-   for unattended install): panel port `[random]`, domain `[none]`,
-   Reality SNI `[www.microsoft.com]`, admin password `[generated]`.
-   The random panel port is printed before proceeding (prompt, summary
-   and login box), and `--yes` accepts it.
+   for unattended install): panel port `[random]`, web path
+   `[random]`, domain `[none]`, Reality SNI `[www.microsoft.com]`,
+   admin password `[generated]`. The random panel port and web path
+   are printed before proceeding (prompt, summary and login box), and
+   `--yes` accepts them.
 6. Generate Reality keypair, WireGuard server keypair, admin password
    (if not supplied), per-user subscription salt. Write
    `/opt/vpn-panel/data/panel.db` (initialised by the app on first run).
@@ -593,14 +594,14 @@ curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh |
    cores; `systemctl enable --now xray sing-box vpn-panel`.
 8. If a domain was given: obtain the Let's Encrypt cert, then restart
    the panel once with TLS enabled.
-9. **Verify before finishing:** `curl -k https://127.0.0.1:<panel-port>/health`
+9. **Verify before finishing:** `curl -k https://127.0.0.1:<panel-port>/<web-path>/health`
    must return 200; `xray` and `sing-box` must be `active`. If any check
    fails, print the failing service's last 20 log lines and exit non-zero.
 10. **Print the login box** (and save it to `/root/vpn-panel-login.txt`):
 ```
 ============================================================
   vpn-panel installed ✓
-  Panel:    https://<IP>:<random-port>   (or https://<domain>:<same-port>)
+  Panel:    https://<IP>:<random-port>/<web-path>   (or https://<domain>:<same-port>/<web-path>)
   Username: admin
   Password: <generated-or-supplied>
   Subscriptions, QR codes and users are inside the panel.
@@ -630,7 +631,7 @@ first): `vpn-panel info | status | restart | update-cores | backup | restore`.
   QR codes + single links; token rotation.
 - Traffic: Xray gRPC + `wg show` + nftables-per-port for sing-box;
   dashboard totals + per-user used/remaining + expiry countdown.
-- IKEv2: status display + deep link to Ikev2-manager only (no rewrite).
+- IKEv2: protocol label only in Phase 1; native support in Phase 2.
 - Tests: config-render golden tests (render → `xray -test` /
   `sing-box check` on known inputs), link-builder tests (round-trip:
   build a link → parse it back), subscription tests (both formats parse
@@ -644,8 +645,8 @@ first): `vpn-panel info | status | restart | update-cores | backup | restore`.
 - Bulk operations (traffic/days/enable/delete) + Freeze.
 - Clash/Mihomo YAML subscription format.
 - Optional second admin (read-only role).
-- IKEv2 read-only import into the dashboard.
-- Telegram-bot hook (reuse the Ikev2-manager bot pattern) — only if James asks.
+- Native IKEv2 (strongSwan) support.
+- Telegram-bot hook — only if James asks.
 
 ### Phase 3 (only if asked)
 - Tor obfs4 bridge (separate daemon + bridge-line distribution).
@@ -718,7 +719,7 @@ vpn-panel/
    and the panel itself get real Let's Encrypt certs, or whether Phase 1
    ships Reality + WireGuard only (no domain needed) and TLS inbounds wait.
 2. **Server IP / host?** Needed for the default subscription host and the
-   Reality `dest`. Also: is Ikev2-manager running on the *same* server?
+   Reality `dest`. Also: is strongSwan/IKEv2 running on the *same* server?
    (If yes, Phase 1 must reserve UDP 500/4500 and avoid port clashes.)
 3. **Hysteria2 core:** prefer Xray (if pinned Xray ≥ 26.1 ships a native
    hysteria inbound) or sing-box? Affects which core owns UDP/443 and
@@ -736,8 +737,8 @@ vpn-panel/
    They are real daemons with their own PKI; putting them in Phase 1
    roughly doubles the installer's scope. Confirm Phase 2 is acceptable,
    or say which of the two matters more.
-7. **Public repo?** Ikev2-manager is public under SPARKY-CR. Should
-   vpn-panel be public from day one too, or private until Phase 1 works?
+7. **Public repo?** Should vpn-panel be public from day one, or
+   private until Phase 1 works?
    (Affects whether the install URL can be the public raw GitHub URL.)
 
 ---

@@ -48,7 +48,6 @@ shown to the admin instead of crashing the request):
   ``generate_keypair() -> (private_key, public_key)``
 - ``app.traffic``: ``sync_traffic(db, *, xray_stats=None, wg_text=None,
   nft_text=None, wg_pubkey_to_user_id=None, nft_port_to_user_id=None)``
-- ``app.ikev2``: ``get_ikev2_status() -> dict``
 
 Bootstrap secrets (installer contract): on first run
 ``ensure_defaults()`` prefers the environment variables the installer
@@ -101,15 +100,17 @@ NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 # ---------------------------------------------------------------------------
 # Optional / contract imports.
 # Core modules (db, models, config, auth) are required for the app to run;
-# service modules (links, subscription, renderers, traffic, ikev2) are
+# service modules (links, subscription, renderers, traffic) are
 # optional at import time: missing ones only disable the feature that
 # needs them, never the whole panel.
 # ---------------------------------------------------------------------------
 
 try:
     from app import config as panel_config
+    from app.config import normalize_web_path
 except ImportError:  # pragma: no cover - sibling module not written yet
     panel_config = None  # type: ignore[assignment]
+    normalize_web_path = None  # type: ignore[assignment]
     logger.warning("app.config not available yet; using built-in defaults")
 
 try:
@@ -197,18 +198,26 @@ except ImportError:
     traffic_mod = None
     logger.warning("app.traffic not available yet; traffic sync disabled")
 
-try:
-    from app import ikev2 as ikev2_mod
-except ImportError:
-    ikev2_mod = None
-    logger.warning("app.ikev2 not available yet; IKEv2 status unavailable")
-
-
 def _cfg_attr(name: str, default: Any) -> Any:
     """Read an attribute from app.config, falling back to ``default``."""
     if panel_config is not None:
         return getattr(panel_config, name, default)
     return default
+
+
+def _web_prefix() -> str:
+    """Secret panel web path: "" (panel at root) or "/<segment>"."""
+    raw = _cfg_attr("WEB_PATH", "") or ""
+    if normalize_web_path is None:
+        return ""
+    try:
+        return normalize_web_path(str(raw))
+    except ValueError:
+        logger.warning("invalid VPN_PANEL_WEB_PATH %r; panel served at root", raw)
+        return ""
+
+
+WEB_PATH = _web_prefix()
 
 
 PANEL_PORT = _cfg_attr("PANEL_PORT", 2053)
@@ -255,8 +264,6 @@ STRINGS: dict[str, dict[str, str]] = {
         "total_inbounds": "کل اینباندها",
         "traffic_used": "ترافیک مصرف‌شده",
         "online_now": "آنلاین (تقریبی)",
-        "ikev2_status": "وضعیت IKEv2",
-        "ikev2_note": "IKEv2 توسط Ikev2-manager مدیریت می‌شود، نه این پنل.",
         "recent_users": "کاربران اخیر",
         "name": "نام",
         "status": "وضعیت",
@@ -311,6 +318,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "rerender_failed": "خطا در بازسازی کانفیگ: ",
         "port_in_use": "این پورت قبلاً استفاده شده است.",
         "invalid_port": "پورت باید بین ۱ تا ۶۵۵۳۵ باشد.",
+        "port_reserved": "پورت‌های ۵۰۰ و ۴۵۰۰ برای IKEv2 رزرو شده‌اند و نمی‌توان آن‌ها را به اینباند داد.",
         "invalid_name": "نام فقط می‌تواند شامل حروف، عدد، - و _ باشد.",
         "name_exists": "کاربری با این نام از قبل وجود دارد.",
         "tag_exists": "اینباندی با این برچسب از قبل وجود دارد.",
@@ -318,7 +326,6 @@ STRINGS: dict[str, dict[str, str]] = {
         "sub_token": "توکن اشتراک",
         "created_at": "ساخته شده",
         "details": "جزئیات",
-        "open_ikev2_manager": "باز کردن Ikev2-manager",
         "footer_note": "پنل VPN — فاز ۱",
     },
     "en": {
@@ -340,8 +347,6 @@ STRINGS: dict[str, dict[str, str]] = {
         "total_inbounds": "Total inbounds",
         "traffic_used": "Traffic used",
         "online_now": "Online (approx.)",
-        "ikev2_status": "IKEv2 status",
-        "ikev2_note": "IKEv2 is managed by Ikev2-manager, not this panel.",
         "recent_users": "Recent users",
         "name": "Name",
         "status": "Status",
@@ -396,6 +401,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "rerender_failed": "Config re-render failed: ",
         "port_in_use": "This port is already in use.",
         "invalid_port": "Port must be between 1 and 65535.",
+        "port_reserved": "Ports 500 and 4500 are reserved for IKEv2 and cannot be assigned to an inbound.",
         "invalid_name": "Name may only contain letters, digits, - and _.",
         "name_exists": "A user with this name already exists.",
         "tag_exists": "An inbound with this tag already exists.",
@@ -403,7 +409,6 @@ STRINGS: dict[str, dict[str, str]] = {
         "sub_token": "Subscription token",
         "created_at": "Created",
         "details": "Details",
-        "open_ikev2_manager": "Open Ikev2-manager",
         "footer_note": "VPN Panel — Phase 1",
     },
 }
@@ -1119,6 +1124,7 @@ def _template_ctx(request: Request, extra: Optional[dict[str, Any]] = None) -> d
         "request": request,
         "lang": lang,
         "t": t_for(lang),
+        "base_path": WEB_PATH,
         "msg": request.query_params.get("msg", ""),
         "err": request.query_params.get("err", ""),
     }
@@ -1130,7 +1136,7 @@ def _template_ctx(request: Request, extra: Optional[dict[str, Any]] = None) -> d
 def _redirect(url: str, request: Request, msg: str = "", err: str = "") -> RedirectResponse:
     """303 redirect preserving ?lang= when English, plus ?msg=/?err=."""
     sep = "&" if "?" in url else "?"
-    target = url
+    target = WEB_PATH + url
     if get_lang(request) == "en":
         target += f"{sep}lang=en"
         sep = "&"
@@ -1157,7 +1163,7 @@ def _set_session_cookie(response: Response, request: Request, token: str) -> Non
         httponly=True,
         samesite="lax",
         secure=request.url.scheme == "https",
-        path="/",
+        path=WEB_PATH or "/",
     )
 
 
@@ -1392,12 +1398,6 @@ def dashboard(
         online = sum(1 for r in rows if (r.up_bytes or 0) + (r.down_bytes or 0) > 0)
     except Exception:  # noqa: BLE001
         online = 0
-    ikev2_status: dict[str, Any] = {}
-    if ikev2_mod is not None and hasattr(ikev2_mod, "get_ikev2_status"):
-        try:
-            ikev2_status = ikev2_mod.get_ikev2_status() or {}
-        except Exception:  # noqa: BLE001
-            ikev2_status = {"error": "unavailable"}
     return templates.TemplateResponse(request, "dashboard.html",
         _template_ctx(
             request,
@@ -1409,7 +1409,6 @@ def dashboard(
                 "total_inbounds": total_inbounds,
                 "traffic_used": traffic_used,
                 "online": online,
-                "ikev2_status": ikev2_status,
             },
         ),
     )
@@ -1496,7 +1495,7 @@ def user_detail(
         raise HTTPException(status_code=404, detail="user not found")
     settings = get_settings(db)
     host = _sub_host(request, settings)
-    base = str(request.base_url).rstrip("/")
+    base = str(request.base_url).rstrip("/") + WEB_PATH
     links = _links_for_user(db, user, host)
     clients = (
         db.query(Client)
@@ -1621,6 +1620,8 @@ def create_inbound(
         return _redirect("/inbounds", request, err=t["tag_exists"])
     if not 1 <= port <= 65535:
         return _redirect("/inbounds", request, err=t["invalid_port"])
+    if port in (500, 4500):
+        return _redirect("/inbounds", request, err=t["port_reserved"])
     stream: dict[str, Any] = {
         "network": network.strip() or "tcp",
         "transport": _stream_transport({"transport": network.strip()}, protocol),
@@ -1760,7 +1761,7 @@ def user_page(request: Request, token: str, db: Session = Depends(db_session)):
         )
     settings = get_settings(db)
     host = _sub_host(request, settings)
-    base = str(request.base_url).rstrip("/")
+    base = str(request.base_url).rstrip("/") + WEB_PATH
     usable = _user_usable(db, user)
     links = _links_for_user(db, user, host) if usable else []
     return templates.TemplateResponse(request, "user_detail.html",
@@ -2007,3 +2008,25 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("app.main:app", host="0.0.0.0", port=PANEL_PORT)
+
+
+# ---------------------------------------------------------------------------
+# Secret web path (v9): mount the panel under /<random-path>, like 3X-UI's
+# webBasePath. With a path set, the panel only answers under it — the root
+# (/login, /dashboard, /health, ...) returns 404. The root app carries
+# the same lifespan: a mounted sub-app's lifespan does NOT run (verified
+# with a stub app), so startup (init_db, admin seeding, background
+# loops) must live here, or the panel would boot with no admin user.
+# ---------------------------------------------------------------------------
+
+
+def _mount_web_path(panel_app: FastAPI, web_path: str) -> FastAPI:
+    """Return ``panel_app`` mounted under ``web_path`` ("" = root, unchanged)."""
+    if not web_path:
+        return panel_app
+    root = FastAPI(title="vpn-panel", lifespan=lifespan)
+    root.mount(web_path, panel_app)
+    return root
+
+
+app = _mount_web_path(app, WEB_PATH)

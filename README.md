@@ -126,9 +126,7 @@ ZedSecure already bundles; a server panel has nothing to run for them.
 ## Phase 1 limits (honest list)
 
 - OpenVPN / OpenConnect and AmneziaWG are Phase 2, not in the MVP.
-- IKEv2 is not reimplemented here — use
-  [Ikev2-manager](https://github.com/SPARKY-CR/Ikev2-manager-) alongside
-  the panel; the panel only shows its status and links to it.
+- IKEv2 is not in Phase 1 (native support is Phase 2).
 - sing-box has no per-user stats API: shared-port sing-box inbounds show
   "traffic: n/a" rather than an invented number.
 - No reseller / multi-admin / billing, no multi-node management.

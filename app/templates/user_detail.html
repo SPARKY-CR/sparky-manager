@@ -5,7 +5,7 @@
   <div class="card">
     <h1>{{ t.user_not_found }}</h1>
     {% if not public %}
-    <p><a class="btn" href="/users">{{ t.back_to_users }}</a></p>
+    <p><a class="btn" href="{{ base_path }}/users">{{ t.back_to_users }}</a></p>
     {% endif %}
   </div>
 {% else %}
@@ -20,16 +20,16 @@
   {% if not public %}
   <div class="card">
     <div class="row-actions">
-      <form method="post" action="/users/{{ user.id }}/toggle" class="inline-form">
+      <form method="post" action="{{ base_path }}/users/{{ user.id }}/toggle" class="inline-form">
         <button type="submit" class="btn">{{ t.toggle }}</button>
       </form>
-      <form method="post" action="/users/{{ user.id }}/rotate-token" class="inline-form">
+      <form method="post" action="{{ base_path }}/users/{{ user.id }}/rotate-token" class="inline-form">
         <button type="submit" class="btn">{{ t.rotate_token }}</button>
       </form>
-      <form method="post" action="/users/{{ user.id }}/delete" class="inline-form" data-confirm="{{ t.confirm_delete }}">
+      <form method="post" action="{{ base_path }}/users/{{ user.id }}/delete" class="inline-form" data-confirm="{{ t.confirm_delete }}">
         <button type="submit" class="btn btn-danger">{{ t.delete }}</button>
       </form>
-      <a class="btn btn-ghost" href="/users">{{ t.back_to_users }}</a>
+      <a class="btn btn-ghost" href="{{ base_path }}/users">{{ t.back_to_users }}</a>
     </div>
     <dl class="kv">
       <dt>{{ t.sub_token }}</dt><dd dir="ltr">{{ user.sub_token }}</dd>
@@ -63,7 +63,7 @@
           <code dir="ltr" class="link-box">{{ entry.link }}</code>
           <button type="button" class="btn btn-small" data-copy="{{ entry.link }}">{{ t.copy }}</button>
         </div>
-        <img class="qr" src="/sub/{{ user.sub_token }}/qr?link={{ entry.link | urlencode }}" alt="{{ t.qr_code }} — {{ entry.inbound.tag }}" loading="lazy">
+        <img class="qr" src="{{ base_path }}/sub/{{ user.sub_token }}/qr?link={{ entry.link | urlencode }}" alt="{{ t.qr_code }} — {{ entry.inbound.tag }}" loading="lazy">
       </div>
       {% endfor %}
     {% else %}

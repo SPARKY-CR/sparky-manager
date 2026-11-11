@@ -13,6 +13,7 @@ server IP". A domain is only ever an optional extra.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,6 +27,25 @@ DEFAULT_HOME = "/opt/vpn-panel"
 DEFAULT_PANEL_PORT = 2053
 DEFAULT_PANEL_HOST = "0.0.0.0"
 DEFAULT_REALITY_SNI = "www.microsoft.com"
+
+_WEB_PATH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+def normalize_web_path(raw: str) -> str:
+    """Normalize the secret panel web path: ``""`` (panel at root) or ``"/<segment>"``.
+
+    The installer randomises a 12-character ``[a-z0-9]`` segment on a
+    fresh install (like 3X-UI's webBasePath); the panel then only
+    answers under ``/<segment>`` and the root returns 404.
+    """
+    seg = (raw or "").strip().strip("/")
+    if not seg:
+        return ""
+    if not _WEB_PATH_RE.match(seg):
+        raise ValueError(
+            f"invalid web path: {raw!r} (use letters, digits, '-' or '_')"
+        )
+    return "/" + seg
 
 # Login-box file written by the installer (root-only, 0600).
 LOGIN_FILE = Path("/root/vpn-panel-login.txt")
@@ -41,6 +61,7 @@ class Settings:
     domain: str = ""
     subscription_host: str = ""
     reality_sni: str = DEFAULT_REALITY_SNI
+    web_path: str = ""
 
     # -- derived paths ------------------------------------------------------
     @property
@@ -89,6 +110,7 @@ def get_settings() -> Settings:
         reality_sni=os.environ.get(
             "VPN_PANEL_REALITY_SNI", DEFAULT_REALITY_SNI
         ),
+        web_path=normalize_web_path(os.environ.get("VPN_PANEL_WEB_PATH", "")),
     )
 
 
@@ -108,6 +130,7 @@ def get_settings_dict() -> dict:
         "domain": s.domain,
         "subscription_host": s.subscription_host,
         "reality_sni": s.reality_sni,
+        "web_path": s.web_path,
         "xray_config": str(s.xray_config),
         "singbox_config": str(s.singbox_config),
         "wg_config": str(s.wg_config),
@@ -147,6 +170,7 @@ XRAY_CONFIG = SETTINGS.xray_config
 SINGBOX_CONFIG = SETTINGS.singbox_config
 WG_CONFIG = SETTINGS.wg_config
 DEFAULT_REALITY_SNI = SETTINGS.reality_sni
+WEB_PATH = SETTINGS.web_path
 
 __all__ = [
     "DEFAULT_HOME",
@@ -155,6 +179,8 @@ __all__ = [
     "DEFAULT_REALITY_SNI",
     "LOGIN_FILE",
     "Settings",
+    "normalize_web_path",
+    "WEB_PATH",
     "get_settings",
     "get_settings_dict",
     "read_versions",

@@ -4,7 +4,7 @@
 <h1>{{ t.settings }}</h1>
 
 <div class="card card-narrow">
-  <form method="post" action="/settings">
+  <form method="post" action="{{ base_path }}/settings">
     <label>
       {{ t.domain }}
       <input type="text" name="domain" value="{{ settings.get('domain', '') }}" dir="ltr">

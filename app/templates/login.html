@@ -4,7 +4,7 @@
 <div class="card card-narrow">
   <h1>{{ t.sign_in }}</h1>
   <p class="muted">{{ t.login_hint }}</p>
-  <form method="post" action="/login">
+  <form method="post" action="{{ base_path }}/login">
     <label>
       {{ t.username }}
       <input type="text" name="username" autocomplete="username" required autofocus>

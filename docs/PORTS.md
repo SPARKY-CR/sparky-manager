@@ -34,7 +34,7 @@ inbounds become available as an option.
 
 ## Ports the panel does NOT use
 
-IKEv2 uses UDP 500/4500 — those belong to Ikev2-manager when it runs
+IKEv2 uses UDP 500/4500 — those belong to strongSwan/IKEv2 when it runs
 on the same server, and the panel reserves them by simply never using
-them. Xray's stats API listens only on loopback (`127.0.0.1:10085`)
+them (the inbound form rejects them). Xray's stats API listens only on loopback (`127.0.0.1:10085`)
 and is never public.

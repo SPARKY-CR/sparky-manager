@@ -5,7 +5,7 @@
 
 <div class="card">
   <h2>{{ t.add_user }}</h2>
-  <form method="post" action="/users" class="form-inline">
+  <form method="post" action="{{ base_path }}/users" class="form-inline">
     <label>
       {{ t.name }}
       <input type="text" name="name" pattern="[a-zA-Z0-9_-]+" required>
@@ -38,17 +38,17 @@
     <tbody>
       {% for u in users %}
       <tr>
-        <td><a href="/users/{{ u.id }}">{{ u.name }}</a></td>
+        <td><a href="{{ base_path }}/users/{{ u.id }}">{{ u.name }}</a></td>
         <td>{{ t.enabled if u.enabled else t.disabled }}</td>
         <td>{{ (u.traffic_used_bytes / 1073741824) | round(2) }} GB</td>
         <td>{{ ((u.traffic_limit_bytes / 1073741824) | round(2)) ~ ' GB' if u.traffic_limit_bytes else t.unlimited }}</td>
         <td>{{ u.expires_at.strftime('%Y-%m-%d') if u.expires_at else t.never }}</td>
         <td class="row-actions">
-          <a class="btn btn-small" href="/users/{{ u.id }}">{{ t.details }}</a>
-          <form method="post" action="/users/{{ u.id }}/toggle" class="inline-form">
+          <a class="btn btn-small" href="{{ base_path }}/users/{{ u.id }}">{{ t.details }}</a>
+          <form method="post" action="{{ base_path }}/users/{{ u.id }}/toggle" class="inline-form">
             <button type="submit" class="btn btn-small">{{ t.toggle }}</button>
           </form>
-          <form method="post" action="/users/{{ u.id }}/delete" class="inline-form" data-confirm="{{ t.confirm_delete }}">
+          <form method="post" action="{{ base_path }}/users/{{ u.id }}/delete" class="inline-form" data-confirm="{{ t.confirm_delete }}">
             <button type="submit" class="btn btn-small btn-danger">{{ t.delete }}</button>
           </form>
         </td>

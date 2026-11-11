@@ -14,7 +14,7 @@
 # requirement at install time.
 #
 # Usage:
-#   sudo bash install.sh [--yes] [--port PORT] [--domain example.com]
+#   sudo bash install.sh [--yes] [--port PORT] [--web-path PATH] [--domain example.com]
 #                        [--reality-sni www.microsoft.com]
 #                        [--admin-password 'secret']
 #   curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh | sudo bash
@@ -36,6 +36,7 @@ set -euo pipefail
 REPO_URL="https://github.com/SPARKY-CR/Zed-panel.git"
 PANEL_PORT=""        # empty = not given; resolved below (random on fresh install)
 PORT_GIVEN=0         # 1 when --port is passed
+WEB_PATH_GIVEN=0      # 1 when --web-path is passed
 DOMAIN=""
 REALITY_SNI="www.microsoft.com"
 ADMIN_PASSWORD=""
@@ -67,6 +68,10 @@ Options:
   --port PORT               Panel port (default: random free port
                             10000-60000 on a fresh install; the
                             previous port is reused on re-install).
+  --web-path PATH           Secret web path (default: random 12-char
+                            path on a fresh install; the previous path
+                            is reused on re-install; the panel only
+                            answers under /<path>).
   --domain DOMAIN           Domain for the panel (default: none — bare IP,
                             self-signed panel certificate).
   --reality-sni SNI         SNI for VLESS+Reality (default: www.microsoft.com).
@@ -139,6 +144,13 @@ pick_random_port() {
     die "Could not find a free panel port after 50 tries."
 }
 
+# pick_random_web_path — a random 12-char [a-z0-9] segment for the
+# secret panel web path (like 3X-UI's webBasePath). The panel only
+# answers under /<path>; without it the root returns 404.
+pick_random_web_path() {
+    tr -dc 'a-z0-9' < /dev/urandom | head -c 12
+}
+
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
@@ -149,6 +161,8 @@ while [ $# -gt 0 ]; do
         --help|-h)          usage; exit 0 ;;
         --port)             PANEL_PORT="$2"; PORT_GIVEN=1; shift 2 ;;
         --port=*)           PANEL_PORT="${1#--port=}"; PORT_GIVEN=1; shift ;;
+        --web-path)         WEB_PATH="$2"; WEB_PATH_GIVEN=1; shift 2 ;;
+        --web-path=*)       WEB_PATH="${1#--web-path=}"; WEB_PATH_GIVEN=1; shift ;;
         --domain)           DOMAIN="$2"; shift 2 ;;
         --domain=*)         DOMAIN="${1#--domain=}"; shift ;;
         --reality-sni)      REALITY_SNI="$2"; shift 2 ;;
@@ -265,10 +279,35 @@ if [ "$PORT_GIVEN" -eq 0 ]; then
     fi
 fi
 
+# Web path: random on a fresh install (like 3X-UI's webBasePath),
+# re-used from panel.env on a re-install, --web-path always wins.
+if [ "$WEB_PATH_GIVEN" -eq 0 ]; then
+    if [ -f /opt/vpn-panel/data/panel.env ]; then
+        _saved_path="$(grep -E '^VPN_PANEL_WEB_PATH=' /opt/vpn-panel/data/panel.env | tail -n 1 | cut -d= -f2 | tr -d "'" || true)"
+        if [ -n "$_saved_path" ]; then
+            WEB_PATH="$_saved_path"
+        fi
+    fi
+    if [ -z "$WEB_PATH" ]; then
+        WEB_PATH="$(pick_random_web_path)"
+        info "Fresh install: random panel web path /${WEB_PATH} (override with --web-path, or type another at the prompt)."
+    else
+        info "Reusing existing panel web path /${WEB_PATH} from a previous install."
+    fi
+fi
+
 # ---------------------------------------------------------------------------
 # Interactive prompts (all skippable with --yes / flags)
 # ---------------------------------------------------------------------------
 ask PANEL_PORT "Panel port" "$PANEL_PORT"
+ask WEB_PATH "Web path" "$WEB_PATH"
+
+# The web path is part of the URL: strip any slashes/spaces the user
+# typed and reject anything outside [A-Za-z0-9_-].
+WEB_PATH="$(printf '%s' "$WEB_PATH" | tr -d ' /')"
+case "$WEB_PATH" in
+    *[!A-Za-z0-9_-]*) die "Invalid web path: $WEB_PATH (use letters, digits, '-' or '_')" ;;
+esac
 ask DOMAIN "Domain (empty = no domain, bare IP)" "$DOMAIN"
 ask REALITY_SNI "Reality SNI" "$REALITY_SNI"
 ask_secret ADMIN_PASSWORD "Admin password"
@@ -320,6 +359,7 @@ SUBSCRIPTION_HOST="${DOMAIN:-$SERVER_IP}"
 
 info "Install summary:"
 info "  Panel port:    ${PANEL_PORT}"
+info "  Web path:    /${WEB_PATH}"
 info "  Domain:        ${DOMAIN:-<none — bare IP, self-signed panel certificate>}"
 info "  Server IP:     ${SERVER_IP}"
 info "  Reality SNI:   ${REALITY_SNI}"
@@ -594,6 +634,7 @@ chown root:vpn-panel "$INSTALL_ENV"
 {
     printf 'VPN_PANEL_HOME=%s\n' "$(sq "/opt/vpn-panel")"
     printf 'VPN_PANEL_PORT=%s\n' "$(sq "$PANEL_PORT")"
+    printf 'VPN_PANEL_WEB_PATH=%s\n' "$(sq "$WEB_PATH")"
     printf 'VPN_PANEL_HOST=%s\n' "$(sq "0.0.0.0")"
     printf 'VPN_PANEL_DOMAIN=%s\n' "$(sq "$DOMAIN")"
     printf 'VPN_PANEL_SUBSCRIPTION_HOST=%s\n' "$(sq "$SUBSCRIPTION_HOST")"
@@ -1061,7 +1102,7 @@ fi
 PANEL_OK=0
 for _ in $(seq 1 30); do
     code="$(curl -ks -o /dev/null -w '%{http_code}' \
-        "https://127.0.0.1:${PANEL_PORT}/health" 2>/dev/null || true)"
+        "https://127.0.0.1:${PANEL_PORT}/${WEB_PATH}/health" 2>/dev/null || true)"
     if [ "$code" = "200" ]; then
         PANEL_OK=1
         break
@@ -1070,7 +1111,7 @@ for _ in $(seq 1 30); do
 done
 
 FAILED=""
-[ "$PANEL_OK" -eq 1 ] || FAILED="vpn-panel (health check https://127.0.0.1:${PANEL_PORT}/health did not return 200)"
+[ "$PANEL_OK" -eq 1 ] || FAILED="vpn-panel (health check https://127.0.0.1:${PANEL_PORT}/${WEB_PATH}/health did not return 200)"
 systemctl is-active --quiet xray || FAILED="${FAILED} xray"
 systemctl is-active --quiet sing-box || FAILED="${FAILED} sing-box"
 
@@ -1088,12 +1129,12 @@ if [ -n "$FAILED" ]; then
     fi
     die "Install verification failed. Fix the errors above and re-run the installer (it is idempotent)."
 fi
-info "Verification passed: panel answers 200 on /health, xray and sing-box are active."
+info "Verification passed: panel answers 200 on /${WEB_PATH}/health, xray and sing-box are active."
 
 # ---------------------------------------------------------------------------
 # Login box — printed and saved to /root/vpn-panel-login.txt (0600).
 # ---------------------------------------------------------------------------
-PANEL_URL="https://${SUBSCRIPTION_HOST}:${PANEL_PORT}"
+PANEL_URL="https://${SUBSCRIPTION_HOST}:${PANEL_PORT}/${WEB_PATH}"
 umask 077
 {
     echo "============================================================"
