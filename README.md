@@ -44,7 +44,7 @@ code from 3X-UI, vpn-ui, Marzban, or any other panel.
 
 ## Install
 
-Ubuntu 22.04/24.04 or Debian 12/13 only, as root:
+Ubuntu 22.04/24.04/26.04 or Debian 12/13 only, as root:
 
 ```bash
 curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh | sudo bash

@@ -2,7 +2,7 @@
 # vpn-panel installer — original work, written from scratch for this project.
 #
 # Installs vpn-panel (FastAPI panel + stock Xray-core + stock sing-box +
-# native WireGuard) on Ubuntu 22.04/24.04 or Debian 12/13.
+# native WireGuard) on Ubuntu 22.04/24.04/26.04 or Debian 12/13.
 #
 # Domain-agnostic: works with a bare server IP and NO domain. The default
 # first pair is VLESS+Reality (TCP 443) + Hysteria2 (UDP 443) + WireGuard
@@ -220,11 +220,11 @@ else
 fi
 
 case "${ID:-unknown}-${VERSION_ID:-unknown}" in
-    ubuntu-22.04|ubuntu-24.04|debian-12|debian-13)
+    ubuntu-22.04|ubuntu-24.04|ubuntu-26.04|debian-12|debian-13)
         info "Detected supported OS: ${ID} ${VERSION_ID}"
         ;;
     *)
-        die "Unsupported OS: ${ID:-unknown} ${VERSION_ID:-unknown}. Only Ubuntu 22.04/24.04 and Debian 12/13 are supported."
+        die "Unsupported OS: ${ID:-unknown} ${VERSION_ID:-unknown}. Only Ubuntu 22.04/24.04/26.04 and Debian 12/13 are supported."
         ;;
 esac
 

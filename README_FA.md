@@ -41,7 +41,7 @@ WireGuard** با یک رابط وب فارسی. برای کلاینت
 
 ## نصب
 
-فقط Ubuntu 22.04/24.04 یا Debian 12/13، با دسترسی root:
+فقط Ubuntu 22.04/24.04/26.04 یا Debian 12/13، با دسترسی root:
 
 ```bash
 curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh | sudo bash

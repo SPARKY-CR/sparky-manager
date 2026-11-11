@@ -569,7 +569,7 @@ curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh |
 ```
 
 `install.sh` outline (idempotent — safe to re-run):
-1. Refuse non-root; detect OS (`Ubuntu 22.04/24.04`, `Debian 12/13` only;
+1. Refuse non-root; detect OS (`Ubuntu 22.04/24.04/26.04`, `Debian 12/13` only;
    anything else → clear error, not a half-install).
 2. `apt-get update`; install `curl, ca-certificates, qrencode?, python3.11+,
    python3-venv, wireguard, nftables, iproute2, ufw?` (no — use nftables
