@@ -782,7 +782,7 @@ def write_and_validate(
 ) -> tuple[bool, list[str]]:
     """Write ``cfg`` to ``path`` after validation, atomically.
 
-    Writes ``path + ".tmp"``, runs ``sing-box check -c <tmp>`` when
+    Writes ``path + ".tmp.json"``, runs ``sing-box check -c <tmp>`` when
     the binary exists (10 s timeout), and atomically renames the temp
     file into place only on success — a rejected config never
     replaces the live one. When the binary is absent only the JSON
@@ -792,7 +792,7 @@ def write_and_validate(
     those come back as ``(False, errors)``.
     """
     target = Path(path)
-    tmp = Path(str(target) + ".tmp")
+    tmp = Path(str(target) + ".tmp.json")
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_text(

@@ -641,7 +641,11 @@ if [ ! -f /opt/vpn-panel/certs/fullchain.pem ] || [ ! -f /opt/vpn-panel/certs/pr
         -out /opt/vpn-panel/certs/fullchain.pem \
         -days 365 -subj "/CN=${CERT_CN}" \
         -addext "subjectAltName=${SAN}" 2>/dev/null
-    chmod 0600 /opt/vpn-panel/certs/privkey.pem
+    # 0640, not 0600: the panel runs as user vpn-panel (see the
+    # systemd unit), so the key must be group-readable or uvicorn
+    # dies with PermissionError in load_cert_chain. Still private:
+    # only root and the vpn-panel group can read it.
+    chmod 0640 /opt/vpn-panel/certs/privkey.pem
     chmod 0644 /opt/vpn-panel/certs/fullchain.pem
     chown root:vpn-panel /opt/vpn-panel/certs/privkey.pem /opt/vpn-panel/certs/fullchain.pem
 else
