@@ -19,10 +19,11 @@ code from 3X-UI, vpn-ui, Marzban, or any other panel.
 
 ## What it does
 
-- **Fixed, predictable login:** panel on port **2053**, path `/`,
-  username `admin`. No randomised port, password, or web path. The
-  installer prints one big login box and saves it to
-  `/root/vpn-panel-login.txt`; `sudo vpn-panel info` reprints it.
+- **Login like other panels:** a fresh install picks a **random panel
+  port** (10000–60000) and a random admin password. The installer
+  prints one big login box with the full URL, username and password,
+  and saves it to `/root/vpn-panel-login.txt`;
+  `sudo vpn-panel info` reprints it. Fix the port with `--port`.
 - **No domain needed.** It works with a bare server IP. The default
   first pair — **VLESS + Reality (TCP 443)** and **Hysteria2 (UDP 443)**,
   plus **WireGuard (UDP 51820)** — needs no domain and no certificate.
@@ -56,7 +57,7 @@ curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh |
 Unattended install with explicit options:
 
 ```bash
-curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh | sudo bash -s -- --yes --port 2053 --reality-sni www.microsoft.com
+curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh | sudo bash -s -- --yes --reality-sni www.microsoft.com
 ```
 
 The installer is idempotent (safe to re-run) and verifies itself before
@@ -68,8 +69,8 @@ publishes a digest.
 
 ## Login
 
-Open `https://<your-server-IP>:2053`, username `admin`, password from
-the login box. If you use a domain, `https://<domain>:2053`.
+Open the URL from the login box (`https://<your-server-IP>:<port>`), username `admin`, password from
+the login box. If you use a domain, `https://<domain>:<port>`.
 
 ```bash
 sudo vpn-panel info      # reprint the login box

@@ -54,7 +54,7 @@ curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh |
 نصب بدون پرسش، با گزینه‌های مشخص:
 
 ```bash
-curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh | sudo bash -s -- --yes --port 2053 --reality-sni www.microsoft.com
+curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh | sudo bash -s -- --yes --reality-sni www.microsoft.com
 ```
 
 نصب‌کننده قابل تکرار است (اجرای دوباره بی‌خطر است) و پیش از پایان،
@@ -66,8 +66,8 @@ curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh |
 
 ## ورود
 
-`https://<IP-سرور>:2053` را باز کنید، نام کاربری `admin` و رمز عبور
-از جعبهٔ ورود. اگر دامنه دارید: `https://<domain>:2053`.
+`https://<IP-سرور>:<پورت>` را از جعبهٔ ورود باز کنید؛ نام کاربری `admin` و رمز عبور
+هم در همان جعبه است. اگر دامنه دارید: `https://<domain>:<پورت>`.
 
 ```bash
 sudo vpn-panel info      # چاپ دوبارهٔ جعبهٔ ورود

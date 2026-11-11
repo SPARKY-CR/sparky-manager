@@ -7,7 +7,8 @@ a small JSON API, and the public per-user subscription endpoints
 (``/sub/<token>`` dual format, ``/u/<token>`` human page).
 
 Domain-agnostic: works with a bare server IP; the domain setting is
-optional and empty means "no domain". Panel listens on fixed port 2053,
+optional and empty means "no domain". Panel listens on the
+installer-chosen port (random on a fresh install, default 2053),
 path ``/``, admin username ``admin``.
 
 Contract assumptions (sibling modules are owned by other agents; if a
@@ -25,7 +26,7 @@ shown to the admin instead of crashing the request):
 - ``app.auth``: ``hash_password, verify_password, create_session(db,
   admin, ip) -> token, get_admin_from_token(db, token),
   invalidate_session, record_failed_login(ip), is_locked_out(ip)``
-- ``app.config``: ``PANEL_PORT=2053, DATA_DIR, DB_PATH, XRAY_CONFIG,
+- ``app.config``: ``PANEL_PORT`` (default 2053), ``DATA_DIR``, ``DB_PATH``, ``XRAY_CONFIG``,
   SINGBOX_CONFIG, WG_CONFIG``, ``get_settings_dict()`` (env defaults;
   the DB ``Setting`` table overlays it — see ``get_settings()``)
 - ``app.links``: ``build_share_link(protocol, client_dict, inbound_dict,
@@ -888,7 +889,7 @@ def ensure_defaults(db: Session) -> Optional[str]:
             # operator can log in. Never printed again afterwards.
             print("=" * 60, flush=True)
             print("  vpn-panel — first run: admin account created", flush=True)
-            print("  Panel:    http://<server-ip>:2053  (or https if TLS is set up)", flush=True)
+            print(f"  Panel:    http://<server-ip>:{PANEL_PORT}  (or https if TLS is set up)", flush=True)
             print("  Username: admin", flush=True)
             print(f"  Password: {generated_password}", flush=True)
             print("  Save this password — it is printed ONLY this once.", flush=True)

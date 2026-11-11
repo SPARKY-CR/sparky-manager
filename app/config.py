@@ -21,6 +21,8 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 DEFAULT_HOME = "/opt/vpn-panel"
+# Dev/run fallback only: the installer randomises the port on a fresh
+# install (10000-60000) and passes it via VPN_PANEL_PORT / --port.
 DEFAULT_PANEL_PORT = 2053
 DEFAULT_PANEL_HOST = "0.0.0.0"
 DEFAULT_REALITY_SNI = "www.microsoft.com"

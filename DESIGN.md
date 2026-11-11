@@ -64,7 +64,7 @@ Exact pain points were never spelled out, so this design fixes the
 
 | Pain point (vpn-ui / 3X-UI) | Fix in vpn-panel |
 |---|---|
-| Fresh install **randomises port, username, password and web path**; login info is hidden behind `/opt/vpn-ui/vpn-ui-amd64 info` (menu option 8) | **Fixed, predictable defaults** (see §7): panel on port `2053`, path `/`, username `admin`. Installer prints one big, unmissable login box at the end, saves it to `/root/vpn-panel-login.txt`, and `vpn-panel info` reprints it. Password is generated once, never re-randomised on restart. |
+| Fresh install **randomises port, username, password and web path**; login info is hidden behind `/opt/vpn-ui/vpn-ui-amd64 info` (menu option 8) | **Like other panels** (see §7): fresh install randomises the panel port (10000–60000) and the admin password; path `/`, username `admin`. Installer prints one big, unmissable login box at the end (full URL + user + password), saves it to `/root/vpn-panel-login.txt`, and `vpn-panel info` reprints it. Port and password are re-used on re-install, never re-randomised. |
 | Cluttered English UI; 3X-UI has 14 languages but no Persian-first design, and vpn-ui adds ~15 protocols, resellers, multi-admin, bulk ops — a huge surface for one person | **Persian-first RTL UI**, English as secondary toggle. One screen per job: Dashboard → Inbounds → Users → Subscriptions. No reseller/multi-admin in MVP. |
 | Heavy setup: vpn-ui is a Go monolith bundling patched Xray-core, RADIUS, procmgr, a dozen daemons (xl2tpd, strongSwan, pptpd, OpenVPN, ocserv, accel-ppp, telemt…), kernel-module builds (AmneziaWG DKMS fails on kernel ≥ 7.1 and on RHEL kernels) | **Two stock cores + Python backend, no patched core, no kernel builds in Phase 1.** Xray-core and sing-box are downloaded as official upstream binaries. AmneziaWG (needs a kernel module) is Phase 2, explicitly gated. |
 | Go + Vue build: editing the UI means a Node build step | **No Node/Vue build step.** Server-rendered pages (Jinja2) + one hand-written CSS file + a little vanilla JS. James can edit a template with copy-paste in Termux, like his Ikev2-manager. |
@@ -118,7 +118,7 @@ Exact pain points were never spelled out, so this design fixes the
                     │  Browser / ZedSecure (phone, desktop)     │
                     │  fa-RTL UI · /sub/<token> · QR · links     │
                     └──────────────┬──────────────────────────────┘
-                                   │ HTTPS :2053 (panel) / :2054 (sub, optional)
+                                   │ HTTPS :<random> (panel) / :2054 (sub, optional)
                                    ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │  vpn-panel  (FastAPI + Uvicorn, systemd: vpn-panel.service)          │
@@ -156,7 +156,7 @@ sing-box on UDP/443).
 
 | Service | Port | Notes |
 |---|---|---|
-| Panel UI/API | TCP 2053 (fixed) | TLS if domain given, else self-signed (§7) |
+| Panel UI/API | TCP <random 10000–60000> | Randomised on fresh install, re-used on re-install; TLS if domain given, else self-signed (§7) |
 | VLESS + Reality | TCP 443 | No cert needed; `sni` = real site, e.g. `www.microsoft.com` |
 | VLESS/Trojan + TLS (WS/XHTTP) | TCP 8443 | Needs domain + cert, or Reality instead |
 | VMess + WS + TLS | TCP 8443 (shared path) | Distinct `path` per inbound |
@@ -167,7 +167,7 @@ sing-box on UDP/443).
 | Naive | TCP 8445 | sing-box, TLS mandatory |
 | ShadowTLS v3 + SS2022 | TCP 8446 | Inner SS on 127.0.0.1 only, `strict_mode` |
 | WireGuard | UDP 51820 | Native `wg0` |
-| Subscription endpoint | Same 2053, `/sub/<token>` | Separate port only if James wants it unlisted |
+| Subscription endpoint | Same panel port, `/sub/<token>` | Separate port only if James wants it unlisted |
 
 Reality (TCP 443) + Hysteria2 (UDP 443) sharing port 443 is the
 recommended first pair: no domain, no certificate, maximum compatibility.
@@ -527,8 +527,11 @@ and their subscription returns 403. No live-connection killing in MVP
   cookie, 12 h expiry, server-side session record so logout invalidates
   it. Login rate-limit: 5 failed attempts → 15 min lockout for that IP.
   No "remember me" in MVP.
-- **Panel port:** fixed TCP **2053**, path `/`. Not randomised, not
-  hidden. The firewall opens only 2053 + the inbound ports in use.
+- **Panel port:** TCP, randomised on a fresh install (free port in
+  10000–60000, like other panels), path `/`. Printed in the login box,
+  saved to `/root/vpn-panel-login.txt`, reprintable with `vpn-panel info`.
+  Re-used on re-install; `--port` fixes it. The firewall opens only the
+  panel port + the inbound ports in use.
 - **Panel TLS:** installer asks for a domain (optional).
   - *Domain given:* `certbot` / `acme.sh` (Let's Encrypt) obtains a cert
     for the panel + the TLS inbounds; auto-renew via systemd timer;
@@ -577,10 +580,10 @@ curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh |
    in `/usr/local/bin/`.
 4. Python venv at `/opt/vpn-panel/venv`, `pip install -r requirements.txt`.
 5. Interactive prompts (with sane defaults, all skippable with flags
-   for unattended install): panel port `[2053]`, domain `[none]`,
+   for unattended install): panel port `[random]`, domain `[none]`,
    Reality SNI `[www.microsoft.com]`, admin password `[generated]`.
-   **Nothing is randomised silently** — every default is printed before
-   proceeding, and `--yes` accepts them.
+   The random panel port is printed before proceeding (prompt, summary
+   and login box), and `--yes` accepts it.
 6. Generate Reality keypair, WireGuard server keypair, admin password
    (if not supplied), per-user subscription salt. Write
    `/opt/vpn-panel/data/panel.db` (initialised by the app on first run).
@@ -590,14 +593,14 @@ curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh |
    cores; `systemctl enable --now xray sing-box vpn-panel`.
 8. If a domain was given: obtain the Let's Encrypt cert, then restart
    the panel once with TLS enabled.
-9. **Verify before finishing:** `curl -k https://127.0.0.1:2053/health`
+9. **Verify before finishing:** `curl -k https://127.0.0.1:<panel-port>/health`
    must return 200; `xray` and `sing-box` must be `active`. If any check
    fails, print the failing service's last 20 log lines and exit non-zero.
 10. **Print the login box** (and save it to `/root/vpn-panel-login.txt`):
 ```
 ============================================================
   vpn-panel installed ✓
-  Panel:    https://<IP>:2053   (or https://<domain>:2053)
+  Panel:    https://<IP>:<random-port>   (or https://<domain>:<same-port>)
   Username: admin
   Password: <generated-or-supplied>
   Subscriptions, QR codes and users are inside the panel.

@@ -5,7 +5,7 @@ this is the plan the installer ships with.
 
 | Service | Port | Notes |
 |---|---|---|
-| Panel UI / API | TCP 2053 (fixed) | TLS if a domain is given, else self-signed (§7 of DESIGN.md) |
+| Panel UI / API | TCP <random 10000–60000> | Randomised on fresh install; see the login box or `sudo vpn-panel info`. TLS if a domain is given, else self-signed (§7 of DESIGN.md) |
 | VLESS + Reality | TCP 443 | No certificate needed; `sni` is a real site, e.g. `www.microsoft.com` |
 | VLESS / Trojan + TLS (WS / XHTTP) | TCP 8443 | Needs a domain + certificate, or use Reality instead |
 | VMess + WS + TLS | TCP 8443 (shared path) | Distinct `path` per inbound |
@@ -16,7 +16,7 @@ this is the plan the installer ships with.
 | Naive | TCP 8445 | sing-box; TLS mandatory |
 | ShadowTLS v3 + SS2022 | TCP 8446 | Inner Shadowsocks on 127.0.0.1 only, `strict_mode` |
 | WireGuard | UDP 51820 | Native `wg0` |
-| Subscription endpoint | Same 2053, `/sub/<token>` | Separate port only if the admin wants it unlisted |
+| Subscription endpoint | Same panel port, `/sub/<token>` | Separate port only if the admin wants it unlisted |
 
 ## No domain? What is omitted
 

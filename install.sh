@@ -14,7 +14,7 @@
 # requirement at install time.
 #
 # Usage:
-#   sudo bash install.sh [--yes] [--port 2053] [--domain example.com]
+#   sudo bash install.sh [--yes] [--port PORT] [--domain example.com]
 #                        [--reality-sni www.microsoft.com]
 #                        [--admin-password 'secret']
 #   curl -Ls https://raw.githubusercontent.com/SPARKY-CR/Zed-panel/main/install.sh | sudo bash
@@ -24,8 +24,9 @@
 # GitHub repo. Idempotent: safe to re-run; existing keys and the admin
 # password are reused instead of regenerated.
 #
-# Nothing is randomised silently: every default is printed before the
-# install proceeds, and --yes accepts all of them.
+# The panel port is randomised on a fresh install (like other panels),
+# re-used on re-install, and always printed before the install proceeds
+# (prompt, summary and login box); --yes accepts it, --port fixes it.
 
 set -euo pipefail
 
@@ -33,7 +34,8 @@ set -euo pipefail
 # Defaults (all printed before proceeding; overridable with flags)
 # ---------------------------------------------------------------------------
 REPO_URL="https://github.com/SPARKY-CR/Zed-panel.git"
-PANEL_PORT="2053"
+PANEL_PORT=""        # empty = not given; resolved below (random on fresh install)
+PORT_GIVEN=0         # 1 when --port is passed
 DOMAIN=""
 REALITY_SNI="www.microsoft.com"
 ADMIN_PASSWORD=""
@@ -62,7 +64,9 @@ Usage: install.sh [OPTIONS]
 
 Options:
   --yes                     Accept all defaults, ask nothing.
-  --port PORT               Panel port (default: 2053).
+  --port PORT               Panel port (default: random free port
+                            10000-60000 on a fresh install; the
+                            previous port is reused on re-install).
   --domain DOMAIN           Domain for the panel (default: none — bare IP,
                             self-signed panel certificate).
   --reality-sni SNI         SNI for VLESS+Reality (default: www.microsoft.com).
@@ -113,6 +117,28 @@ ask_secret() {
     fi
 }
 
+# pick_random_port — choose a free TCP port in 10000-60000 for the panel
+# (like other panels: randomised on a FRESH install, printed in the login
+# box and saved to panel.env; a re-install reuses the existing port).
+# Probes with a bash /dev/tcp connect: refused = free, connected = busy.
+pick_random_port() {
+    local port tries=0
+    while [ "$tries" -lt 50 ]; do
+        tries=$((tries + 1))
+        if command -v shuf >/dev/null 2>&1; then
+            port="$(shuf -i 10000-60000 -n 1)"
+        else
+            port=$((10000 + RANDOM % 50001))
+        fi
+        if (exec 3<>/dev/tcp/127.0.0.1/"$port") 2>/dev/null; then
+            continue
+        fi
+        printf '%s' "$port"
+        return 0
+    done
+    die "Could not find a free panel port after 50 tries."
+}
+
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
@@ -121,8 +147,8 @@ while [ $# -gt 0 ]; do
         --yes|-y)           YES=1; shift ;;
         --uninstall)        UNINSTALL=1; shift ;;
         --help|-h)          usage; exit 0 ;;
-        --port)             PANEL_PORT="$2"; shift 2 ;;
-        --port=*)           PANEL_PORT="${1#--port=}"; shift ;;
+        --port)             PANEL_PORT="$2"; PORT_GIVEN=1; shift 2 ;;
+        --port=*)           PANEL_PORT="${1#--port=}"; PORT_GIVEN=1; shift ;;
         --domain)           DOMAIN="$2"; shift 2 ;;
         --domain=*)         DOMAIN="${1#--domain=}"; shift ;;
         --reality-sni)      REALITY_SNI="$2"; shift 2 ;;
@@ -221,6 +247,24 @@ for cmd in curl python3 openssl tar; do
     command -v "$cmd" >/dev/null 2>&1 || die "Required tool missing: $cmd"
 done
 
+# Panel port: randomised on a fresh install (like other panels), re-used
+# from panel.env on a re-install, --port always wins. The chosen port is
+# printed in the prompt below, in the summary and in the login box.
+if [ "$PORT_GIVEN" -eq 0 ]; then
+    if [ -f /opt/vpn-panel/data/panel.env ]; then
+        _saved_port="$(grep -E '^VPN_PANEL_PORT=' /opt/vpn-panel/data/panel.env | tail -n 1 | cut -d= -f2 | tr -d "'" || true)"
+        if [ -n "$_saved_port" ]; then
+            PANEL_PORT="$_saved_port"
+        fi
+    fi
+    if [ -z "$PANEL_PORT" ]; then
+        PANEL_PORT="$(pick_random_port)"
+        info "Fresh install: random panel port ${PANEL_PORT} (override with --port, or type another at the prompt)."
+    else
+        info "Reusing existing panel port ${PANEL_PORT} from a previous install."
+    fi
+fi
+
 # ---------------------------------------------------------------------------
 # Interactive prompts (all skippable with --yes / flags)
 # ---------------------------------------------------------------------------
@@ -261,7 +305,7 @@ fi
 
 SUBSCRIPTION_HOST="${DOMAIN:-$SERVER_IP}"
 
-info "Install summary (nothing is randomised silently):"
+info "Install summary:"
 info "  Panel port:    ${PANEL_PORT}"
 info "  Domain:        ${DOMAIN:-<none — bare IP, self-signed panel certificate>}"
 info "  Server IP:     ${SERVER_IP}"
@@ -695,7 +739,7 @@ EnvironmentFile=-/opt/vpn-panel/data/panel.env
 # TLS is served by uvicorn itself: app.main does not configure SSL, so the
 # self-signed certificate (or a later Let's Encrypt one in the same paths)
 # is passed on the command line. The installer verifies
-# https://127.0.0.1:2053/health, so these flags are load-bearing.
+# https://127.0.0.1:<panel-port>/health, so these flags are load-bearing.
 ExecStart=/opt/vpn-panel/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 2053 --ssl-certfile /opt/vpn-panel/certs/fullchain.pem --ssl-keyfile /opt/vpn-panel/certs/privkey.pem
 Restart=on-failure
 RestartSec=3
@@ -747,10 +791,8 @@ info "Installing systemd units ..."
 install_unit vpn-panel.service
 install_unit xray.service
 install_unit sing-box.service
-# The shipped units default to port 2053; honour a custom --port flag.
-if [ "$PANEL_PORT" != "2053" ]; then
-    sed -i "s/--port 2053/--port ${PANEL_PORT}/" /etc/systemd/system/vpn-panel.service
-fi
+# The shipped units default to port 2053; honour the chosen port.
+sed -i "s/--port 2053/--port ${PANEL_PORT}/" /etc/systemd/system/vpn-panel.service
 systemctl daemon-reload
 
 # ---------------------------------------------------------------------------
