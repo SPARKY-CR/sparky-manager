@@ -1,63 +1,74 @@
 {% extends "base.html" %}
 {% block title %} — {{ t.users }}{% endblock %}
 {% block content %}
-<h1>{{ t.users }}</h1>
+<div class="page-head">
+  <h1>{{ t.users }}</h1>
+</div>
 
 <div class="card">
   <h2>{{ t.add_user }}</h2>
-  <form method="post" action="{{ base_path }}/users" class="form-inline">
-    <label>
-      {{ t.name }}
-      <input type="text" name="name" pattern="[a-zA-Z0-9_-]+" required>
-    </label>
-    <label>
-      {{ t.note }}
-      <input type="text" name="note">
-    </label>
-    <label>
-      {{ t.traffic_limit_gb }}
-      <input type="number" name="traffic_limit_gb" min="0" step="0.1">
-    </label>
-    <label>
-      {{ t.expires_days }}
-      <input type="number" name="expires_days" min="0" step="1">
-    </label>
-    <button type="submit" class="btn btn-primary">{{ t.create }}</button>
+  <form method="post" action="{{ base_path }}/users">
+    <div class="field-grid">
+      <label>
+        {{ t.name }}
+        <input type="text" name="name" pattern="[a-zA-Z0-9_-]+" required>
+      </label>
+      <label>
+        {{ t.note }}
+        <input type="text" name="note">
+      </label>
+      <label>
+        {{ t.traffic_limit_gb }}
+        <input type="number" name="traffic_limit_gb" min="0" step="0.1">
+      </label>
+      <label>
+        {{ t.expires_days }}
+        <input type="number" name="expires_days" min="0" step="1">
+      </label>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{{ t.create }}</button>
+    </div>
   </form>
 </div>
 
 <div class="card">
   {% if users %}
-  <table>
-    <thead>
-      <tr>
-        <th>{{ t.name }}</th><th>{{ t.status }}</th><th>{{ t.used }}</th>
-        <th>{{ t.limit }}</th><th>{{ t.expires }}</th><th>{{ t.actions }}</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for u in users %}
-      <tr>
-        <td><a href="{{ base_path }}/users/{{ u.id }}">{{ u.name }}</a></td>
-        <td>{{ t.enabled if u.enabled else t.disabled }}</td>
-        <td>{{ (u.traffic_used_bytes / 1073741824) | round(2) }} GB</td>
-        <td>{{ ((u.traffic_limit_bytes / 1073741824) | round(2)) ~ ' GB' if u.traffic_limit_bytes else t.unlimited }}</td>
-        <td>{{ u.expires_at.strftime('%Y-%m-%d') if u.expires_at else t.never }}</td>
-        <td class="row-actions">
-          <a class="btn btn-small" href="{{ base_path }}/users/{{ u.id }}">{{ t.details }}</a>
-          <form method="post" action="{{ base_path }}/users/{{ u.id }}/toggle" class="inline-form">
-            <button type="submit" class="btn btn-small">{{ t.toggle }}</button>
-          </form>
-          <form method="post" action="{{ base_path }}/users/{{ u.id }}/delete" class="inline-form" data-confirm="{{ t.confirm_delete }}">
-            <button type="submit" class="btn btn-small btn-danger">{{ t.delete }}</button>
-          </form>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>{{ t.name }}</th><th>{{ t.status }}</th><th>{{ t.used }}</th>
+          <th>{{ t.limit }}</th><th>{{ t.expires }}</th><th>{{ t.actions }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td><a href="{{ base_path }}/users/{{ u.id }}">{{ u.name }}</a></td>
+          <td><span class="badge {{ 'badge-ok' if u.enabled else 'badge-off' }}">{{ t.enabled if u.enabled else t.disabled }}</span></td>
+          <td><span class="num" dir="ltr">{{ (u.traffic_used_bytes / 1073741824) | round(2) }} GB</span></td>
+          <td>{{ ((u.traffic_limit_bytes / 1073741824) | round(2)) ~ ' GB' if u.traffic_limit_bytes else t.unlimited }}</td>
+          <td>{{ u.expires_at.strftime('%Y-%m-%d') if u.expires_at else t.never }}</td>
+          <td class="row-actions">
+            <a class="btn btn-small" href="{{ base_path }}/users/{{ u.id }}">{{ t.details }}</a>
+            <form method="post" action="{{ base_path }}/users/{{ u.id }}/toggle" class="inline-form">
+              <button type="submit" class="btn btn-small">{{ t.toggle }}</button>
+            </form>
+            <form method="post" action="{{ base_path }}/users/{{ u.id }}/delete" class="inline-form" data-confirm="{{ t.confirm_delete }}">
+              <button type="submit" class="btn btn-small btn-danger">{{ t.delete }}</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
   {% else %}
-  <p class="muted">{{ t.no_users }}</p>
+  <div class="empty">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.2 3.4-5 6.5-5s5.7 1.8 6.5 5"/><circle cx="17" cy="9" r="2.8"/><path d="M16.5 14.6c2.6.3 4.4 1.9 5 4.4"/></svg>
+    <p class="muted">{{ t.no_users }}</p>
+  </div>
   {% endif %}
 </div>
 {% endblock %}

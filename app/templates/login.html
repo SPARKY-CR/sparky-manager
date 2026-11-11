@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block title %} — {{ t.login }}{% endblock %}
 {% block content %}
-<div class="card card-narrow">
+<div class="card auth-card">
+  <div class="auth-logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.5l7.5 2.8v5.4c0 5-3.2 8.6-7.5 10.8-4.3-2.2-7.5-5.8-7.5-10.8V5.3L12 2.5z"/><path d="M13 7.2l-3.6 5h2.5l-1.1 4.6 3.6-5h-2.5l1.1-4.6z" fill="currentColor" stroke="none"/></svg></div>
   <h1>{{ t.sign_in }}</h1>
   <p class="muted">{{ t.login_hint }}</p>
   <form method="post" action="{{ base_path }}/login">
@@ -13,8 +14,10 @@
       {{ t.password }}
       <input type="password" name="password" id="password" autocomplete="current-password" required>
     </label>
-    <button type="button" class="btn btn-ghost" data-toggle-password="password">{{ t.show_password }}</button>
-    <button type="submit" class="btn btn-primary">{{ t.login }}</button>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary btn-block">{{ t.login }}</button>
+      <button type="button" class="btn btn-ghost btn-block" data-toggle-password="password">{{ t.show_password }}</button>
+    </div>
   </form>
 </div>
 {% endblock %}

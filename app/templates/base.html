@@ -6,46 +6,81 @@
   <title>{{ t.app_name }}{% block title %}{% endblock %}</title>
   <link rel="stylesheet" href="{{ base_path }}/static/style.css">
 </head>
-<body>
-<header class="site-header">
-  <div class="header-inner">
-    <a class="brand" href="{{ base_path }}/dashboard">{{ t.app_name }}</a>
-    {% if admin %}
-    <nav class="main-nav">
-      <a href="{{ base_path }}/dashboard">{{ t.dashboard }}</a>
-      <a href="{{ base_path }}/inbounds">{{ t.inbounds }}</a>
-      <a href="{{ base_path }}/users">{{ t.users }}</a>
-      <a href="{{ base_path }}/settings">{{ t.settings }}</a>
+<body class="{{ 'auth-page' if not admin else '' }}">
+{% set here = request.url.path %}
+<div class="app-shell">
+  {% if admin %}
+  <aside class="sidebar">
+    <a class="brand" href="{{ base_path }}/dashboard">
+      <span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.5l7.5 2.8v5.4c0 5-3.2 8.6-7.5 10.8-4.3-2.2-7.5-5.8-7.5-10.8V5.3L12 2.5z"/><path d="M13 7.2l-3.6 5h2.5l-1.1 4.6 3.6-5h-2.5l1.1-4.6z" fill="currentColor" stroke="none"/></svg></span>
+      <span>{{ t.app_name }}<small>Zed-panel</small></span>
+    </a>
+    <nav class="side-nav">
+      <a class="nav-link{{ ' active' if here.endswith('/dashboard') }}" href="{{ base_path }}/dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg>{{ t.dashboard }}</a>
+      <a class="nav-link{{ ' active' if here.endswith('/inbounds') }}" href="{{ base_path }}/inbounds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13.5l9 5 9-5"/></svg>{{ t.inbounds }}</a>
+      <a class="nav-link{{ ' active' if here.endswith('/users') or '/users/' in here }}" href="{{ base_path }}/users"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.2 3.4-5 6.5-5s5.7 1.8 6.5 5"/><circle cx="17" cy="9" r="2.8"/><path d="M16.5 14.6c2.6.3 4.4 1.9 5 4.4"/></svg>{{ t.users }}</a>
+      <a class="nav-link{{ ' active' if here.endswith('/settings') }}" href="{{ base_path }}/settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h9M19 7h1M4 17h3M13 17h7"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg>{{ t.settings }}</a>
     </nav>
-    <div class="header-actions">
-      <span class="admin-name">{{ admin.username }}</span>
-      <a class="btn btn-ghost" href="{{ base_path }}/logout">{{ t.logout }}</a>
+    <div class="side-foot">
+      <div class="admin-chip">
+        <span class="admin-avatar">{{ admin.username[:1] | upper }}</span>
+        <span class="admin-name">{{ admin.username }}<span class="admin-role">{{ 'مدیر' if lang == 'fa' else 'Admin' }}</span></span>
+      </div>
+      <a class="btn btn-ghost btn-block" href="{{ base_path }}/logout">{{ t.logout }}</a>
+      <div class="lang-switch">
+        {% if lang == 'fa' %}
+          <a href="{{ request.url.path }}?lang=en">English</a>
+        {% else %}
+          <a href="{{ request.url.path }}?lang=fa">فارسی</a>
+        {% endif %}
+      </div>
     </div>
+  </aside>
+  {% endif %}
+  <div class="main-col">
+    {% if admin %}
+    <header class="mobile-topbar">
+      <a class="brand" href="{{ base_path }}/dashboard">
+        <span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.5l7.5 2.8v5.4c0 5-3.2 8.6-7.5 10.8-4.3-2.2-7.5-5.8-7.5-10.8V5.3L12 2.5z"/><path d="M13 7.2l-3.6 5h2.5l-1.1 4.6 3.6-5h-2.5l1.1-4.6z" fill="currentColor" stroke="none"/></svg></span>
+        <span>{{ t.app_name }}</span>
+      </a>
+      <div class="top-actions">
+        <div class="lang-switch">
+          {% if lang == 'fa' %}
+            <a href="{{ request.url.path }}?lang=en">EN</a>
+          {% else %}
+            <a href="{{ request.url.path }}?lang=fa">فا</a>
+          {% endif %}
+        </div>
+        <a class="btn btn-ghost btn-small" href="{{ base_path }}/logout">{{ t.logout }}</a>
+      </div>
+    </header>
     {% endif %}
-    <div class="lang-switch">
-      {% if lang == 'fa' %}
-        <a href="{{ request.url.path }}?lang=en">English</a>
-      {% else %}
-        <a href="{{ request.url.path }}?lang=fa">فارسی</a>
+    <main class="container">
+      {% if msg %}
+        <p class="flash flash-ok">{{ msg }}</p>
       {% endif %}
-    </div>
+      {% if err %}
+        <p class="flash flash-err">{{ err }}</p>
+      {% endif %}
+      {% if error %}
+        <p class="flash flash-err">{{ error }}</p>
+      {% endif %}
+      {% block content %}{% endblock %}
+    </main>
+    <footer class="{{ 'auth-footer' if not admin else 'site-footer' }}">
+      <p>{{ t.footer_note }}</p>
+    </footer>
   </div>
-</header>
-<main class="container">
-  {% if msg %}
-    <p class="flash flash-ok">{{ msg }}</p>
+  {% if admin %}
+  <nav class="bottom-nav">
+    <a class="nav-link{{ ' active' if here.endswith('/dashboard') }}" href="{{ base_path }}/dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg>{{ t.dashboard }}</a>
+    <a class="nav-link{{ ' active' if here.endswith('/inbounds') }}" href="{{ base_path }}/inbounds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13.5l9 5 9-5"/></svg>{{ t.inbounds }}</a>
+    <a class="nav-link{{ ' active' if here.endswith('/users') or '/users/' in here }}" href="{{ base_path }}/users"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.2 3.4-5 6.5-5s5.7 1.8 6.5 5"/><circle cx="17" cy="9" r="2.8"/><path d="M16.5 14.6c2.6.3 4.4 1.9 5 4.4"/></svg>{{ t.users }}</a>
+    <a class="nav-link{{ ' active' if here.endswith('/settings') }}" href="{{ base_path }}/settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h9M19 7h1M4 17h3M13 17h7"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg>{{ t.settings }}</a>
+  </nav>
   {% endif %}
-  {% if err %}
-    <p class="flash flash-err">{{ err }}</p>
-  {% endif %}
-  {% if error %}
-    <p class="flash flash-err">{{ error }}</p>
-  {% endif %}
-  {% block content %}{% endblock %}
-</main>
-<footer class="site-footer">
-  <p>{{ t.footer_note }}</p>
-</footer>
+</div>
 <script src="{{ base_path }}/static/app.js"></script>
 </body>
 </html>

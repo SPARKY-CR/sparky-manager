@@ -1,7 +1,9 @@
 {% extends "base.html" %}
 {% block title %} — {{ t.settings }}{% endblock %}
 {% block content %}
-<h1>{{ t.settings }}</h1>
+<div class="page-head">
+  <h1>{{ t.settings }}</h1>
+</div>
 
 <div class="card card-narrow">
   <form method="post" action="{{ base_path }}/settings">
@@ -17,7 +19,9 @@
       {{ t.reality_sni }}
       <input type="text" name="reality_sni" value="{{ settings.get('reality_sni', 'www.microsoft.com') }}" dir="ltr">
     </label>
-    <button type="submit" class="btn btn-primary">{{ t.save }}</button>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{{ t.save }}</button>
+    </div>
   </form>
 </div>
 {% endblock %}
