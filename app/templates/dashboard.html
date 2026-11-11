@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %} — {{ t.dashboard }}{% endblock %}
+{% block content %}
+<h1>{{ t.dashboard }}</h1>
+
+<div class="cards">
+  <div class="card stat">
+    <div class="stat-num">{{ total_users }}</div>
+    <div class="stat-label">{{ t.total_users }}</div>
+  </div>
+  <div class="card stat">
+    <div class="stat-num">{{ active_users }}</div>
+    <div class="stat-label">{{ t.active_users }}</div>
+  </div>
+  <div class="card stat">
+    <div class="stat-num">{{ total_inbounds }}</div>
+    <div class="stat-label">{{ t.total_inbounds }}</div>
+  </div>
+  <div class="card stat">
+    <div class="stat-num">{{ (traffic_used / 1073741824) | round(2) }} GB</div>
+    <div class="stat-label">{{ t.traffic_used }}</div>
+  </div>
+  <div class="card stat">
+    <div class="stat-num">{{ online }}</div>
+    <div class="stat-label">{{ t.online_now }}</div>
+  </div>
+</div>
+
+{% if ikev2_status %}
+<div class="card">
+  <h2>{{ t.ikev2_status }}</h2>
+  <p class="muted">{{ t.ikev2_note }}</p>
+  <dl class="kv">
+    {% for key, value in ikev2_status.items() %}
+      <dt>{{ key }}</dt><dd>{{ value }}</dd>
+    {% endfor %}
+  </dl>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>{{ t.recent_users }}</h2>
+  {% if users %}
+  <table>
+    <thead>
+      <tr><th>{{ t.name }}</th><th>{{ t.status }}</th><th>{{ t.used }}</th><th>{{ t.expires }}</th><th>{{ t.actions }}</th></tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td><a href="/users/{{ u.id }}">{{ u.name }}</a></td>
+        <td>{{ t.enabled if u.enabled else t.disabled }}</td>
+        <td>{{ (u.traffic_used_bytes / 1073741824) | round(2) }} GB</td>
+        <td>{{ u.expires_at.strftime('%Y-%m-%d') if u.expires_at else t.never }}</td>
+        <td><a class="btn btn-small" href="/users/{{ u.id }}">{{ t.details }}</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">{{ t.no_users }}</p>
+  {% endif %}
+  <p><a class="btn btn-primary" href="/users">{{ t.users }}</a></p>
+</div>
+{% endblock %}

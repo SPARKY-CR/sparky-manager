@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %} — {{ user.name if user else t.users }}{% endblock %}
+{% block content %}
+{% if not user %}
+  <div class="card">
+    <h1>{{ t.user_not_found }}</h1>
+    {% if not public %}
+    <p><a class="btn" href="/users">{{ t.back_to_users }}</a></p>
+    {% endif %}
+  </div>
+{% else %}
+  <h1>{{ user.name }}</h1>
+  <p class="muted">
+    {{ t.status }}: {{ t.enabled if user.enabled else t.disabled }} ·
+    {{ t.used }}: {{ (user.traffic_used_bytes / 1073741824) | round(2) }} GB ·
+    {{ t.limit }}: {{ ((user.traffic_limit_bytes / 1073741824) | round(2)) ~ ' GB' if user.traffic_limit_bytes else t.unlimited }} ·
+    {{ t.expires }}: {{ user.expires_at.strftime('%Y-%m-%d') if user.expires_at else t.never }}
+  </p>
+
+  {% if not public %}
+  <div class="card">
+    <div class="row-actions">
+      <form method="post" action="/users/{{ user.id }}/toggle" class="inline-form">
+        <button type="submit" class="btn">{{ t.toggle }}</button>
+      </form>
+      <form method="post" action="/users/{{ user.id }}/rotate-token" class="inline-form">
+        <button type="submit" class="btn">{{ t.rotate_token }}</button>
+      </form>
+      <form method="post" action="/users/{{ user.id }}/delete" class="inline-form" data-confirm="{{ t.confirm_delete }}">
+        <button type="submit" class="btn btn-danger">{{ t.delete }}</button>
+      </form>
+      <a class="btn btn-ghost" href="/users">{{ t.back_to_users }}</a>
+    </div>
+    <dl class="kv">
+      <dt>{{ t.sub_token }}</dt><dd dir="ltr">{{ user.sub_token }}</dd>
+      <dt>{{ t.note }}</dt><dd>{{ user.note or '' }}</dd>
+    </dl>
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <h2>{{ t.subscription_link }}</h2>
+    <div class="copy-row">
+      <code dir="ltr" class="link-box">{{ sub_url }}</code>
+      <button type="button" class="btn btn-small" data-copy="{{ sub_url }}">{{ t.copy }}</button>
+    </div>
+    <p>
+      <a class="btn btn-small" href="{{ sub_url }}?format=v2rayng">{{ t.sub_v2rayng }}</a>
+      <a class="btn btn-small" href="{{ sub_url }}?format=singbox">{{ t.sub_singbox }}</a>
+    </p>
+    <p class="muted">{{ t.user_page }}: <a href="{{ user_url }}" dir="ltr">{{ user_url }}</a></p>
+  </div>
+
+  <div class="card">
+    <h2>{{ t.share_links }}</h2>
+    {% if not links_available %}
+      <p class="muted">{{ t.links_unavailable }}</p>
+    {% elif links %}
+      {% for entry in links %}
+      <div class="link-item">
+        <h3>{{ entry.inbound.tag }} <span class="muted">({{ entry.inbound.protocol }})</span></h3>
+        <div class="copy-row">
+          <code dir="ltr" class="link-box">{{ entry.link }}</code>
+          <button type="button" class="btn btn-small" data-copy="{{ entry.link }}">{{ t.copy }}</button>
+        </div>
+        <img class="qr" src="/sub/{{ user.sub_token }}/qr?link={{ entry.link | urlencode }}" alt="{{ t.qr_code }} — {{ entry.inbound.tag }}" loading="lazy">
+      </div>
+      {% endfor %}
+    {% else %}
+      <p class="muted">{{ t.user_unusable }}</p>
+    {% endif %}
+  </div>
+
+  {% if not public and clients %}
+  <div class="card">
+    <h2>{{ t.clients }}</h2>
+    <table>
+      <thead>
+        <tr><th>{{ t.inbounds }}</th><th>{{ t.protocol }}</th><th>{{ t.status }}</th></tr>
+      </thead>
+      <tbody>
+        {% for c in clients %}
+        <tr>
+          <td>{{ inbounds[c.inbound_id].tag if c.inbound_id in inbounds else c.inbound_id }}</td>
+          <td>{{ inbounds[c.inbound_id].protocol if c.inbound_id in inbounds else '' }}</td>
+          <td>{{ t.enabled if c.enabled else t.disabled }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+{% endif %}
+{% endblock %}

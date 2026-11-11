@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %} — {{ t.settings }}{% endblock %}
+{% block content %}
+<h1>{{ t.settings }}</h1>
+
+<div class="card card-narrow">
+  <form method="post" action="/settings">
+    <label>
+      {{ t.domain }}
+      <input type="text" name="domain" value="{{ settings.get('domain', '') }}" dir="ltr">
+    </label>
+    <label>
+      {{ t.subscription_host }}
+      <input type="text" name="subscription_host" value="{{ settings.get('subscription_host', '') }}" dir="ltr">
+    </label>
+    <label>
+      {{ t.reality_sni }}
+      <input type="text" name="reality_sni" value="{{ settings.get('reality_sni', 'www.microsoft.com') }}" dir="ltr">
+    </label>
+    <button type="submit" class="btn btn-primary">{{ t.save }}</button>
+  </form>
+</div>
+{% endblock %}

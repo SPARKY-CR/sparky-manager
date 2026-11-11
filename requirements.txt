@@ -1,0 +1,13 @@
+# vpn-panel Python dependencies.
+# Minimum versions only (">="), all of which exist on PyPI — no exact
+# patch pins are invented here. The installer does `pip install -r
+# requirements.txt` into /opt/vpn-panel/venv.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+sqlalchemy>=2.0
+jinja2>=3.1
+qrcode[pil]>=7.4
+python-multipart>=0.0.9
+httpx>=0.27
+argon2-cffi>=23.1
+cryptography>=42.0

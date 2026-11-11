@@ -1,0 +1,22 @@
+[Unit]
+Description=vpn-panel — multi-core VPN panel (FastAPI)
+After=network-online.target xray.service sing-box.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vpn-panel
+Group=vpn-panel
+WorkingDirectory=/opt/vpn-panel
+EnvironmentFile=-/opt/vpn-panel/data/panel.env
+# TLS is served by uvicorn itself: app.main does not configure SSL, so the
+# self-signed certificate (or a later Let's Encrypt one in the same paths)
+# is passed on the command line. The installer verifies
+# https://127.0.0.1:2053/health, so these flags are load-bearing — do not
+# drop them unless the app loads TLS itself.
+ExecStart=/opt/vpn-panel/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 2053 --ssl-certfile /opt/vpn-panel/certs/fullchain.pem --ssl-keyfile /opt/vpn-panel/certs/privkey.pem
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

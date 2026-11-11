@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="{{ lang }}" dir="{{ 'rtl' if lang == 'fa' else 'ltr' }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ t.app_name }}{% block title %}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="/dashboard">{{ t.app_name }}</a>
+    {% if admin %}
+    <nav class="main-nav">
+      <a href="/dashboard">{{ t.dashboard }}</a>
+      <a href="/inbounds">{{ t.inbounds }}</a>
+      <a href="/users">{{ t.users }}</a>
+      <a href="/settings">{{ t.settings }}</a>
+    </nav>
+    <div class="header-actions">
+      <span class="admin-name">{{ admin.username }}</span>
+      <a class="btn btn-ghost" href="/logout">{{ t.logout }}</a>
+    </div>
+    {% endif %}
+    <div class="lang-switch">
+      {% if lang == 'fa' %}
+        <a href="{{ request.url.path }}?lang=en">English</a>
+      {% else %}
+        <a href="{{ request.url.path }}?lang=fa">فارسی</a>
+      {% endif %}
+    </div>
+  </div>
+</header>
+<main class="container">
+  {% if msg %}
+    <p class="flash flash-ok">{{ msg }}</p>
+  {% endif %}
+  {% if err %}
+    <p class="flash flash-err">{{ err }}</p>
+  {% endif %}
+  {% if error %}
+    <p class="flash flash-err">{{ error }}</p>
+  {% endif %}
+  {% block content %}{% endblock %}
+</main>
+<footer class="site-footer">
+  <p>{{ t.footer_note }}</p>
+</footer>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+pip-log.txt
+
+# Panel runtime data (database, secrets, generated env files)
+.env
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/install.env
+data/panel.env
+data/login.txt
+
+# Certificates and keys (generated at install; never commit)
+certs/*.pem
+certs/*.key
+certs/*.crt
+*.pem
+*.key
+
+# Installed / server paths (not repo content)
+/opt/vpn-panel/
+/opt/vpn-panel/data/
+/opt/vpn-panel/certs/
+/opt/vpn-panel/venv/
+
+# Logs
+*.log
+
+# macOS / editor
+.DS_Store

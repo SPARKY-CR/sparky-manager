@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %} — {{ t.inbounds }}{% endblock %}
+{% block content %}
+<h1>{{ t.inbounds }}</h1>
+
+<div class="card">
+  <h2>{{ t.add_inbound }}</h2>
+  <form method="post" action="/inbounds" class="form-inline">
+    <label>
+      {{ t.tag }}
+      <input type="text" name="tag" pattern="[a-zA-Z0-9_-]+" required>
+    </label>
+    <label>
+      {{ t.core }}
+      <select name="core">
+        <option value="xray">xray</option>
+        <option value="singbox">sing-box</option>
+        <option value="wireguard">wireguard</option>
+      </select>
+    </label>
+    <label>
+      {{ t.protocol }}
+      <select name="protocol">
+        <option value="vless">vless</option>
+        <option value="vmess">vmess</option>
+        <option value="trojan">trojan</option>
+        <option value="shadowsocks">shadowsocks</option>
+        <option value="hysteria2">hysteria2</option>
+        <option value="tuic">tuic</option>
+        <option value="anytls">anytls</option>
+        <option value="naive">naive</option>
+        <option value="shadowtls">shadowtls</option>
+        <option value="wireguard">wireguard</option>
+      </select>
+    </label>
+    <label>
+      {{ t.port }}
+      <input type="number" name="port" min="1" max="65535" required>
+    </label>
+    <label>
+      {{ t.network }}
+      <select name="network">
+        <option value="tcp">tcp</option>
+        <option value="udp">udp</option>
+        <option value="ws">ws</option>
+        <option value="xhttp">xhttp</option>
+        <option value="grpc">grpc</option>
+      </select>
+    </label>
+    <label>
+      {{ t.sni }}
+      <input type="text" name="sni" placeholder="www.microsoft.com">
+    </label>
+    <label>
+      {{ t.path }}
+      <input type="text" name="path" placeholder="/vless">
+    </label>
+    <label>
+      {{ t.remark }}
+      <input type="text" name="remark">
+    </label>
+    <button type="submit" class="btn btn-primary">{{ t.create }}</button>
+  </form>
+</div>
+
+<div class="card">
+  {% if inbounds %}
+  <table>
+    <thead>
+      <tr>
+        <th>{{ t.tag }}</th><th>{{ t.core }}</th><th>{{ t.protocol }}</th>
+        <th>{{ t.port }}</th><th>{{ t.status }}</th><th>{{ t.remark }}</th><th>{{ t.actions }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for i in inbounds %}
+      <tr>
+        <td>{{ i.tag }}</td>
+        <td>{{ i.core }}</td>
+        <td>{{ i.protocol }}</td>
+        <td>{{ i.port }}</td>
+        <td>{{ t.enabled if i.enabled else t.disabled }}</td>
+        <td>{{ i.remark or '' }}</td>
+        <td class="row-actions">
+          <form method="post" action="/inbounds/{{ i.id }}/toggle" class="inline-form">
+            <button type="submit" class="btn btn-small">{{ t.toggle }}</button>
+          </form>
+          <form method="post" action="/inbounds/{{ i.id }}/delete" class="inline-form" data-confirm="{{ t.confirm_delete }}">
+            <button type="submit" class="btn btn-small btn-danger">{{ t.delete }}</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">{{ t.no_inbounds }}</p>
+  {% endif %}
+</div>
+{% endblock %}
