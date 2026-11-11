@@ -53,6 +53,7 @@ import argparse
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -197,15 +198,18 @@ def _read_settings(conn: sqlite3.Connection) -> dict[str, str]:
 def _inject_panel_cert_paths(
     settings: dict[str, str], *, warnings: list[str]
 ) -> None:
-    """Fill in the panel self-signed cert paths when they exist on disk.
+    """Fill in the panel cert paths when they exist on disk.
 
     Only when settings name no certificate at all: if
     ``<home>/certs/fullchain.pem`` + ``<home>/certs/privkey.pem``
     both exist, they are added as ``self_signed_cert_path`` /
-    ``self_signed_key_path`` so the sing-box TLS inbounds can render
-    (clients must allow insecure for a self-signed cert). Nothing is
-    invented when the files are absent — the renderers then omit the
-    TLS inbounds and warn, as designed.
+    ``self_signed_key_path`` so the sing-box TLS inbounds can render.
+    The pair is usually the installer's self-signed certificate
+    (clients must allow insecure for it) — but since v8 the installer
+    may have replaced it with a trusted Let's Encrypt IP certificate
+    in the same paths, in which case no insecure warning is emitted.
+    Nothing is invented when the files are absent — the renderers then
+    omit the TLS inbounds and warn, as designed.
     """
     cert_keys = (
         "cert_path",
@@ -223,10 +227,32 @@ def _inject_panel_cert_paths(
     if os.path.isfile(cert) and os.path.isfile(key):
         settings["self_signed_cert_path"] = cert
         settings["self_signed_key_path"] = key
+        if _panel_cert_is_trusted(cert):
+            return
         warnings.append(
             "no certificate in settings; using panel self-signed pair "
             f"at {cert} (clients must allow insecure)"
         )
+
+
+def _panel_cert_is_trusted(cert_path: str) -> bool:
+    """True when the panel certificate is issued by a public CA.
+
+    The installer may have replaced the self-signed pair with a
+    Let's Encrypt IP/domain certificate in the same paths; clients
+    then trust it and need no ``insecure`` flag. Falls back to False
+    (self-signed) when openssl is missing or the check fails.
+    """
+    try:
+        proc = subprocess.run(
+            ["openssl", "x509", "-noout", "-issuer", "-in", cert_path],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "Let's Encrypt" in (proc.stdout or "")
 
 
 # ---------------------------------------------------------------------------

@@ -648,30 +648,72 @@ obtain_le_ip_cert() {
     fi
     # acme.sh defaults to ZeroSSL (needs an email); force Let's Encrypt.
     "$acme" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
-    info "Requesting a Let's Encrypt certificate for ${SERVER_IP} (HTTP-01 on port 80) ..."
-    local _acme_log
-    _acme_log="$(mktemp)"
-    if ! "$acme" --issue -d "$SERVER_IP" --standalone --server letsencrypt \
-            --certificate-profile shortlived --days 6 --httpport 80 >"$_acme_log" 2>&1; then
-        warn "Could not obtain the Let's Encrypt IP certificate. Is TCP 80 open in the firewall/security group? Last lines from acme.sh:"
-        tail -n 5 "$_acme_log" || true
-        warn "Keeping the self-signed certificate — open TCP 80 and re-run the installer to retry."
+    # A certificate already issued for this IP (e.g. by another panel
+    # earlier) is NOT a failure: --issue then prints "Skipping" and
+    # may exit nonzero, but the certificate is there and usable — so
+    # install it instead of keeping the self-signed one. An ECC
+    # certificate lives in <IP>_ecc/ instead of <IP>/.
+    local _cert_file _ecc_args
+    _resolve_le_cert() {
+        _cert_file="$HOME/.acme.sh/$SERVER_IP/fullchain.cer"
+        _ecc_args=()
+        if [ ! -s "$_cert_file" ] && [ -s "$HOME/.acme.sh/${SERVER_IP}_ecc/fullchain.cer" ]; then
+            _cert_file="$HOME/.acme.sh/${SERVER_IP}_ecc/fullchain.cer"
+            _ecc_args=(--ecc)
+        fi
+    }
+    _le_cert_usable() {
+        [ -s "$_cert_file" ] && openssl x509 -noout -checkend 0 -in "$_cert_file" 2>/dev/null
+    }
+    _resolve_le_cert
+    if ! _le_cert_usable; then
+        info "Requesting a Let's Encrypt certificate for ${SERVER_IP} (HTTP-01 on port 80) ..."
+        local _acme_log
+        _acme_log="$(mktemp)"
+        if ! "$acme" --issue -d "$SERVER_IP" --standalone --server letsencrypt \
+                --certificate-profile shortlived --days 6 --httpport 80 >"$_acme_log" 2>&1; then
+            _resolve_le_cert
+            if ! _le_cert_usable; then
+                warn "Could not obtain the Let's Encrypt IP certificate. Is TCP 80 open in the firewall/security group? Last lines from acme.sh:"
+                tail -n 5 "$_acme_log" || true
+                warn "Keeping the self-signed certificate — open TCP 80 and re-run the installer to retry."
+                rm -f "$_acme_log"
+                return 1
+            fi
+            info "Let's Encrypt certificate for ${SERVER_IP} already issued; installing it ..."
+        fi
         rm -f "$_acme_log"
-        return 1
+    else
+        info "Let's Encrypt certificate for ${SERVER_IP} already issued; installing it ..."
     fi
-    rm -f "$_acme_log"
+    # Back up the self-signed pair before overwriting it, so a bad
+    # install can be rolled back instead of breaking the panel's TLS.
+    cp /opt/vpn-panel/certs/fullchain.pem /opt/vpn-panel/certs/fullchain.pem.bak 2>/dev/null || true
+    cp /opt/vpn-panel/certs/privkey.pem /opt/vpn-panel/certs/privkey.pem.bak 2>/dev/null || true
     info "Installing the trusted certificate for the panel ..."
     local _reload="chmod 0640 /opt/vpn-panel/certs/privkey.pem; chown root:vpn-panel /opt/vpn-panel/certs/privkey.pem /opt/vpn-panel/certs/fullchain.pem; systemctl restart vpn-panel sing-box"
-    if ! "$acme" --installcert -d "$SERVER_IP" \
+    if ! "$acme" --installcert -d "$SERVER_IP" "${_ecc_args[@]}" \
             --key-file /opt/vpn-panel/certs/privkey.pem \
             --fullchain-file /opt/vpn-panel/certs/fullchain.pem \
             --reloadcmd "$_reload" >/dev/null 2>&1; then
         warn "Could not install the Let's Encrypt certificate; keeping the self-signed one."
+        mv /opt/vpn-panel/certs/fullchain.pem.bak /opt/vpn-panel/certs/fullchain.pem 2>/dev/null || true
+        mv /opt/vpn-panel/certs/privkey.pem.bak /opt/vpn-panel/certs/privkey.pem 2>/dev/null || true
         return 1
     fi
     chmod 0640 /opt/vpn-panel/certs/privkey.pem
     chmod 0644 /opt/vpn-panel/certs/fullchain.pem
     chown root:vpn-panel /opt/vpn-panel/certs/privkey.pem /opt/vpn-panel/certs/fullchain.pem
+    if ! openssl x509 -noout -issuer -in /opt/vpn-panel/certs/fullchain.pem 2>/dev/null | grep -qi "Let's Encrypt"; then
+        warn "Installed certificate is not from Let's Encrypt; restoring the self-signed one."
+        mv /opt/vpn-panel/certs/fullchain.pem.bak /opt/vpn-panel/certs/fullchain.pem 2>/dev/null || true
+        mv /opt/vpn-panel/certs/privkey.pem.bak /opt/vpn-panel/certs/privkey.pem 2>/dev/null || true
+        return 1
+    fi
+    rm -f /opt/vpn-panel/certs/fullchain.pem.bak /opt/vpn-panel/certs/privkey.pem.bak
+    # Make sure acme.sh's renewal cron job exists (another panel may
+    # have installed acme.sh without it).
+    "$acme" --install-cronjob >/dev/null 2>&1 || true
     CERT_REGENERATED=1
     LE_CERT_OK=1
     info "Trusted Let's Encrypt certificate installed for ${SERVER_IP} (valid ~6 days, auto-renewed by acme.sh)."

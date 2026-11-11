@@ -512,3 +512,40 @@ def test_parse_nft_counters():
     assert parsed[8445] == (2, 99)
     assert traffic.parse_nft_counters("") == {}
     assert traffic.parse_nft_counters("counter packets 1 bytes 2") == {}
+
+
+def test_inject_panel_cert_warns_only_for_self_signed(tmp_path):
+    """The render warning "(clients must allow insecure)" must only
+    fire for the self-signed pair — a Let's Encrypt certificate in
+    the same paths is trusted and needs no such warning (v8.1)."""
+    import importlib.util
+    import subprocess
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "render_configs", Path(__file__).resolve().parent.parent / "scripts" / "render_configs.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    home = tmp_path / "panel"
+    certs = home / "certs"
+    certs.mkdir(parents=True)
+    cert, key = certs / "fullchain.pem", certs / "privkey.pem"
+    for subj, trusted in (
+        ("/CN=203.0.113.7", False),
+        ("/C=US/O=Let's Encrypt/CN=203.0.113.7", True),
+    ):
+        subprocess.run(
+            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+             "-keyout", str(key), "-out", str(cert), "-days", "2",
+             "-subj", subj],
+            check=True, capture_output=True,
+        )
+        settings: dict[str, str] = {"home": str(home)}
+        warnings: list[str] = []
+        mod._inject_panel_cert_paths(settings, warnings=warnings)
+        assert settings["self_signed_cert_path"] == str(cert)
+        assert settings["self_signed_key_path"] == str(key)
+        insecure = [w for w in warnings if "allow insecure" in w]
+        assert (not insecure) is trusted, (subj, warnings)
