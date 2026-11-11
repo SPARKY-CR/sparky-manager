@@ -36,6 +36,7 @@ set -euo pipefail
 REPO_URL="https://github.com/SPARKY-CR/Zed-panel.git"
 PANEL_PORT=""        # empty = not given; resolved below (random on fresh install)
 PORT_GIVEN=0         # 1 when --port is passed
+WEB_PATH=""          # empty = not given; resolved below (random on fresh install)
 WEB_PATH_GIVEN=0      # 1 when --web-path is passed
 DOMAIN=""
 REALITY_SNI="www.microsoft.com"
