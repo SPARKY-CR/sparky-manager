@@ -46,6 +46,25 @@ shown to the admin instead of crashing the request):
   address, listen_port, dns) -> str`` (peers: ``public_key`` +
   ``allowed_ips``), ``render_peer_config(...)``,
   ``generate_keypair() -> (private_key, public_key)``
+- ``app.wgapply``: ``apply_config(content, *, config_path,
+  interface, wg_bin, wg_quick_bin, unit, run, journal, redact) ->
+  ApplyResult`` — validate, ``wg-quick strip``, live ``wg
+  syncconf`` when the interface is up, ``systemctl start`` when it
+  is absent, restore on failure (also used for AmneziaWG with
+  ``awg`` / ``awg-quick`` / ``awg0``)
+- ``app.openvpn``: ``render_server_config`` / ``render_client_config``
+  / ``validate_server_config`` (username/password auth via
+  ``scripts/ovpn-auth.py``)
+- ``app.openconnect``: ``render_ocserv_config`` /
+  ``render_ocpasswd`` (SHA-512 crypt) / ``render_profile_xml`` /
+  ``validate_ocserv_config``
+- ``app.amneziawg``: ``generate_awg_params`` /
+  ``validate_awg_params`` / ``render_server_config`` /
+  ``render_peer_config`` / ``build_vpn_link`` / ``parse_vpn_link``
+  / ``is_available``
+- ``app.ikev2``: ``render_swanctl_config`` / ``validate_swanctl_config``
+  / ``render_mobileconfig`` (plist) / ``pem_to_der`` /
+  ``load_ca_cert_der`` / ``server_id_from_cert_pem``
 - ``app.traffic``: ``sync_traffic(db, *, xray_stats=None, wg_text=None,
   nft_text=None, wg_pubkey_to_user_id=None, nft_port_to_user_id=None)``
 
@@ -83,7 +102,13 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -195,10 +220,59 @@ except ImportError:
     logger.warning("app.wireguard not available yet; WireGuard re-render disabled")
 
 try:
+    from app import wgapply as wgapply_mod
+except ImportError:
+    wgapply_mod = None
+    logger.warning("app.wgapply not available yet; WireGuard apply disabled")
+
+try:
+    from app import openvpn as openvpn_mod
+except ImportError:
+    openvpn_mod = None
+    logger.warning("app.openvpn not available yet; OpenVPN re-render disabled")
+
+try:
+    from app import openconnect as openconnect_mod
+except ImportError:
+    openconnect_mod = None
+    logger.warning("app.openconnect not available yet; OpenConnect re-render disabled")
+
+try:
+    from app import amneziawg as amneziawg_mod
+except ImportError:
+    amneziawg_mod = None
+    logger.warning("app.amneziawg not available yet; AmneziaWG re-render disabled")
+
+try:
+    from app import ikev2 as ikev2_mod
+except ImportError:
+    ikev2_mod = None
+    logger.warning("app.ikev2 not available yet; IKEv2 re-render disabled")
+
+try:
     from app import traffic as traffic_mod
 except ImportError:
     traffic_mod = None
     logger.warning("app.traffic not available yet; traffic sync disabled")
+
+try:
+    from app import panel_log as panel_log_mod
+except ImportError:
+    panel_log_mod = None
+    logger.warning("app.panel_log not available yet; file logging disabled")
+
+if panel_log_mod is not None:
+    # Rotating file log (data/logs/panel.log) + console (systemd
+    # journal). Idempotent; in tests DATA_DIR points at the temp home,
+    # so test logs never touch the real install.
+    panel_log_mod.setup_panel_logging()
+
+
+def _redact(text: object) -> str:
+    """Mask credential-shaped text before it reaches a log line."""
+    if panel_log_mod is not None:
+        return panel_log_mod.redact(text)
+    return str(text)
 
 def _cfg_attr(name: str, default: Any) -> Any:
     """Read an attribute from app.config, falling back to ``default``."""
@@ -230,6 +304,18 @@ XRAY_BINARY = _cfg_attr("XRAY_BINARY", "/usr/local/bin/xray")
 SINGBOX_CONFIG_PATH = _cfg_attr("SINGBOX_CONFIG", "/etc/sing-box/config.json")
 SINGBOX_BINARY = _cfg_attr("SINGBOX_BINARY", "/usr/local/bin/sing-box")
 WG_CONFIG_PATH = _cfg_attr("WG_CONFIG", "/etc/wireguard/wg0.conf")
+OVPN_CONFIG_PATH = _cfg_attr("OVPN_CONFIG", "/etc/openvpn/server/sparky-manager.conf")
+OCSERV_CONFIG_PATH = _cfg_attr("OCSERV_CONFIG", "/etc/ocserv/ocserv.conf")
+OCSERV_PASSWD_PATH = _cfg_attr("OCSERV_PASSWD", "/etc/ocserv/ocpasswd")
+AWG_CONFIG_PATH = _cfg_attr("AWG_CONFIG", "/etc/amnezia/amneziawg/awg0.conf")
+SWANCTL_CONFIG_PATH = _cfg_attr("SWANCTL_CONFIG", "/etc/swanctl/swanctl.conf")
+CA_CERT_PATH = _cfg_attr("CA_CERT", "/opt/sparky-manager/data/ca/ca-cert.pem")
+CA_KEY_PATH = _cfg_attr("CA_KEY", "/opt/sparky-manager/data/ca/ca-key.pem")
+VPN_SERVER_CERT_PATH = _cfg_attr("VPN_SERVER_CERT", "/opt/sparky-manager/data/ca/server-cert.pem")
+VPN_SERVER_KEY_PATH = _cfg_attr("VPN_SERVER_KEY", "/opt/sparky-manager/data/ca/server-key.pem")
+OVPN_AUTH_SCRIPT_PATH = _cfg_attr(
+    "OVPN_AUTH_SCRIPT", "/opt/sparky-manager/scripts/ovpn-auth.py"
+)
 
 # Secrets the installer writes to panel.env / install.env (loaded via the
 # systemd unit's EnvironmentFile). ensure_defaults() prefers these over
@@ -241,6 +327,8 @@ ENV_REALITY_PUBLIC_KEY = "SPARKY_REALITY_PUBLIC_KEY"
 ENV_REALITY_SHORT_ID = "SPARKY_REALITY_SHORT_ID"
 ENV_WG_PRIVATE_KEY = "SPARKY_WG_PRIVATE_KEY"
 ENV_WG_PUBLIC_KEY = "SPARKY_WG_PUBLIC_KEY"
+ENV_AWG_PRIVATE_KEY = "SPARKY_AWG_PRIVATE_KEY"
+ENV_AWG_PUBLIC_KEY = "SPARKY_AWG_PUBLIC_KEY"
 
 # ---------------------------------------------------------------------------
 # i18n — inline fa/en strings (no app.i18n dependency).
@@ -283,6 +371,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "port_auto_hint": "پورت و برچسب خودکار ساخته می‌شوند؛ کافیست ثبت کنید.",
         "zedsecure_bundle": "خروجی ZedSecure",
         "zedsecure_hint": "یک فایل JSON با همهٔ کانفیگ‌های این کاربر، مخصوص اپ ZedSecure.",
+        "file_exports": "فایل‌های کانفیگ",
+        "file_exports_hint": "فایل آمادهٔ دانلود برای پروتکل‌هایی که لینک اشتراک ندارند (OpenVPN ،OpenConnect ،AmneziaWG ،IKEv2).",
         "note": "یادداشت",
         "traffic_limit_gb": "سقف ترافیک (گیگابایت، خالی = نامحدود)",
         "expires_days": "انقضا (روز، خالی = بدون انقضا)",
@@ -332,6 +422,23 @@ STRINGS: dict[str, dict[str, str]] = {
         "sub_token": "توکن اشتراک",
         "created_at": "ساخته شده",
         "details": "جزئیات",
+        "logs": "لاگ‌ها",
+        "log_level": "سطح لاگ",
+        "log_level_hint": "DEBUG جزئیات بیشتری می‌نویسد (برای دیباگ خطاها)؛ بدون ری‌استارت اعمال می‌شود.",
+        "log_download": "دانلود لاگ",
+        "log_clear": "پاک‌کردن لاگ",
+        "log_search": "جستجو در لاگ",
+        "log_search_ph": "متن موردنظر…",
+        "log_filter_level": "سطح",
+        "log_empty": "هنوز لاگی نوشته نشده است.",
+        "log_file": "فایل لاگ",
+        "log_files": "فایل‌های لاگ",
+        "log_cleared": "لاگ پاک شد.",
+        "log_time": "زمان",
+        "log_message": "پیام",
+        "logs_hint": "جدیدترین خط‌ها اول می‌آیند. خطاها و ری‌استارت‌ها با جزئیات کامل اینجا ثبت می‌شوند.",
+        "confirm_clear_logs": "لاگ فعلی پاک شود؟",
+        "size": "اندازه",
         "footer_note": "پنل VPN — فاز ۱",
     },
     "en": {
@@ -370,6 +477,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "port_auto_hint": "Port and tag are auto-generated — just submit.",
         "zedsecure_bundle": "ZedSecure export",
         "zedsecure_hint": "One JSON file with all of this user's configs, made for the ZedSecure app.",
+        "file_exports": "Config files",
+        "file_exports_hint": "Ready-to-download files for the protocols without a share link (OpenVPN, OpenConnect, AmneziaWG, IKEv2).",
         "note": "Note",
         "traffic_limit_gb": "Traffic limit (GB, empty = unlimited)",
         "expires_days": "Expiry (days, empty = never)",
@@ -419,6 +528,23 @@ STRINGS: dict[str, dict[str, str]] = {
         "sub_token": "Subscription token",
         "created_at": "Created",
         "details": "Details",
+        "logs": "Logs",
+        "log_level": "Log level",
+        "log_level_hint": "DEBUG writes more detail (for debugging errors); applies without a restart.",
+        "log_download": "Download log",
+        "log_clear": "Clear log",
+        "log_search": "Search logs",
+        "log_search_ph": "Search text…",
+        "log_filter_level": "Level",
+        "log_empty": "No log lines yet.",
+        "log_file": "Log file",
+        "log_files": "Log files",
+        "log_cleared": "Log cleared.",
+        "log_time": "Time",
+        "log_message": "Message",
+        "logs_hint": "Newest lines first. Errors and restarts are recorded here with full detail.",
+        "confirm_clear_logs": "Clear the current log?",
+        "size": "Size",
         "footer_note": "VPN Panel — Phase 1",
     },
 }
@@ -614,7 +740,7 @@ def _inbound_dict(inbound: Any) -> dict[str, Any]:
 
 
 def _links_for_user(
-    db: Session, user: Any, host: str
+    db: Session, user: Any, host: str, settings: dict[str, Any] | None = None
 ) -> list[dict[str, Any]]:
     """Share links for one user's usable clients (empty when unavailable)."""
     if links_mod is None:
@@ -622,10 +748,22 @@ def _links_for_user(
     links: list[dict[str, Any]] = []
     for client, inbound in _usable_clients(db, user):
         try:
+            inbound_dict = _inbound_dict(inbound)
+            if inbound.protocol == "amneziawg":
+                # The vpn:// link needs the server public key, which
+                # lives in settings (like WireGuard's) — hand it to
+                # the link builder through the inbound stream, where
+                # build_share_link looks for it.
+                stream = dict(inbound_dict.get("stream_json") or {})
+                stream.setdefault(
+                    "awg_server_public_key",
+                    (settings or {}).get("amneziawg_public_key") or "",
+                )
+                inbound_dict["stream_json"] = stream
             link = links_mod.build_share_link(
                 inbound.protocol,
                 _client_dict(client, user),
-                _inbound_dict(inbound),
+                inbound_dict,
                 host,
                 user.name,
             )
@@ -662,30 +800,186 @@ def _privileged_cmd(*args: str) -> list[str]:
     return list(args)
 
 
-def _restart_service(name: str) -> Optional[str]:
-    """``systemctl restart <name>`` (via sudo when available); returns
-    an error string or None."""
+def _run_privileged(*args: str, timeout: int = 30) -> tuple[int, str, str]:
+    """Run a privileged command (via ``sudo -n`` when available).
+
+    Returns ``(returncode, stdout, stderr)``. Every invocation is
+    logged (command, exit code, stderr tail) through the redactor —
+    this is what makes a failed restart debuggable: the old code only
+    surfaced systemctl's generic message (``the control process
+    exited``) while the real error went to the journal. Missing
+    binary / timeout / OSError are reported as 127 / 124 / 1 with the
+    reason on stderr, never raised.
+    """
+    argv = _privileged_cmd(*args)
     try:
         proc = subprocess.run(
-            _privileged_cmd("systemctl", "restart", name),
-            timeout=30,
-            capture_output=True,
-            text=True,
+            argv, timeout=timeout, capture_output=True, text=True
         )
     except FileNotFoundError:
-        return f"systemctl not found; could not restart {name}"
+        detail = f"command not found: {argv[0]}"
+        logger.error("privileged command failed: %s", _redact(detail))
+        return 127, "", detail
     except subprocess.TimeoutExpired:
-        return f"restart of {name} timed out"
+        detail = f"command timed out after {timeout}s: {' '.join(argv)}"
+        logger.error("privileged command failed: %s", _redact(detail))
+        return 124, "", detail
     except OSError as exc:  # noqa: BLE001
-        return f"could not restart {name}: {exc}"
+        detail = f"could not run {' '.join(argv)}: {exc}"
+        logger.error("privileged command failed: %s", _redact(detail))
+        return 1, "", detail
+    tail = (proc.stderr or proc.stdout or "").strip()
     if proc.returncode != 0:
-        err = (proc.stderr or proc.stdout or "").strip()
-        return f"restart of {name} failed: {err or 'exit ' + str(proc.returncode)}"
+        logger.error(
+            "privileged command failed (rc=%s): %s — %s",
+            proc.returncode,
+            " ".join(argv),
+            _redact(tail[-800:]),
+        )
+    else:
+        logger.debug("privileged command ok (rc=0): %s", " ".join(argv))
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def _journal_tail(unit: str, lines: int = 50) -> str:
+    """Last ``lines`` of a service's journal (redacted, "" when unavailable).
+
+    This is what makes a failed restart debuggable: systemd captures
+    the service's own stdout/stderr into the journal, and systemctl
+    only prints the generic job result. Needs the sudoers entry for
+    ``journalctl -u <unit> -n 50 --no-pager`` (the installer grants
+    it); without it this quietly returns "".
+    """
+    rc, stdout, stderr = _run_privileged(
+        "journalctl", "-u", unit, "-n", str(lines), "--no-pager", timeout=15
+    )
+    if rc != 0:
+        return ""
+    tail = (stdout or stderr or "").strip()
+    return _redact(tail[-1500:])
+
+
+def _restart_service(name: str) -> Optional[str]:
+    """``systemctl restart <name>`` (via sudo when available); returns
+    an error string or None. The error carries the command's own
+    output plus the service's journal tail — never again a bare
+    "control process exited" with no underlying output."""
+    rc, stdout, stderr = _run_privileged("systemctl", "restart", name, timeout=30)
+    if rc == 0:
+        return None
+    err = (stderr or stdout or "").strip()
+    detail = _redact(err) or f"exit {rc}"
+    journal = _journal_tail(name)
+    if journal:
+        detail += f"\njournal ({name}):\n{journal}"
+    return f"restart of {name} failed: {detail}"
+
+
+def _privileged_runner(argv: list[str], timeout: int = 30) -> tuple[int, str, str]:
+    """Adapter so ``app.wgapply`` can run commands through sudo."""
+    return _run_privileged(*argv, timeout=timeout)
+
+
+def _apply_wireguard_config(
+    content: str,
+    *,
+    config_path: str,
+    interface: str = "wg0",
+    wg_bin: str = "wg",
+    wg_quick_bin: str = "wg-quick",
+    unit: str = "wg-quick@wg0",
+    extra_interface_keys: tuple[str, ...] = (),
+) -> Optional[str]:
+    """Validate + apply a rendered WireGuard/AmneziaWG server config.
+
+    Returns an error string or None (see ``app.wgapply.apply_config``
+    — validate, ``wg-quick strip``, live ``wg syncconf`` when the
+    interface is up, ``systemctl start`` when it is absent, restore
+    on failure, full output in the error).
+    """
+    if wgapply_mod is None:
+        return "app.wgapply is not available; config was not applied"
+    try:
+        Path(config_path).parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return f"wireguard apply failed: cannot create config dir: {exc}"
+    result = wgapply_mod.apply_config(
+        content,
+        config_path=config_path,
+        interface=interface,
+        wg_bin=wg_bin,
+        wg_quick_bin=wg_quick_bin,
+        unit=unit,
+        run=_privileged_runner,
+        journal=_journal_tail,
+        redact=_redact,
+        extra_interface_keys=extra_interface_keys,
+    )
+    if result.ok:
+        logger.info("wireguard config applied via %s: %s", result.method, interface)
+        return None
+    return f"wireguard apply failed ({result.method}): {result.detail}"
+
+
+def _ikev2_server_id(settings: dict[str, Any]) -> str:
+    """Identity IKEv2 clients dial (must match the server cert SAN).
+
+    Read from the server certificate itself when it exists (always
+    matches), else the configured subscription host / domain.
+    """
+    if ikev2_mod is not None and hasattr(ikev2_mod, "server_id_from_cert_pem"):
+        try:
+            pem = Path(VPN_SERVER_CERT_PATH).read_text(encoding="utf-8")
+            server_id = ikev2_mod.server_id_from_cert_pem(pem)
+            if server_id:
+                return str(server_id)
+        except OSError:
+            pass
+    for key in ("subscription_host", "domain"):
+        value = (settings.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _apply_ikev2_config() -> Optional[str]:
+    """Apply the rendered swanctl.conf: ``swanctl --load-all`` (the
+    load itself is the validator), verified with ``--list-conns``.
+    When the daemon is not running, a restart loads the config from
+    disk and the list is retried. Returns an error string or None."""
+    conn_name = getattr(ikev2_mod, "CONNECTION_NAME", "remote-access")
+    rc, out, err = _run_privileged("swanctl", "--load-all", timeout=30)
+    if rc != 0:
+        detail = _redact((err or out or "").strip()) or f"exit {rc}"
+        # The daemon may simply not be running — a restart loads the
+        # config from disk, so try that before giving up.
+        restart_err = _restart_service("strongswan")
+        if restart_err:
+            return (
+                f"ikev2 apply failed: swanctl --load-all: {detail}; "
+                f"{restart_err}"
+            )
+        rc2, out2, err2 = _run_privileged("swanctl", "--list-conns", timeout=15)
+        if rc2 != 0 or conn_name not in (out2 or ""):
+            detail2 = _redact((err2 or out2 or "").strip()) or f"exit {rc2}"
+            return (
+                "ikev2 apply failed: strongswan restarted but the "
+                f"'{conn_name}' connection is not listed: {detail2}"
+            )
+        return None
+    rc2, out2, err2 = _run_privileged("swanctl", "--list-conns", timeout=15)
+    if rc2 != 0 or conn_name not in (out2 or ""):
+        detail2 = _redact((err2 or out2 or "").strip()) or f"exit {rc2}"
+        return (
+            "ikev2 apply failed: swanctl --load-all succeeded but the "
+            f"'{conn_name}' connection is not listed: {detail2}"
+        )
     return None
 
 
 def rerender_configs(db: Session) -> list[str]:
-    """Re-render Xray / sing-box / WireGuard configs from the DB.
+    """Re-render all server configs from the DB (Xray / sing-box /
+    WireGuard / OpenVPN / ocserv / AmneziaWG / IKEv2).
 
     Returns a list of error strings (empty = all good). Each core is
     attempted independently; one core failing does not stop the others,
@@ -712,6 +1006,10 @@ def rerender_configs(db: Session) -> list[str]:
     xray_inbounds = [i for i in inbounds if i.core == "xray" and i.enabled]
     singbox_inbounds = [i for i in inbounds if i.core == "singbox" and i.enabled]
     wg_inbounds = [i for i in inbounds if i.core == "wireguard" and i.enabled]
+    ovpn_inbounds = [i for i in inbounds if i.core == "openvpn" and i.enabled]
+    ocserv_inbounds = [i for i in inbounds if i.core == "openconnect" and i.enabled]
+    awg_inbounds = [i for i in inbounds if i.core == "amneziawg" and i.enabled]
+    ikev2_inbounds = [i for i in inbounds if i.core == "ikev2" and i.enabled]
 
     if xray_inbounds and xray_mod is not None:
         try:
@@ -790,12 +1088,19 @@ def rerender_configs(db: Session) -> list[str]:
                     server_key,
                     peers,
                     listen_port=int(wg_inbound.port),
+                    # No DNS in the SERVER config: the line only changes
+                    # the server's own resolver, it is never pushed to
+                    # clients, and it makes `wg-quick up` fail hard on
+                    # any system without a resolvconf provider (see
+                    # app.wgapply). Client configs still carry DNS.
+                    dns="",
                 )
-                Path(WG_CONFIG_PATH).parent.mkdir(parents=True, exist_ok=True)
-                tmp = Path(str(WG_CONFIG_PATH) + ".tmp")
-                tmp.write_text(content, encoding="utf-8")
-                tmp.replace(WG_CONFIG_PATH)
-                err = _restart_service("wg-quick@wg0")
+                # Validate + live-reload (syncconf) or start; the
+                # helper owns the atomic file replace and restores the
+                # previous file on failure (see app.wgapply).
+                err = _apply_wireguard_config(
+                    content, config_path=str(WG_CONFIG_PATH)
+                )
                 if err:
                     errors.append(err)
         except Exception as exc:  # noqa: BLE001
@@ -804,6 +1109,226 @@ def rerender_configs(db: Session) -> list[str]:
     elif wg_inbounds:
         errors.append("app.wireguard is not available; wg0.conf was not updated")
 
+    if ovpn_inbounds and openvpn_mod is not None:
+        try:
+            ovpn_inbound = ovpn_inbounds[0]
+            stream = _inbound_dict(ovpn_inbound).get("stream_json") or {}
+            subnet = str(stream.get("subnet") or openvpn_mod.DEFAULT_NETWORK)
+            proto = _stream_transport(stream, "openvpn")
+            content = openvpn_mod.render_server_config(
+                port=int(ovpn_inbound.port),
+                proto=proto,
+                network=subnet,
+                ca_cert=str(CA_CERT_PATH),
+                server_cert=str(VPN_SERVER_CERT_PATH),
+                server_key=str(VPN_SERVER_KEY_PATH),
+                auth_script=str(OVPN_AUTH_SCRIPT_PATH),
+            )
+            problems = openvpn_mod.validate_server_config(
+                content,
+                ca_cert=str(CA_CERT_PATH),
+                server_cert=str(VPN_SERVER_CERT_PATH),
+                server_key=str(VPN_SERVER_KEY_PATH),
+                auth_script=str(OVPN_AUTH_SCRIPT_PATH),
+            )
+            if problems:
+                errors.append("openvpn config invalid: " + "; ".join(problems))
+            else:
+                Path(OVPN_CONFIG_PATH).parent.mkdir(parents=True, exist_ok=True)
+                tmp = Path(str(OVPN_CONFIG_PATH) + ".tmp")
+                tmp.write_text(content, encoding="utf-8")
+                tmp.replace(OVPN_CONFIG_PATH)
+                err = _restart_service("openvpn-server@sparky-manager")
+                if err:
+                    errors.append(err)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"openvpn render/restart failed: {exc}")
+            logger.exception("openvpn re-render failed")
+    elif ovpn_inbounds:
+        errors.append("app.openvpn is not available; openvpn config was not updated")
+
+    if ocserv_inbounds and openconnect_mod is not None:
+        try:
+            ocserv_inbound = ocserv_inbounds[0]
+            stream = _inbound_dict(ocserv_inbound).get("stream_json") or {}
+            subnet = str(stream.get("subnet") or openconnect_mod.DEFAULT_NETWORK)
+            content = openconnect_mod.render_ocserv_config(
+                port=int(ocserv_inbound.port),
+                network=subnet,
+                server_cert=str(VPN_SERVER_CERT_PATH),
+                server_key=str(VPN_SERVER_KEY_PATH),
+                passwd_file=str(OCSERV_PASSWD_PATH),
+            )
+            # ocpasswd first (ocserv reads it at auth time, and the
+            # config validator checks the file exists), then the
+            # config — validated with `ocserv -t` before the live
+            # file is replaced.
+            users = [
+                (c.get("user_name") or "", c.get("password") or "")
+                for c in clients_by_tag.get(ocserv_inbound.tag, [])
+            ]
+            users = [(u, p) for u, p in users if u and p]
+            passwd_text = openconnect_mod.render_ocpasswd(users)
+            Path(OCSERV_PASSWD_PATH).parent.mkdir(parents=True, exist_ok=True)
+            tmp = Path(str(OCSERV_PASSWD_PATH) + ".tmp")
+            tmp.write_text(passwd_text, encoding="utf-8")
+            os.chmod(tmp, 0o660)
+            tmp.replace(OCSERV_PASSWD_PATH)
+            problems = openconnect_mod.validate_ocserv_config(
+                content,
+                passwd_file=str(OCSERV_PASSWD_PATH),
+                server_cert=str(VPN_SERVER_CERT_PATH),
+                server_key=str(VPN_SERVER_KEY_PATH),
+            )
+            if problems:
+                errors.append("ocserv config invalid: " + "; ".join(problems))
+            else:
+                Path(OCSERV_CONFIG_PATH).parent.mkdir(parents=True, exist_ok=True)
+                tmp = Path(str(OCSERV_CONFIG_PATH) + ".tmp")
+                tmp.write_text(content, encoding="utf-8")
+                rc, out, err_out = _run_privileged(
+                    "ocserv", "-t", "-c", str(tmp), timeout=30
+                )
+                if rc != 0:
+                    detail = _redact((err_out or out or "").strip()) or f"exit {rc}"
+                    errors.append(f"ocserv config check failed: {detail}")
+                    tmp.unlink(missing_ok=True)
+                else:
+                    tmp.replace(OCSERV_CONFIG_PATH)
+                    err = _restart_service("ocserv")
+                    if err:
+                        errors.append(err)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"ocserv render/restart failed: {exc}")
+            logger.exception("ocserv re-render failed")
+    elif ocserv_inbounds:
+        errors.append("app.openconnect is not available; ocserv config was not updated")
+
+    if awg_inbounds and amneziawg_mod is not None:
+        try:
+            awg_inbound = awg_inbounds[0]
+            stream = _inbound_dict(awg_inbound).get("stream_json") or {}
+            params = stream.get("awg_params") or {}
+            if not isinstance(params, dict):
+                params = {}
+            problems = amneziawg_mod.validate_awg_params(params)
+            server_key = (settings.get("amneziawg_private_key") or "").strip()
+            if not server_key:
+                server_key = _env_secret(ENV_AWG_PRIVATE_KEY)
+            if not server_key:
+                errors.append(
+                    "amneziawg server key missing (setting "
+                    "amneziawg_private_key / SPARKY_AWG_PRIVATE_KEY); "
+                    "awg0.conf was not updated"
+                )
+            elif problems:
+                errors.append("amneziawg params invalid: " + "; ".join(problems))
+            else:
+                peers: list[dict[str, Any]] = []
+                for client in clients_by_tag.get(awg_inbound.tag, []):
+                    extra = client.get("extra_json") or {}
+                    if not isinstance(extra, dict):
+                        extra = {}
+                    if client.get("uuid") and extra.get("allowed_ips"):
+                        peers.append(
+                            {
+                                "public_key": client["uuid"],
+                                "allowed_ips": extra["allowed_ips"],
+                            }
+                        )
+                content = amneziawg_mod.render_server_config(
+                    server_key,
+                    peers,
+                    listen_port=int(awg_inbound.port),
+                    params=params,
+                )
+                if not amneziawg_mod.is_available():
+                    # Write the config so it is ready when the tools
+                    # appear, but say plainly the protocol cannot run
+                    # yet — never pretend it works.
+                    Path(AWG_CONFIG_PATH).parent.mkdir(parents=True, exist_ok=True)
+                    tmp = Path(str(AWG_CONFIG_PATH) + ".tmp")
+                    tmp.write_text(content, encoding="utf-8")
+                    tmp.replace(AWG_CONFIG_PATH)
+                    errors.append(
+                        "amneziawg is not installed on this server "
+                        "(awg-quick not found); awg0.conf was written "
+                        "but the interface cannot start — install "
+                        "AmneziaWG (see docs/PORTS.md) or disable this "
+                        "inbound"
+                    )
+                else:
+                    err = _apply_wireguard_config(
+                        content,
+                        config_path=str(AWG_CONFIG_PATH),
+                        interface=amneziawg_mod.INTERFACE,
+                        wg_bin="awg",
+                        wg_quick_bin="awg-quick",
+                        unit="awg-quick@awg0",
+                        extra_interface_keys=tuple(
+                            amneziawg_mod.AWG_INTERFACE_KEYS
+                        ),
+                    )
+                    if err:
+                        errors.append(err)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"amneziawg render/restart failed: {exc}")
+            logger.exception("amneziawg re-render failed")
+    elif awg_inbounds:
+        errors.append("app.amneziawg is not available; awg0.conf was not updated")
+
+    if ikev2_inbounds and ikev2_mod is not None:
+        try:
+            ikev2_inbound = ikev2_inbounds[0]
+            stream = _inbound_dict(ikev2_inbound).get("stream_json") or {}
+            subnet = str(stream.get("subnet") or ikev2_mod.DEFAULT_NETWORK)
+            server_id = _ikev2_server_id(settings)
+            if not server_id:
+                errors.append(
+                    "ikev2 server identity is unknown (no server "
+                    "certificate and no domain/subscription host); "
+                    "swanctl.conf was not updated"
+                )
+            else:
+                users = [
+                    (
+                        int(c.get("user_id") or 0),
+                        c.get("user_name") or "",
+                        c.get("password") or "",
+                    )
+                    for c in clients_by_tag.get(ikev2_inbound.tag, [])
+                ]
+                users = [(uid, name, pw) for uid, name, pw in users if name and pw]
+                content = ikev2_mod.render_swanctl_config(
+                    users=users,
+                    server_id=server_id,
+                    network=subnet,
+                )
+                problems = ikev2_mod.validate_swanctl_config(content)
+                if problems:
+                    errors.append("ikev2 config invalid: " + "; ".join(problems))
+                else:
+                    Path(SWANCTL_CONFIG_PATH).parent.mkdir(parents=True, exist_ok=True)
+                    tmp = Path(str(SWANCTL_CONFIG_PATH) + ".tmp")
+                    tmp.write_text(content, encoding="utf-8")
+                    tmp.replace(SWANCTL_CONFIG_PATH)
+                    err = _apply_ikev2_config()
+                    if err:
+                        errors.append(err)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"ikev2 render/apply failed: {exc}")
+            logger.exception("ikev2 re-render failed")
+    elif ikev2_inbounds:
+        errors.append("app.ikev2 is not available; swanctl.conf was not updated")
+
+    if errors:
+        logger.error(
+            "config re-render finished with %d error(s): %s",
+            len(errors),
+            _redact("; ".join(errors)),
+        )
+    else:
+        logger.info("config re-render ok")
     return errors
 
 
@@ -1006,6 +1531,28 @@ def ensure_defaults(db: Session) -> Optional[str]:
                 logger.exception("wireguard keypair generation failed")
         db.commit()
 
+    # AmneziaWG server keypair: env first, generate only if absent.
+    # A separate keypair from WireGuard's — wg0 and awg0 are different
+    # interfaces and must never share a server key.
+    awg_now = {row.key: (row.value or "") for row in db.query(Setting).all()}
+    if not awg_now.get("amneziawg_private_key"):
+        env_awg_private = _env_secret(ENV_AWG_PRIVATE_KEY)
+        env_awg_public = _env_secret(ENV_AWG_PUBLIC_KEY)
+        if env_awg_private:
+            db.add(Setting(key="amneziawg_private_key", value=env_awg_private))
+            if env_awg_public:
+                db.add(Setting(key="amneziawg_public_key", value=env_awg_public))
+        elif wireguard_mod is not None and hasattr(wireguard_mod, "generate_keypair"):
+            try:
+                pair = wireguard_mod.generate_keypair()
+                private, public = (pair[0], pair[1]) if isinstance(pair, (list, tuple)) else (str(pair), "")
+                db.add(Setting(key="amneziawg_private_key", value=private))
+                if public:
+                    db.add(Setting(key="amneziawg_public_key", value=public))
+            except Exception:  # noqa: BLE001
+                logger.exception("amneziawg keypair generation failed")
+        db.commit()
+
     if db.query(Inbound).count() == 0:
         # One transaction per row, so a single conflicting row (e.g.
         # UNIQUE(port, protocol)) is skipped with a warning instead of
@@ -1092,6 +1639,16 @@ async def lifespan(app: FastAPI):
         db = SessionLocal()
         try:
             ensure_defaults(db)
+            if panel_log_mod is not None:
+                # Log level from the DB setting (Settings page); INFO
+                # when unset. Applied here so a restart honours it.
+                try:
+                    level = get_settings(db).get("log_level", "")
+                    if level:
+                        panel_log_mod.apply_log_level(level)
+                except Exception:  # noqa: BLE001
+                    logger.exception("applying log level failed")
+            logger.info("sparky-manager started")
         except Exception:  # noqa: BLE001
             logger.exception("seeding defaults failed")
         finally:
@@ -1255,6 +1812,33 @@ def _new_client_credentials(inbound: Any) -> dict[str, Any]:
         else:
             creds["password"] = secrets.token_urlsafe(24)
             creds["uuid"] = None
+    elif protocol == "amneziawg":
+        # Same key layout as WireGuard (private in `password`, public
+        # in `uuid`); the AWG renderer reads the same fields.
+        if wireguard_mod is not None and hasattr(wireguard_mod, "generate_keypair"):
+            try:
+                pair = wireguard_mod.generate_keypair()
+                if isinstance(pair, dict):
+                    creds["password"] = pair.get("private_key") or pair.get("private")
+                    creds["uuid"] = pair.get("public_key") or pair.get("public")
+                elif isinstance(pair, (list, tuple)) and len(pair) >= 2:
+                    creds["password"], creds["uuid"] = str(pair[0]), str(pair[1])
+                else:
+                    creds["password"] = str(pair)
+            except Exception:  # noqa: BLE001
+                logger.exception("amneziawg keypair generation failed")
+                creds["password"] = secrets.token_urlsafe(24)
+                creds["uuid"] = None
+        else:
+            creds["password"] = secrets.token_urlsafe(24)
+            creds["uuid"] = None
+    elif protocol in ("openvpn", "openconnect", "ikev2"):
+        # Username/password auth: the username is the panel user name
+        # (read from the client dict at render time), the password is
+        # stored here. OpenVPN checks it via scripts/ovpn-auth.py,
+        # ocserv via the ocpasswd file, IKEv2 via the EAP secrets in
+        # swanctl.conf.
+        creds["password"] = secrets.token_urlsafe(16)
     else:
         creds["uuid"] = str(uuid.uuid4())
         creds["password"] = secrets.token_urlsafe(12)
@@ -1293,6 +1877,37 @@ def _next_wg_address(db: Session) -> str:
     raise ValueError("WireGuard address pool (10.8.0.0/24) exhausted")
 
 
+def _next_awg_address(db: Session) -> str:
+    """Next free AmneziaWG peer address (10.8.1.2/32 … 10.8.1.254/32).
+
+    A separate pool from WireGuard (10.8.0.0/24) — the two
+    interfaces (wg0 / awg0) must never hand out the same address.
+    The server itself is 10.8.1.1 (see ``render_server_config`` in
+    ``app.amneziawg``).
+    """
+    used: set[int] = set()
+    for (raw,) in (
+        db.query(Client.extra_json)
+        .join(Inbound, Client.inbound_id == Inbound.id)
+        .filter(Inbound.protocol == "amneziawg")
+        .all()
+    ):
+        if not raw:
+            continue
+        try:
+            extra = json.loads(raw) if isinstance(raw, str) else dict(raw)
+            allowed = str(extra.get("allowed_ips") or "")
+        except (ValueError, TypeError):
+            continue
+        match = re.search(r"10\.8\.1\.(\d+)/32", allowed)
+        if match:
+            used.add(int(match.group(1)))
+    for octet in range(2, 255):
+        if octet not in used:
+            return f"10.8.1.{octet}/32"
+    raise ValueError("AmneziaWG address pool (10.8.1.0/24) exhausted")
+
+
 def _wg_pubkey_map(db: Session) -> dict[str, int]:
     """WireGuard peer public key -> user id, for traffic attribution
     (``traffic.sync_traffic`` only attributes ``wg show`` output
@@ -1321,6 +1936,12 @@ def _create_clients_for_user(db: Session, user: Any) -> None:
                 extra_json = json.dumps({"allowed_ips": _next_wg_address(db)})
             except ValueError:
                 logger.warning("no free WireGuard address for user %s", user.name)
+        if inbound.protocol == "amneziawg":
+            # Same idea, separate pool (10.8.1.0/24 — never the WG pool).
+            try:
+                extra_json = json.dumps({"allowed_ips": _next_awg_address(db)})
+            except ValueError:
+                logger.warning("no free AmneziaWG address for user %s", user.name)
         db.add(
             Client(
                 user_id=user.id,
@@ -1339,11 +1960,29 @@ def _create_clients_for_user(db: Session, user: Any) -> None:
 
 def _stream_transport(stream: dict[str, Any], protocol: str) -> str:
     """Transport ('tcp'/'udp') for clash checks: explicit value wins,
-    else the protocol default (UDP for hysteria2/tuic/wireguard)."""
+    else the protocol default (UDP for hysteria2/tuic/wireguard/
+    amneziawg/openvpn)."""
     transport = str(stream.get("transport") or "").lower()
     if transport in ("tcp", "udp"):
         return transport
-    return "udp" if protocol in ("hysteria2", "tuic", "wireguard", "amneziawg") else "tcp"
+    return (
+        "udp"
+        if protocol in ("hysteria2", "tuic", "wireguard", "amneziawg", "openvpn")
+        else "tcp"
+    )
+
+
+def _inbound_transports(stream: dict[str, Any], protocol: str) -> set[str]:
+    """Every transport an inbound binds.
+
+    OpenConnect binds TCP *and* UDP on the same port, so it occupies
+    both — a UDP inbound on that port would fail to bind even though
+    the single-transport check would allow it. Every other protocol
+    binds one transport.
+    """
+    if protocol == "openconnect":
+        return {"tcp", "udp"}
+    return {_stream_transport(stream, protocol)}
 
 
 # ---------------------------------------------------------------------------
@@ -1365,8 +2004,8 @@ def _used_ports_by_transport(db: Session) -> dict[str, set[int]]:
     """Ports in use per transport, from the DB inbounds."""
     used: dict[str, set[int]] = {"tcp": set(), "udp": set()}
     for inbound in db.query(Inbound).all():
-        transport = _stream_transport(inbound.stream, inbound.protocol)
-        used.setdefault(transport, set()).add(int(inbound.port))
+        for transport in _inbound_transports(inbound.stream, inbound.protocol):
+            used.setdefault(transport, set()).add(int(inbound.port))
     return used
 
 
@@ -1414,6 +2053,38 @@ def suggest_free_port(db: Session, transport: str = "tcp") -> int:
         if port not in blocked:
             return port
     raise ValueError("no free port found in 10000-60000")
+
+
+# Conventional default port per protocol (tried first when the admin
+# leaves the port empty; falls back to a random free port when taken).
+PREFERRED_PORTS = {
+    "openvpn": 1194,
+    "openconnect": 4433,
+    "amneziawg": 51821,
+    "ikev2": 500,
+}
+
+
+def suggest_protocol_port(db: Session, protocol: str, transport: str) -> int:
+    """Preferred port for a protocol, else a random free one.
+
+    OpenVPN's well-known port is 1194, OpenConnect's is 443 (taken by
+    the default VLESS/Hysteria2 inbounds, so 4433), AmneziaWG's is
+    51821 (next to WireGuard's 51820), IKEv2's is 500 (UDP 500 +
+    4500 are reserved for it by design).
+    """
+    preferred = PREFERRED_PORTS.get(protocol)
+    if preferred is not None:
+        used = _used_ports_by_transport(db).get(transport, set())
+        blocked = set(used) | {int(PANEL_PORT)}
+        if protocol == "ikev2":
+            # Port 500 needs root to bind-probe and the panel runs
+            # unprivileged, so only the DB usage is checked here.
+            if preferred not in blocked:
+                return preferred
+        elif preferred not in blocked and _port_is_bindable(preferred):
+            return preferred
+    return suggest_free_port(db, transport)
 
 
 def suggest_inbound_tag(db: Session, protocol: str, port: int) -> str:
@@ -1501,12 +2172,14 @@ def login_submit(
     if admin is None or verify_password is None or not verify_password(password, admin.password_hash):
         if record_failed_login is not None:
             record_failed_login(ip)
+        logger.warning("login failed for %r from %s", username, ip)
         return templates.TemplateResponse(request, "login.html",
             _template_ctx(request, {"admin": None, "error": t["wrong_credentials"]}),
             status_code=401,
         )
     admin.last_login_at = datetime.now(timezone.utc)
     db.commit()
+    logger.info("login ok for %r from %s", username, ip)
     token = create_session(db, admin, ip)
     response = _redirect("/dashboard", request)
     _set_session_cookie(response, request, token)
@@ -1627,6 +2300,7 @@ def create_user(
     db.commit()
     _create_clients_for_user(db, user)
     _audit(db, admin.id, "user.create", name)
+    logger.info("user created: %s", name)
     errors = rerender_configs(db)
     err = "; ".join(errors) if errors else ""
     if err:
@@ -1647,7 +2321,7 @@ def user_detail(
     settings = get_settings(db)
     host = _sub_host(request, settings)
     base = str(request.base_url).rstrip("/") + WEB_PATH
-    links = _links_for_user(db, user, host)
+    links = _links_for_user(db, user, host, settings)
     clients = (
         db.query(Client)
         .filter(Client.user_id == user.id)
@@ -1668,6 +2342,7 @@ def user_detail(
                 "sub_url": f"{base}/sub/{user.sub_token}",
                 "zedsecure_url": f"{base}/sub/{user.sub_token}/zedsecure.json",
                 "user_url": f"{base}/u/{user.sub_token}",
+                "file_urls": _file_export_urls(db, user, base),
                 "host": host,
             },
         ),
@@ -1687,6 +2362,7 @@ def toggle_user(
     user.enabled = not user.enabled
     db.commit()
     _audit(db, admin.id, "user.toggle", f"{user.name} enabled={user.enabled}")
+    logger.info("user toggled: %s enabled=%s", user.name, user.enabled)
     errors = rerender_configs(db)
     t = t_for(get_lang(request))
     err = (t["rerender_failed"] + "; ".join(errors)) if errors else ""
@@ -1708,6 +2384,7 @@ def delete_user(
     db.delete(user)
     db.commit()
     _audit(db, admin.id, "user.delete", name)
+    logger.info("user deleted: %s", name)
     errors = rerender_configs(db)
     t = t_for(get_lang(request))
     err = (t["rerender_failed"] + "; ".join(errors)) if errors else ""
@@ -1727,6 +2404,7 @@ def rotate_token(
     user.sub_token = secrets.token_urlsafe(24)
     db.commit()
     _audit(db, admin.id, "user.rotate_token", user.name)
+    logger.info("subscription token rotated for %s", user.name)
     # No core re-render needed: the subscription token is not in core configs.
     return _redirect(f"/users/{user_id}", request)
 
@@ -1781,17 +2459,29 @@ def create_inbound(
     protocol = protocol.strip().lower()
     network = (network or "tcp").strip() or "tcp"
     transport = _stream_transport({"transport": network}, protocol)
+    # The new protocols fix their own transport: IKEv2 and AmneziaWG
+    # are UDP-only, OpenConnect binds TCP+UDP on one port (its clash
+    # check uses both — see _inbound_transports).
+    if protocol in ("ikev2", "amneziawg"):
+        transport = "udp"
+    elif protocol == "openconnect":
+        transport = "tcp"
     # Auto-generation: an empty port (0) means "pick a free one" and
     # an empty tag means "derive it from protocol + port" — the form
     # comes pre-filled with both, so accepting the defaults just works.
+    # The preferred port per protocol is tried first (1194 for
+    # OpenVPN, 4433 for OpenConnect, 51821 for AmneziaWG, 500 for
+    # IKEv2) and a random free port is the fallback.
     if not port:
         try:
-            port = suggest_free_port(db, transport)
+            port = suggest_protocol_port(db, protocol, transport)
         except ValueError:
             return _redirect("/inbounds", request, err=t["invalid_port"])
     if not 1 <= port <= 65535:
         return _redirect("/inbounds", request, err=t["invalid_port"])
-    if port in RESERVED_PORTS:
+    # UDP 500/4500 are reserved for IKEv2 by design — except port 500
+    # itself, which is exactly what an IKEv2 inbound uses.
+    if port in RESERVED_PORTS and not (protocol == "ikev2" and port == 500):
         return _redirect("/inbounds", request, err=t["port_reserved"])
     if not tag:
         tag = suggest_inbound_tag(db, protocol, port)
@@ -1803,7 +2493,33 @@ def create_inbound(
         "network": network,
         "transport": transport,
     }
-    if sni.strip():
+    # Protocol-specific defaults (the renderers read these from the
+    # inbound stream): the client subnet, and the AmneziaWG
+    # obfuscation parameters (generated once here, shared by the
+    # server and every client of the inbound).
+    if protocol == "openvpn":
+        stream["subnet"] = (
+            openvpn_mod.DEFAULT_NETWORK if openvpn_mod is not None else "10.9.0.0/24"
+        )
+    elif protocol == "openconnect":
+        stream["subnet"] = (
+            openconnect_mod.DEFAULT_NETWORK
+            if openconnect_mod is not None
+            else "10.10.10.0/24"
+        )
+    elif protocol == "amneziawg":
+        stream["subnet"] = (
+            amneziawg_mod.DEFAULT_NETWORK
+            if amneziawg_mod is not None
+            else "10.8.1.0/24"
+        )
+        if amneziawg_mod is not None:
+            stream["awg_params"] = amneziawg_mod.generate_awg_params()
+    elif protocol == "ikev2":
+        stream["subnet"] = (
+            ikev2_mod.DEFAULT_NETWORK if ikev2_mod is not None else "10.20.0.0/24"
+        )
+    if sni.strip() and core in ("xray", "singbox"):
         reality_block: dict[str, Any] = {"sni": sni.strip(), "dest": f"{sni.strip()}:443"}
         if protocol == "vless":
             # A fresh keypair per inbound (like 3X-UI's "Get New Cert"):
@@ -1830,7 +2546,9 @@ def create_inbound(
                 existing_stream = json.loads(existing.stream_json)
             except ValueError:
                 existing_stream = {}
-        if existing.port == port and _stream_transport(existing_stream, existing.protocol) == stream["transport"]:
+        if existing.port == port and transport in _inbound_transports(
+            existing_stream, existing.protocol
+        ):
             return _redirect("/inbounds", request, err=t["port_in_use"])
     inbound = Inbound(
         tag=tag,
@@ -1844,6 +2562,7 @@ def create_inbound(
     db.add(inbound)
     db.commit()
     _audit(db, admin.id, "inbound.create", f"{tag} {protocol}:{port}")
+    logger.info("inbound created: %s %s:%s", tag, protocol, port)
     errors = rerender_configs(db)
     err = (t["rerender_failed"] + "; ".join(errors)) if errors else ""
     return _redirect("/inbounds", request, err=err)
@@ -1862,6 +2581,7 @@ def toggle_inbound(
     inbound.enabled = not inbound.enabled
     db.commit()
     _audit(db, admin.id, "inbound.toggle", f"{inbound.tag} enabled={inbound.enabled}")
+    logger.info("inbound toggled: %s enabled=%s", inbound.tag, inbound.enabled)
     errors = rerender_configs(db)
     t = t_for(get_lang(request))
     err = (t["rerender_failed"] + "; ".join(errors)) if errors else ""
@@ -1883,6 +2603,7 @@ def delete_inbound(
     db.delete(inbound)
     db.commit()
     _audit(db, admin.id, "inbound.delete", tag)
+    logger.info("inbound deleted: %s", tag)
     errors = rerender_configs(db)
     t = t_for(get_lang(request))
     err = (t["rerender_failed"] + "; ".join(errors)) if errors else ""
@@ -1912,17 +2633,99 @@ def save_settings(
     domain: str = Form(""),
     subscription_host: str = Form(""),
     reality_sni: str = Form(""),
+    log_level: str = Form(""),
     admin: Any = Depends(require_admin),
     db: Session = Depends(db_session),
 ):
     set_setting(db, "domain", domain.strip())
     set_setting(db, "subscription_host", subscription_host.strip())
     set_setting(db, "reality_sni", reality_sni.strip() or "www.microsoft.com")
+    if log_level.strip() and panel_log_mod is not None:
+        # Applies immediately (no restart); the value is validated
+        # against the known levels inside apply_log_level.
+        applied = panel_log_mod.apply_log_level(log_level.strip())
+        set_setting(db, "log_level", applied)
+        logger.info("log level set to %s by %s", applied, admin.username)
     _audit(db, admin.id, "settings.update", f"domain={domain.strip()!r}")
     errors = rerender_configs(db)
     t = t_for(get_lang(request))
     err = (t["rerender_failed"] + "; ".join(errors)) if errors else ""
     return _redirect("/settings", request, err=err)
+
+
+# ---------------------------------------------------------------------------
+# Logs (admin only) — the file log, viewable / searchable / downloadable
+# from the panel, so a failed restart can be debugged without SSH.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/logs", response_class=HTMLResponse)
+def logs_page(
+    request: Request,
+    level: str = Query(""),
+    q: str = Query(""),
+    limit: int = Query(500),
+    admin: Any = Depends(require_admin),
+    db: Session = Depends(db_session),
+):
+    if panel_log_mod is None:
+        lines, total, files, log_path = [], 0, [], ""
+    else:
+        log_path = panel_log_mod.get_log_path()
+        try:
+            limit_n = max(50, min(int(limit), 2000))
+        except (TypeError, ValueError):
+            limit_n = 500
+        lines, total = panel_log_mod.read_log_lines(
+            log_path, level=level or None, query=q or None, limit=limit_n
+        )
+        files = panel_log_mod.list_log_files()
+    return templates.TemplateResponse(request, "logs.html",
+        _template_ctx(
+            request,
+            {
+                "admin": admin,
+                "lines": lines,
+                "total": total,
+                "level": level,
+                "q": q,
+                "limit": limit,
+                "files": files,
+                "log_path": str(log_path),
+            },
+        ),
+    )
+
+
+@app.get("/logs/download")
+def logs_download(
+    request: Request,
+    admin: Any = Depends(require_admin),
+):
+    if panel_log_mod is None:
+        raise HTTPException(status_code=503, detail="logging unavailable")
+    path = panel_log_mod.get_log_path()
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="log file not found")
+    return FileResponse(path, filename="panel.log", media_type="text/plain")
+
+
+@app.post("/logs/clear")
+def logs_clear(
+    request: Request,
+    admin: Any = Depends(require_admin),
+    db: Session = Depends(db_session),
+):
+    t = t_for(get_lang(request))
+    if panel_log_mod is not None:
+        if panel_log_mod.clear_log():
+            logger.info("log cleared by admin %s", admin.username)
+            _audit(db, admin.id, "logs.clear", "")
+            return _redirect("/logs", request, msg=t["log_cleared"])
+        logger.exception("clearing the log file failed")
+        return _redirect("/logs", request, err=t["log_clear"])
+    return _redirect("/logs", request, err=t["log_clear"])
+
 
 # ---------------------------------------------------------------------------
 # Public per-user pages and subscriptions (token only, no admin auth)
@@ -1950,7 +2753,7 @@ def user_page(request: Request, token: str, db: Session = Depends(db_session)):
     host = _sub_host(request, settings)
     base = str(request.base_url).rstrip("/") + WEB_PATH
     usable = _user_usable(db, user)
-    links = _links_for_user(db, user, host) if usable else []
+    links = _links_for_user(db, user, host, settings) if usable else []
     return templates.TemplateResponse(request, "user_detail.html",
         _template_ctx(
             request,
@@ -1965,11 +2768,19 @@ def user_page(request: Request, token: str, db: Session = Depends(db_session)):
                 "sub_url": f"{base}/sub/{user.sub_token}",
                 "zedsecure_url": f"{base}/sub/{user.sub_token}/zedsecure.json",
                 "user_url": f"{base}/u/{user.sub_token}",
+                "file_urls": _file_export_urls(db, user, base) if usable else {},
                 "host": host,
                 "error": "" if usable else t_for(get_lang(request))["user_unusable"],
             },
         ),
     )
+
+
+def _token_fp(token: str) -> str:
+    """Short fingerprint for a subscription token (never the token)."""
+    if panel_log_mod is not None:
+        return panel_log_mod.token_fingerprint(token)
+    return "?"
 
 
 def _userinfo_header(user: Any) -> str:
@@ -2060,6 +2871,180 @@ def _wireguard_conf_for(
         return None
 
 
+def _ca_cert_pem() -> str:
+    """PEM text of the panel CA ("" when it has not been generated yet)."""
+    try:
+        return Path(CA_CERT_PATH).read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _openvpn_config_for(
+    user: Any, client: Any, inbound: Any, host: str, settings: dict[str, Any]
+) -> Optional[str]:
+    """Rendered client ``.ovpn`` for one user (None when unavailable)."""
+    if openvpn_mod is None:
+        return None
+    ca_pem = _ca_cert_pem()
+    if not ca_pem:
+        return None
+    stream = _inbound_dict(inbound).get("stream_json") or {}
+    return openvpn_mod.render_client_config(
+        host=host,
+        port=int(inbound.port),
+        proto=_stream_transport(stream, "openvpn"),
+        ca_cert_pem=ca_pem,
+    )
+
+
+def _openconnect_profile_for(
+    user: Any, client: Any, inbound: Any, host: str, settings: dict[str, Any]
+) -> Optional[str]:
+    """Rendered AnyConnect profile XML for one user (None when unavailable)."""
+    if openconnect_mod is None:
+        return None
+    return openconnect_mod.render_profile_xml(host=host, port=int(inbound.port))
+
+
+def _amneziawg_conf_for(
+    user: Any, client: Any, inbound: Any, host: str, settings: dict[str, Any]
+) -> Optional[str]:
+    """Rendered AmneziaWG client ``.conf`` for one user (None when unavailable)."""
+    if amneziawg_mod is None:
+        return None
+    client_dict = _client_dict(client, user)
+    extra = client_dict.get("extra_json") or {}
+    if not isinstance(extra, dict):
+        extra = {}
+    private_key = (client_dict.get("password") or "").strip()
+    address = str(extra.get("allowed_ips") or "").strip()
+    server_public = (settings.get("amneziawg_public_key") or "").strip()
+    if not private_key or not address or not server_public:
+        return None
+    stream = _inbound_dict(inbound).get("stream_json") or {}
+    params = stream.get("awg_params") or {}
+    if not isinstance(params, dict):
+        params = {}
+    return amneziawg_mod.render_peer_config(
+        private_key,
+        address,
+        server_public,
+        host,
+        server_port=int(inbound.port),
+        params=params,
+    )
+
+
+def _ikev2_mobileconfig_for(
+    user: Any, client: Any, inbound: Any, host: str, settings: dict[str, Any]
+) -> Optional[str]:
+    """Rendered ``.mobileconfig`` profile for one user (None when unavailable)."""
+    if ikev2_mod is None:
+        return None
+    client_dict = _client_dict(client, user)
+    user_name = client_dict.get("user_name") or ""
+    password = (client_dict.get("password") or "").strip()
+    if not user_name or not password:
+        return None
+    server_id = _ikev2_server_id(settings)
+    if not server_id:
+        return None
+    ca_der = ikev2_mod.load_ca_cert_der(CA_CERT_PATH)
+    blob = ikev2_mod.render_mobileconfig(
+        user_name=user_name,
+        eap_password=password,
+        server_host=host,
+        server_id=server_id,
+        ca_cert_der=ca_der,
+    )
+    return blob.decode("utf-8")
+
+
+# Token-gated file exports: (filename, media type, builder) per protocol.
+_FILE_EXPORTS: dict[str, tuple[str, str, Any]] = {
+    "openvpn": (
+        "openvpn.ovpn",
+        "text/plain; charset=utf-8",
+        _openvpn_config_for,
+    ),
+    "openconnect": (
+        "openconnect.xml",
+        "application/xml; charset=utf-8",
+        _openconnect_profile_for,
+    ),
+    "amneziawg": (
+        "amneziawg.conf",
+        "text/plain; charset=utf-8",
+        _amneziawg_conf_for,
+    ),
+    "ikev2": (
+        "ikev2.mobileconfig",
+        "application/octet-stream",
+        _ikev2_mobileconfig_for,
+    ),
+}
+
+
+def _user_file_export(
+    db: Session, user: Any, protocol: str, host: str, settings: dict[str, Any]
+) -> tuple[str, str, str] | None:
+    """``(filename, media_type, content)`` for the user's first usable
+    inbound of ``protocol`` — the file export for that protocol."""
+    spec = _FILE_EXPORTS.get(protocol)
+    if spec is None:
+        return None
+    filename, media_type, builder = spec
+    for client, inbound in _usable_clients(db, user):
+        if inbound.protocol != protocol:
+            continue
+        try:
+            content = builder(user, client, inbound, host, settings)
+        except Exception:  # noqa: BLE001
+            logger.exception("file export failed for %s", inbound.tag)
+            continue
+        if content:
+            return filename, media_type, content
+    return None
+
+
+def _user_file_response(
+    request: Request, token: str, db: Session, protocol: str
+) -> Response:
+    """Token-gated file export (same 403 rules as the feeds)."""
+    user = db.query(User).filter(User.sub_token == token).first()
+    if user is None or not _user_usable(db, user):
+        logger.warning(
+            "file export 403 for token %s (%s)", _token_fp(token), protocol
+        )
+        return Response(content=b"", status_code=403)
+    settings = get_settings(db)
+    host = _sub_host(request, settings)
+    found = _user_file_export(db, user, protocol, host, settings)
+    if found is None:
+        return Response(content=b"", status_code=404)
+    filename, media_type, content = found
+    logger.info(
+        "file export served: user=%s protocol=%s token=%s",
+        user.name, protocol, _token_fp(token),
+    )
+    return Response(
+        content=content.encode("utf-8"),
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _file_export_urls(db: Session, user: Any, base: str) -> dict[str, str]:
+    """File-export download URLs for the protocols the user has a
+    usable inbound for (shown on the user pages)."""
+    urls: dict[str, str] = {}
+    protocols = {inbound.protocol for _, inbound in _usable_clients(db, user)}
+    for protocol, (filename, _media, _builder) in _FILE_EXPORTS.items():
+        if protocol in protocols:
+            urls[protocol] = f"{base}/sub/{user.sub_token}/{filename}"
+    return urls
+
+
 def _build_zedsecure_bundle(
     db: Session, user: Any, host: str, settings: dict[str, Any]
 ) -> dict[str, Any]:
@@ -2069,17 +3054,23 @@ def _build_zedsecure_bundle(
     metadata (name / expiry / traffic), one ``configs`` entry per
     usable (client, inbound) — share link when one exists, the
     sing-box outbound object (``singbox_endpoint`` for WireGuard,
-    which is an endpoint since sing-box 1.13), and the WireGuard
-    ``.conf`` text for WireGuard inbounds — plus the flat ``links``
-    list and the whole sing-box feed under ``singbox`` (including
-    the ShadowTLS detour outbound and the WireGuard endpoint).
-    Built only from the existing per-user builders; no protocol
-    logic is duplicated here.
+    which is an endpoint since sing-box 1.13), the WireGuard
+    ``.conf`` text for WireGuard inbounds, and the file exports for
+    the protocols that have no share-link / sing-box form: the
+    OpenVPN ``.ovpn`` text (``openvpn_config``), the OpenConnect
+    profile + credentials (``openconnect``), the AmneziaWG ``.conf``
+    text (``amneziawg_conf`` — the ``vpn://`` link is the share
+    link), and the IKEv2 ``.mobileconfig`` text
+    (``ikev2_mobileconfig``) — plus the flat ``links`` list and the
+    whole sing-box feed under ``singbox`` (including the ShadowTLS
+    detour outbound and the WireGuard endpoint). Built only from
+    the existing per-user builders; no protocol logic is duplicated
+    here.
     """
     configs: list[dict[str, Any]] = []
     links: list[str] = []
     singbox_outbounds: list[dict[str, Any]] = []
-    link_by_tag = {e["inbound"].tag: e["link"] for e in _links_for_user(db, user, host)}
+    link_by_tag = {e["inbound"].tag: e["link"] for e in _links_for_user(db, user, host, settings)}
     for client, inbound in _usable_clients(db, user):
         entry: dict[str, Any] = {
             "tag": inbound.tag,
@@ -2106,6 +3097,32 @@ def _build_zedsecure_bundle(
             conf = _wireguard_conf_for(client, inbound, host, settings)
             if conf:
                 entry["wireguard_conf"] = conf
+        if inbound.protocol == "openvpn":
+            conf = _openvpn_config_for(user, client, inbound, host, settings)
+            if conf:
+                entry["openvpn_config"] = conf
+        if inbound.protocol == "openconnect":
+            profile = _openconnect_profile_for(
+                user, client, inbound, host, settings
+            )
+            if profile:
+                entry["openconnect"] = {
+                    "host": host,
+                    "port": int(inbound.port),
+                    "username": user.name,
+                    "password": client.password or "",
+                    "profile_xml": profile,
+                }
+        if inbound.protocol == "amneziawg":
+            conf = _amneziawg_conf_for(user, client, inbound, host, settings)
+            if conf:
+                entry["amneziawg_conf"] = conf
+        if inbound.protocol == "ikev2":
+            mobileconfig = _ikev2_mobileconfig_for(
+                user, client, inbound, host, settings
+            )
+            if mobileconfig:
+                entry["ikev2_mobileconfig"] = mobileconfig
         configs.append(entry)
     feed = {"outbounds": singbox_outbounds}
     if subscription_mod is not None:
@@ -2135,6 +3152,7 @@ def _subscription_response(request: Request, token: str, db: Session) -> Respons
     user = db.query(User).filter(User.sub_token == token).first()
     if user is None or not _user_usable(db, user):
         # Disabled / expired / over-quota / unknown: 403 with an EMPTY body.
+        logger.warning("subscription 403 for token %s", _token_fp(token))
         return Response(content=b"", status_code=403)
     if subscription_mod is None:
         return Response(content=b"", status_code=503)
@@ -2154,6 +3172,10 @@ def _subscription_response(request: Request, token: str, db: Session) -> Respons
     userinfo = _userinfo_header(user)
     if userinfo:
         headers["Subscription-Userinfo"] = userinfo
+    logger.info(
+        "subscription served: user=%s format=%s token=%s",
+        user.name, chosen, _token_fp(token),
+    )
 
     if chosen == "singbox":
         outbounds: list[dict[str, Any]] = []
@@ -2168,7 +3190,7 @@ def _subscription_response(request: Request, token: str, db: Session) -> Respons
             return Response(content=b"", status_code=500)
         return JSONResponse(content=feed, headers=headers)
 
-    links = [entry["link"] for entry in _links_for_user(db, user, host)]
+    links = [entry["link"] for entry in _links_for_user(db, user, host, settings)]
     try:
         body = subscription_mod.build_v2rayng_feed(links)
     except Exception:  # noqa: BLE001
@@ -2196,15 +3218,54 @@ def zedsecure_bundle(request: Request, token: str, db: Session = Depends(db_sess
     invalidates the old bundle URL."""
     user = db.query(User).filter(User.sub_token == token).first()
     if user is None or not _user_usable(db, user):
+        logger.warning("zedsecure bundle 403 for token %s", _token_fp(token))
         return Response(content=b"", status_code=403)
     settings = get_settings(db)
     host = _sub_host(request, settings)
     bundle = _build_zedsecure_bundle(db, user, host, settings)
+    logger.info(
+        "zedsecure bundle served: user=%s configs=%d token=%s",
+        user.name, len(bundle.get("configs", [])), _token_fp(token),
+    )
     headers: dict[str, str] = {}
     userinfo = _userinfo_header(user)
     if userinfo:
         headers["Subscription-Userinfo"] = userinfo
     return JSONResponse(content=bundle, headers=headers)
+
+
+@app.get("/sub/{token}/openvpn.ovpn")
+def subscription_openvpn(
+    request: Request, token: str, db: Session = Depends(db_session)
+):
+    """Token-gated ``.ovpn`` download for the user's OpenVPN inbound."""
+    return _user_file_response(request, token, db, "openvpn")
+
+
+@app.get("/sub/{token}/openconnect.xml")
+def subscription_openconnect(
+    request: Request, token: str, db: Session = Depends(db_session)
+):
+    """Token-gated AnyConnect profile download for the user's
+    OpenConnect inbound."""
+    return _user_file_response(request, token, db, "openconnect")
+
+
+@app.get("/sub/{token}/amneziawg.conf")
+def subscription_amneziawg(
+    request: Request, token: str, db: Session = Depends(db_session)
+):
+    """Token-gated ``.conf`` download for the user's AmneziaWG inbound."""
+    return _user_file_response(request, token, db, "amneziawg")
+
+
+@app.get("/sub/{token}/ikev2.mobileconfig")
+def subscription_ikev2(
+    request: Request, token: str, db: Session = Depends(db_session)
+):
+    """Token-gated ``.mobileconfig`` download for the user's IKEv2
+    inbound."""
+    return _user_file_response(request, token, db, "ikev2")
 
 
 @app.get("/sub/{token}/qr")
@@ -2242,7 +3303,10 @@ class InboundCreate(BaseModel):
     """Payload for POST /api/inbounds."""
 
     tag: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
-    core: str = Field(..., pattern=r"^(xray|singbox|wireguard|ikev2)$")
+    core: str = Field(
+        ...,
+        pattern=r"^(xray|singbox|wireguard|openvpn|openconnect|amneziawg|ikev2)$",
+    )
     protocol: str = Field(..., min_length=1, max_length=32)
     port: int = Field(..., ge=1, le=65535)
     remark: str = ""

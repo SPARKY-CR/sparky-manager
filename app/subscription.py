@@ -284,7 +284,15 @@ def outbound_for_client(
 
     Returns ``None`` for:
 
-    * ``ikev2`` and unknown protocols (no sing-box outbound exists);
+    * ``ikev2``, ``openvpn`` and ``openconnect`` (no sing-box
+      outbound exists — they are exported as files instead);
+    * ``amneziawg`` — upstream sing-box has no AmneziaWG support
+      (only forks do: Hiddify's ``"type": "awg"`` endpoint,
+      sing-box-lx's root-promoted AWG fields); emitting a plain
+      WireGuard endpoint would be wrong (it lacks the obfuscation
+      parameters), so the protocol is exported as ``vpn://`` + the
+      ``.conf`` file instead (see docs/ZEDSECURE.md);
+    * unknown protocols (no sing-box outbound exists);
     * VLESS over XHTTP — sing-box does not support XHTTP, so such
       inbounds are emitted in the v2rayNG feed only (DESIGN.md §6.3).
 
@@ -483,7 +491,12 @@ def outbound_for_client(
         }]
         return outbound
 
-    # ikev2 / unknown: no sing-box outbound exists.
+    if protocol in ("ikev2", "openvpn", "openconnect", "amneziawg"):
+        # No sing-box outbound exists for these protocols (see the
+        # docstring): file exports instead (see app.main).
+        return None
+
+    # Unknown: no sing-box outbound exists.
     return None
 
 

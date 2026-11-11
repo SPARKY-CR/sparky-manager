@@ -166,5 +166,12 @@ def test_no_ikev2_manager_references():
     assert design.count("Ikev2-manager") == 1  # §1 principle only
     assert "ikev2_status" not in design
     assert "open_ikev2_manager" not in design
-    assert not (REPO / "app" / "ikev2.py").exists()
     assert not (REPO / "app" / "i18n.py").exists()
+    # v12: app/ikev2.py exists again — but as a NEW from-scratch
+    # strongSwan renderer (swanctl.conf + .mobileconfig), not the
+    # old detection module. It must carry the swanctl implementation
+    # and no reference to the old project (checked by the loop above).
+    ikev2 = (REPO / "app" / "ikev2.py").read_text(encoding="utf-8")
+    assert "swanctl" in ikev2
+    assert "render_mobileconfig" in ikev2
+    assert "strongSwan" in ikev2

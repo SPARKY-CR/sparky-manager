@@ -425,7 +425,22 @@ def test_client(db, tmp_path, monkeypatch):
                         str(tmp_path / "singbox.json"))
     monkeypatch.setattr(main_mod, "WG_CONFIG_PATH",
                         str(tmp_path / "wg0.conf"))
+    monkeypatch.setattr(main_mod, "OVPN_CONFIG_PATH",
+                        str(tmp_path / "openvpn.conf"))
+    monkeypatch.setattr(main_mod, "OCSERV_CONFIG_PATH",
+                        str(tmp_path / "ocserv.conf"))
+    monkeypatch.setattr(main_mod, "OCSERV_PASSWD_PATH",
+                        str(tmp_path / "ocpasswd"))
+    monkeypatch.setattr(main_mod, "AWG_CONFIG_PATH",
+                        str(tmp_path / "awg0.conf"))
+    monkeypatch.setattr(main_mod, "SWANCTL_CONFIG_PATH",
+                        str(tmp_path / "swanctl.conf"))
     monkeypatch.setattr(main_mod, "_restart_service", lambda name: None)
+    # The WireGuard / IKEv2 apply paths run real subprocesses (wg,
+    # systemctl, swanctl) — stub them out like the restarts.
+    monkeypatch.setattr(main_mod, "_apply_wireguard_config",
+                        lambda content, **kw: None)
+    monkeypatch.setattr(main_mod, "_apply_ikev2_config", lambda: None)
     ensure_defaults(db)  # creates the admin from the env password
     # The panel derives the subscription host from settings, else from
     # the request host ("testserver" under TestClient). Pin it to the

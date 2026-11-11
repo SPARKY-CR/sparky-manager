@@ -105,9 +105,10 @@ class Inbound(Base):
     """One listening inbound, across both cores.
 
     ``core``: ``xray`` | ``singbox`` | ``wireguard`` | ``ikev2`` |
-    ``openvpn`` | ``openconnect``. ``protocol``: ``vless`` | ``vmess`` |
+    ``openvpn`` | ``openconnect`` | ``amneziawg``. ``protocol``: ``vless`` | ``vmess`` |
     ``trojan`` | ``shadowsocks`` | ``hysteria2`` | ``tuic`` | ``anytls`` |
-    ``naive`` | ``shadowtls`` | ``wireguard`` | ...
+    ``naive`` | ``shadowtls`` | ``wireguard`` | ``amneziawg`` |
+    ``openvpn`` | ``openconnect`` | ``ikev2``.
     ``stream_json`` is a JSON blob so a new transport needs no migration.
     """
 

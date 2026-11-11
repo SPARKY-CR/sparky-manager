@@ -63,6 +63,18 @@
     <img class="qr" src="{{ base_path }}/sub/{{ user.sub_token }}/qr?link={{ zedsecure_url | urlencode }}" alt="{{ t.qr_code }} — ZedSecure" loading="lazy">
   </div>
 
+  {% if file_urls %}
+  <div class="card">
+    <h2>{{ t.file_exports }}</h2>
+    <p class="muted">{{ t.file_exports_hint }}</p>
+    <p class="form-actions">
+      {% for protocol, url in file_urls.items() %}
+      <a class="btn btn-small" href="{{ url }}" dir="ltr">{{ protocol }} ↓</a>
+      {% endfor %}
+    </p>
+  </div>
+  {% endif %}
+
   <div class="card">
     <h2>{{ t.share_links }}</h2>
     {% if not links_available %}

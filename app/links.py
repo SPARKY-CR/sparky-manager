@@ -452,12 +452,15 @@ def build_share_link(
     ``network`` / ``path`` / ``host`` as applicable).
 
     Returns ``None`` for protocols with no share-link standard
-    (``wireguard`` and ``ikev2`` — those are exported as ``.conf`` /
-    ``.mobileconfig`` files instead) and for unknown protocols.
+    (``wireguard``, ``ikev2``, ``openvpn`` and ``openconnect`` —
+    those are exported as ``.conf`` / ``.mobileconfig`` / ``.ovpn`` /
+    profile files instead) and for unknown protocols.
 
-    ``shadowtls`` has no share link of its own: it is served as a
-    Shadowsocks (SIP002) link, with ShadowTLS carried as a detour in
-    the server-side sing-box config (see DESIGN.md §5.2).
+    ``amneziawg`` has a link: ``vpn://`` + base64url of the whole
+    client ``.conf`` (the 3x-ui convention). ``shadowtls`` has no
+    share link of its own: it is served as a Shadowsocks (SIP002)
+    link, with ShadowTLS carried as a detour in the server-side
+    sing-box config (see DESIGN.md §5.2).
     """
     protocol = (protocol or "").lower().strip()
     host = _require(host, "host")
@@ -563,8 +566,36 @@ def build_share_link(
             name=name,
         )
 
-    # wireguard / ikev2: no share-link standard (file export instead).
-    # Unknown protocols: nothing sensible to build.
+    if protocol == "amneziawg":
+        # vpn:// link = base64url of the whole client .conf (3x-ui
+        # convention). Needs the server public key (handed to the
+        # builder through the inbound stream by app.main) + the
+        # inbound's obfuscation params + the client's key/address.
+        try:
+            from app import amneziawg as amneziawg_mod
+        except ImportError:
+            return None
+        server_public = (stream.get("awg_server_public_key") or "").strip()
+        private_key = (client.get("password") or "").strip()
+        address = str(extra.get("allowed_ips") or "").strip()
+        params = stream.get("awg_params") or {}
+        if not isinstance(params, dict):
+            params = {}
+        if not server_public or not private_key or not address:
+            return None
+        conf = amneziawg_mod.render_peer_config(
+            private_key,
+            address,
+            server_public,
+            host,
+            server_port=port,
+            params=params,
+        )
+        return amneziawg_mod.build_vpn_link(conf)
+
+    # wireguard / ikev2 / openvpn / openconnect: no share-link
+    # standard (file export instead). Unknown protocols: nothing
+    # sensible to build.
     return None
 
 

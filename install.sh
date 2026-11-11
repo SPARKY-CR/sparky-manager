@@ -2,7 +2,8 @@
 # sparky-manager installer — original work, written from scratch for this project.
 #
 # Installs sparky-manager (FastAPI panel + stock Xray-core + stock sing-box +
-# native WireGuard) on Ubuntu 22.04/24.04/26.04 or Debian 12/13.
+# native WireGuard + OpenVPN + OpenConnect (ocserv) + AmneziaWG + native
+# IKEv2 via strongSwan) on Ubuntu 22.04/24.04/26.04 or Debian 12/13.
 #
 # Domain-agnostic: works with a bare server IP and NO domain. The default
 # first pair is VLESS+Reality (TCP 443) + Hysteria2 (UDP 443) + WireGuard
@@ -49,7 +50,7 @@ SINGBOX_CONFIG="/etc/sing-box/config.json"
 WG_CONFIG="/etc/wireguard/wg0.conf"
 LOGIN_FILE="/root/sparky-manager-login.txt"
 
-PANEL_VERSION="1.1.0"
+PANEL_VERSION="1.2.0"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -429,6 +430,7 @@ if [ -z "$ADMIN_PASSWORD" ]; then
     info "  Admin pass:    <will be generated and printed in the login box>"
 fi
 info "  Default VPN:   VLESS+Reality TCP 443, Hysteria2 UDP 443, WireGuard UDP 51820"
+info "  More in panel: OpenVPN, OpenConnect, AmneziaWG, IKEv2 (create as inbounds)"
 
 # ---------------------------------------------------------------------------
 # Packages
@@ -438,14 +440,56 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq curl ca-certificates git unzip \
     python3 python3-venv python3-pip \
-    wireguard wireguard-tools nftables iproute2 openssl cron socat
+    wireguard wireguard-tools nftables iproute2 openssl cron socat \
+    openvpn ocserv \
+    strongswan strongswan-swanctl strongswan-pki \
+    libcharon-extra-plugins libcharon-extauth-plugins
+
+# ---------------------------------------------------------------------------
+# AmneziaWG — best-effort, never breaks the install.
+# There is no Ubuntu package: Amnezia's Launchpad PPA. The PPA publishes
+# no suite for Ubuntu 26.04 (resolute), so the suite is pinned to noble
+# there. DKMS needs the matching kernel headers. Any failure here only
+# warns — the panel marks AmneziaWG inbounds as unavailable and the
+# rest of the install continues.
+# ---------------------------------------------------------------------------
+install_amneziawg() {
+    if command -v awg-quick >/dev/null 2>&1; then
+        info "AmneziaWG tools already installed."
+        return 0
+    fi
+    info "Installing AmneziaWG (best-effort; a failure only disables AmneziaWG) ..."
+    local codename
+    codename="$(. /etc/os-release 2>/dev/null && echo "${VERSION_CODENAME:-noble}")"
+    (
+        apt-get install -y -qq software-properties-common
+        add-apt-repository -y ppa:amnezia/ppa
+        if [ "$codename" = "resolute" ]; then
+            # The PPA has no resolute suite — pin the added source to noble.
+            sed -i 's/Suites: resolute/Suites: noble/' \
+                /etc/apt/sources.list.d/amnezia-ubuntu-ppa-*.sources 2>/dev/null || true
+        fi
+        apt-get update -qq
+        apt-get install -y -qq "linux-headers-$(uname -r)" amneziawg amneziawg-tools
+    ) >/dev/null 2>&1 || true
+    if command -v awg-quick >/dev/null 2>&1; then
+        info "AmneziaWG installed."
+        return 0
+    fi
+    warn "AmneziaWG could not be installed (the kernel module may be unavailable on this kernel). The panel will mark AmneziaWG inbounds as unavailable; everything else works."
+    return 0
+}
+install_amneziawg
 
 # ---------------------------------------------------------------------------
 # Directories and system user
 # ---------------------------------------------------------------------------
 info "Creating directories and the sparky-manager system user ..."
 mkdir -p /opt/sparky-manager/app /opt/sparky-manager/data /opt/sparky-manager/certs \
-         /usr/local/etc/xray /etc/sing-box /etc/wireguard
+         /opt/sparky-manager/data/logs /opt/sparky-manager/data/ca \
+         /usr/local/etc/xray /etc/sing-box /etc/wireguard \
+         /etc/openvpn/server /etc/ocserv /etc/swanctl \
+         /etc/amnezia/amneziawg /var/log/openvpn
 if ! id sparky-manager >/dev/null 2>&1; then
     useradd --system --no-create-home --home-dir /opt/sparky-manager \
             --shell /usr/sbin/nologin sparky-manager
@@ -453,6 +497,14 @@ fi
 chown -R sparky-manager:sparky-manager /opt/sparky-manager
 chmod 0750 /opt/sparky-manager/data /opt/sparky-manager/certs
 chmod 0755 /opt/sparky-manager/app
+# The panel writes the new protocols' server configs (and the ocserv
+# password file) by atomic rename, so their directories must be
+# group-writable like /etc/wireguard below. The VPN CA dir holds the
+# CA private key: root-only for the key, group-readable for the certs.
+chown root:sparky-manager /etc/openvpn/server /etc/ocserv /etc/swanctl /etc/amnezia/amneziawg
+chmod 2770 /etc/openvpn/server /etc/ocserv /etc/swanctl /etc/amnezia/amneziawg
+chown root:sparky-manager /opt/sparky-manager/data/logs /opt/sparky-manager/data/ca
+chmod 0750 /opt/sparky-manager/data/logs /opt/sparky-manager/data/ca
 
 # Privileges: the panel runs as the unprivileged sparky-manager user,
 # but it must restart its services and read WireGuard transfer stats.
@@ -466,7 +518,11 @@ if command -v sudo >/dev/null 2>&1 && command -v visudo >/dev/null 2>&1; then
     cat > /etc/sudoers.d/sparky-manager <<'EOF'
 # sparky-manager panel: restart its services and read WireGuard stats.
 # Installed by install.sh; validated with visudo -cf before use.
-sparky-manager ALL=(root) NOPASSWD: /usr/bin/systemctl restart xray, /usr/bin/systemctl restart sing-box, /usr/bin/systemctl restart sparky-manager, /usr/bin/systemctl restart wg-quick@wg0, /usr/bin/systemctl is-active xray, /usr/bin/systemctl is-active sing-box, /usr/bin/systemctl is-active sparky-manager, /usr/bin/systemctl is-active wg-quick@wg0, /usr/bin/systemctl status xray, /usr/bin/systemctl status sing-box, /usr/bin/systemctl status sparky-manager, /usr/bin/systemctl status wg-quick@wg0, /usr/bin/wg show wg0 transfer, /usr/bin/wg-quick up wg0, /usr/bin/wg-quick down wg0
+# v12: the WireGuard apply path uses `systemctl start` (not restart)
+# and `wg show` (interface check), swanctl loads the IKEv2 config,
+# ocserv -t validates its config, and journalctl tails give the panel
+# the real error behind a failed restart (see app.wgapply / app.main).
+sparky-manager ALL=(root) NOPASSWD: /usr/bin/systemctl restart xray, /usr/bin/systemctl restart sing-box, /usr/bin/systemctl restart sparky-manager, /usr/bin/systemctl restart wg-quick@wg0, /usr/bin/systemctl restart openvpn-server@sparky-manager, /usr/bin/systemctl restart ocserv, /usr/bin/systemctl restart strongswan, /usr/bin/systemctl start wg-quick@wg0, /usr/bin/systemctl start awg-quick@awg0, /usr/bin/systemctl is-active xray, /usr/bin/systemctl is-active sing-box, /usr/bin/systemctl is-active sparky-manager, /usr/bin/systemctl is-active wg-quick@wg0, /usr/bin/systemctl status xray, /usr/bin/systemctl status sing-box, /usr/bin/systemctl status sparky-manager, /usr/bin/systemctl status wg-quick@wg0, /usr/bin/wg show wg0 transfer, /usr/bin/wg show wg0, /usr/bin/awg show awg0, /usr/bin/wg-quick up wg0, /usr/bin/wg-quick down wg0, /usr/bin/swanctl --load-all, /usr/bin/swanctl --list-conns, /usr/bin/ocserv -t -c *, /usr/bin/journalctl -u xray -n 50 --no-pager, /usr/bin/journalctl -u sing-box -n 50 --no-pager, /usr/bin/journalctl -u sparky-manager -n 50 --no-pager, /usr/bin/journalctl -u wg-quick@wg0 -n 50 --no-pager, /usr/bin/journalctl -u openvpn-server@sparky-manager -n 50 --no-pager, /usr/bin/journalctl -u ocserv -n 50 --no-pager, /usr/bin/journalctl -u strongswan -n 50 --no-pager, /usr/bin/journalctl -u awg-quick@awg0 -n 50 --no-pager
 EOF
     chmod 0440 /etc/sudoers.d/sparky-manager
     chown root:root /etc/sudoers.d/sparky-manager
@@ -501,7 +557,7 @@ fi
 
 if [ -f "${REPO_DIR}/app/__init__.py" ]; then
     PANEL_VERSION="$(grep -E '^__version__' "${REPO_DIR}/app/__init__.py" | cut -d'"' -f2 || true)"
-    PANEL_VERSION="${PANEL_VERSION:-1.1.0}"
+    PANEL_VERSION="${PANEL_VERSION:-1.2.0}"
 fi
 
 info "Copying the panel app to /opt/sparky-manager ..."
@@ -673,6 +729,20 @@ if [ -z "${WG_PRIVATE_KEY:-}" ]; then
         WG_PUBLIC_KEY=""
     fi
 fi
+# AmneziaWG uses the same X25519 key format as WireGuard (a separate
+# keypair — wg0 and awg0 are different interfaces and must never
+# share a server key).
+if [ -z "${AWG_PRIVATE_KEY:-}" ]; then
+    info "Generating the AmneziaWG server keypair ..."
+    if command -v wg >/dev/null 2>&1; then
+        AWG_PRIVATE_KEY="$(wg genkey)"
+        AWG_PUBLIC_KEY="$(printf '%s' "$AWG_PRIVATE_KEY" | wg pubkey)"
+    else
+        warn "'wg' not found; generating an AmneziaWG key with openssl. Derive the public key later with: echo <private-key> | wg pubkey"
+        AWG_PRIVATE_KEY="$(openssl rand -base64 32 | tr -d '\n')"
+        AWG_PUBLIC_KEY=""
+    fi
+fi
 # A valid 2022-blake3-aes-128-gcm key is base64 of exactly 16 bytes.
 # Older installs stored a 24-byte token, which Xray rejects ("bad
 # key") — and re-installs reuse it from install.env, so validate the
@@ -705,6 +775,8 @@ umask 077
     printf 'REALITY_SNI=%s\n' "$(sq "$REALITY_SNI")"
     printf 'WG_PRIVATE_KEY=%s\n' "$(sq "$WG_PRIVATE_KEY")"
     printf 'WG_PUBLIC_KEY=%s\n' "$(sq "$WG_PUBLIC_KEY")"
+    printf 'AWG_PRIVATE_KEY=%s\n' "$(sq "$AWG_PRIVATE_KEY")"
+    printf 'AWG_PUBLIC_KEY=%s\n' "$(sq "$AWG_PUBLIC_KEY")"
     printf 'SS_PASSWORD=%s\n' "$(sq "$SS_PASSWORD")"
     printf 'HY2_PASSWORD=%s\n' "$(sq "$HY2_PASSWORD")"
 } > "$INSTALL_ENV"
@@ -731,6 +803,8 @@ chown root:sparky-manager "$INSTALL_ENV"
     printf 'SPARKY_REALITY_SHORT_ID=%s\n' "$(sq "$REALITY_SHORT_ID")"
     printf 'SPARKY_WG_PRIVATE_KEY=%s\n' "$(sq "$WG_PRIVATE_KEY")"
     printf 'SPARKY_WG_PUBLIC_KEY=%s\n' "$(sq "$WG_PUBLIC_KEY")"
+    printf 'SPARKY_AWG_PRIVATE_KEY=%s\n' "$(sq "$AWG_PRIVATE_KEY")"
+    printf 'SPARKY_AWG_PUBLIC_KEY=%s\n' "$(sq "$AWG_PUBLIC_KEY")"
 } > /opt/sparky-manager/data/panel.env
 chmod 0640 /opt/sparky-manager/data/panel.env
 chown root:sparky-manager /opt/sparky-manager/data/panel.env
@@ -900,6 +974,70 @@ CERT_ISSUER="$(openssl x509 -noout -issuer -in /opt/sparky-manager/certs/fullcha
 CERT_EXPIRY="$(openssl x509 -noout -enddate -in /opt/sparky-manager/certs/fullchain.pem 2>/dev/null | cut -d= -f2)"
 
 # ---------------------------------------------------------------------------
+# VPN server CA — one trust anchor for OpenVPN, ocserv and IKEv2.
+# NOT the panel's own certificate (that one rotates with Let's Encrypt):
+# a dedicated CA + server cert, RSA, 825 days (the iOS limit for a
+# server cert), SAN = IP:<public-ip> and/or DNS:<domain>. Generated
+# once and reused on re-install; the panel reads the CA cert to embed
+# it in client files (.ovpn / .mobileconfig) and the server configs
+# reference these paths directly (no copies to drift, except the
+# swanctl copies below, which charon reads at load time).
+# ---------------------------------------------------------------------------
+generate_vpn_ca() {
+    local ca_dir="/opt/sparky-manager/data/ca"
+    mkdir -p "$ca_dir"
+    if [ -f "$ca_dir/ca-cert.pem" ] && [ -f "$ca_dir/server-cert.pem" ] \
+       && [ -f "$ca_dir/ca-key.pem" ] && [ -f "$ca_dir/server-key.pem" ]; then
+        info "VPN server CA already exists; reusing it."
+    else
+        info "Generating the VPN server CA + server certificate (825 days) ..."
+        local san
+        if [ -n "$DOMAIN" ]; then
+            san="IP:${SERVER_IP},DNS:${DOMAIN}"
+        else
+            san="IP:${SERVER_IP}"
+        fi
+        openssl req -x509 -newkey rsa:4096 -nodes \
+            -keyout "$ca_dir/ca-key.pem" -out "$ca_dir/ca-cert.pem" \
+            -days 825 -subj "/CN=sparky-manager CA" \
+            -addext "basicConstraints=critical,CA:TRUE" \
+            -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null || \
+            die "Failed to generate the VPN CA certificate."
+        openssl req -newkey rsa:3072 -nodes \
+            -keyout "$ca_dir/server-key.pem" -out "$ca_dir/server.csr" \
+            -subj "/CN=${CERT_CN}" 2>/dev/null || \
+            die "Failed to generate the VPN server key."
+        # `openssl x509 -req` does not accept -addext on OpenSSL 3.0
+        # (Ubuntu 22.04/24.04), so the extensions go through a temp
+        # extfile instead.
+        local _extfile
+        _extfile="$(mktemp)"
+        printf '[v3_req]\nbasicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nsubjectAltName=%s\nextendedKeyUsage=serverAuth\n' \
+            "$san" > "$_extfile"
+        openssl x509 -req -in "$ca_dir/server.csr" \
+            -CA "$ca_dir/ca-cert.pem" -CAkey "$ca_dir/ca-key.pem" \
+            -CAcreateserial -out "$ca_dir/server-cert.pem" -days 825 \
+            -extensions v3_req -extfile "$_extfile" 2>/dev/null || \
+            die "Failed to sign the VPN server certificate."
+        rm -f "$_extfile" "$ca_dir/server.csr" "$ca_dir/ca-cert.srl"
+    fi
+    chmod 0644 "$ca_dir/ca-cert.pem" "$ca_dir/server-cert.pem"
+    chmod 0600 "$ca_dir/ca-key.pem" "$ca_dir/server-key.pem"
+    chown root:root "$ca_dir/ca-key.pem" "$ca_dir/server-key.pem"
+    chown root:sparky-manager "$ca_dir/ca-cert.pem" "$ca_dir/server-cert.pem"
+    chmod 0750 "$ca_dir"
+    chown root:sparky-manager "$ca_dir"
+    # strongSwan reads the CA / server cert from its own directories.
+    mkdir -p /etc/swanctl/x509ca /etc/swanctl/x509 /etc/swanctl/private
+    cp "$ca_dir/ca-cert.pem" /etc/swanctl/x509ca/ca-cert.pem
+    cp "$ca_dir/server-cert.pem" /etc/swanctl/x509/server-cert.pem
+    cp "$ca_dir/server-key.pem" /etc/swanctl/private/server-key.pem
+    chmod 0644 /etc/swanctl/x509ca/ca-cert.pem /etc/swanctl/x509/server-cert.pem
+    chmod 0600 /etc/swanctl/private/server-key.pem
+}
+generate_vpn_ca
+
+# ---------------------------------------------------------------------------
 # Default configs: run the panel's render script when it exists, else
 # write minimal working configs (VLESS+Reality + Shadowsocks in Xray,
 # Hysteria2 in sing-box, WireGuard wg0). The panel re-renders these from
@@ -1026,6 +1164,167 @@ if ! wg show wg0 >/dev/null 2>&1; then
         warn "Could not bring up wg0 (WireGuard kernel module may be missing). The config is written to ${WG_CONFIG}; start it with: wg-quick up wg0"
 fi
 
+# IP forwarding: the VPN servers (OpenVPN / ocserv / IKEv2 / WG /
+# AmneziaWG) route client traffic, so the kernel must forward it.
+# Persisted in /etc/sysctl.d/ so it survives a reboot.
+if [ ! -f /etc/sysctl.d/99-sparky-manager.conf ]; then
+    printf 'net.ipv4.ip_forward = 1\n' > /etc/sysctl.d/99-sparky-manager.conf
+fi
+sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || \
+    warn "Could not enable IPv4 forwarding (sysctl). VPN clients may not reach the internet."
+
+# The OpenVPN auth script must be executable (openvpn runs it as root
+# at connect time to check the username/password against the panel DB).
+if [ -f /opt/sparky-manager/scripts/ovpn-auth.py ]; then
+    chmod 0755 /opt/sparky-manager/scripts/ovpn-auth.py
+fi
+
+# Minimal server configs for the v12 protocols (the panel re-renders
+# them from its database when users / inbounds change — these only
+# exist so the services can start on a fresh install). Each is only
+# written when its package is installed; a missing package only warns.
+if command -v openvpn >/dev/null 2>&1 && [ ! -f /etc/openvpn/server/sparky-manager.conf ]; then
+    cat > /etc/openvpn/server/sparky-manager.conf <<EOF
+port 1194
+proto udp
+dev tun
+ca /opt/sparky-manager/data/ca/ca-cert.pem
+cert /opt/sparky-manager/data/ca/server-cert.pem
+key /opt/sparky-manager/data/ca/server-key.pem
+dh none
+server 10.9.0.0 255.255.255.0
+topology subnet
+ifconfig-pool-persist /var/log/openvpn/ipp.txt
+push "redirect-gateway def1 bypass-dhcp"
+push "dhcp-option DNS 1.1.1.1"
+push "dhcp-option DNS 1.0.0.1"
+keepalive 10 120
+cipher AES-256-GCM
+auth SHA256
+tls-version-min 1.2
+client-cert-not-required
+username-as-common-name
+auth-user-pass-verify /opt/sparky-manager/scripts/ovpn-auth.py via-file
+user nobody
+group nogroup
+persist-key
+persist-tun
+status /var/log/openvpn/openvpn-status.log
+log-append /var/log/openvpn/openvpn.log
+verb 3
+explicit-exit-notify 1
+EOF
+    chmod 0660 /etc/openvpn/server/sparky-manager.conf
+    chown root:sparky-manager /etc/openvpn/server/sparky-manager.conf
+fi
+if command -v ocserv >/dev/null 2>&1; then
+    if [ ! -f /etc/ocserv/ocserv.conf ]; then
+        cat > /etc/ocserv/ocserv.conf <<EOF
+auth = "plain[passwd=/etc/ocserv/ocpasswd]"
+tcp-port = 4433
+udp-port = 4433
+run-as-user = nobody
+run-as-group = nogroup
+server-cert = /opt/sparky-manager/data/ca/server-cert.pem
+server-key = /opt/sparky-manager/data/ca/server-key.pem
+ipv4-network = 10.10.10.0
+ipv4-netmask = 255.255.255.0
+dns = 1.1.1.1
+dns = 1.0.0.1
+route = default
+cisco-client-compat = true
+max-clients = 1024
+use-occtl = true
+socket-file = /run/ocserv/ocserv.sock
+pid-file = /run/ocserv/ocserv.pid
+EOF
+        chmod 0660 /etc/ocserv/ocserv.conf
+        chown root:sparky-manager /etc/ocserv/ocserv.conf
+    fi
+    if [ ! -f /etc/ocserv/ocpasswd ]; then
+        : > /etc/ocserv/ocpasswd
+        chmod 0660 /etc/ocserv/ocpasswd
+        chown root:sparky-manager /etc/ocserv/ocpasswd
+    fi
+fi
+if command -v swanctl >/dev/null 2>&1 && [ ! -f /etc/swanctl/swanctl.conf ]; then
+    cat > /etc/swanctl/swanctl.conf <<EOF
+pools {
+    ipv4 {
+        addrs = 10.20.0.0/24
+        dns = 1.1.1.1, 1.0.0.1
+    }
+}
+
+connections {
+    remote-access {
+        version = 2
+        proposals = aes256-sha256-modp2048
+        dpd_delay = 30s
+        local {
+            auth = pubkey
+            certs = server-cert.pem
+            id = ${CERT_CN}
+        }
+        remote {
+            auth = eap-mschapv2
+            eap_id = %any
+        }
+        children {
+            tunnel {
+                esp_proposals = aes256-sha256-modp2048
+                local_ts = 0.0.0.0/0
+                remote_ts = dynamic
+                dpd_action = clear
+                pools = ipv4
+            }
+        }
+    }
+}
+
+secrets {
+}
+EOF
+    chmod 0660 /etc/swanctl/swanctl.conf
+    chown root:sparky-manager /etc/swanctl/swanctl.conf
+fi
+# AmneziaWG minimal config (fixed default obfuscation parameters;
+# the panel generates fresh ones per inbound on first render).
+# Best-effort: only when the tools are installed.
+if command -v awg-quick >/dev/null 2>&1 && [ ! -f /etc/amnezia/amneziawg/awg0.conf ]; then
+    cat > /etc/amnezia/amneziawg/awg0.conf <<EOF
+[Interface]
+PrivateKey = ${AWG_PRIVATE_KEY}
+Address = 10.8.1.1/24
+ListenPort = 51821
+Jc = 4
+Jmin = 40
+Jmax = 70
+S1 = 15
+S2 = 16
+S3 = 17
+S4 = 18
+H1 = 100
+H2 = 200
+H3 = 300
+H4 = 400
+I1 = sparky1
+I2 = sparky2
+I3 = sparky3
+I4 = sparky4
+I5 = sparky5
+# No HeaderProtectionKey here: the panel generates a fresh random
+# one per inbound when it renders awg0.conf (it must match on
+# server and client, and must never be a WireGuard key).
+EOF
+    chmod 0660 /etc/amnezia/amneziawg/awg0.conf
+    chown root:sparky-manager /etc/amnezia/amneziawg/awg0.conf
+    if ! awg show awg0 >/dev/null 2>&1; then
+        awg-quick up awg0 2>/dev/null || \
+            warn "Could not bring up awg0 (AmneziaWG kernel module may be missing). The config is written to /etc/amnezia/amneziawg/awg0.conf; start it with: awg-quick up awg0"
+    fi
+fi
+
 # Validate both core configs before starting anything.
 info "Validating core configs ..."
 /usr/local/bin/xray run -test -c "$XRAY_CONFIG" || \
@@ -1146,9 +1445,15 @@ case "$cmd" in
         ;;
     status)
         systemctl status sparky-manager xray sing-box --no-pager || true
+        for svc in openvpn-server@sparky-manager ocserv strongswan awg-quick@awg0 wg-quick@wg0; do
+            systemctl cat "$svc" >/dev/null 2>&1 && systemctl status "$svc" --no-pager || true
+        done
         ;;
     restart)
         systemctl restart sparky-manager xray sing-box
+        for svc in openvpn-server@sparky-manager ocserv strongswan; do
+            systemctl cat "$svc" >/dev/null 2>&1 && systemctl restart "$svc" || true
+        done
         echo "sparky-manager, xray and sing-box restarted."
         ;;
     backup)
@@ -1174,6 +1479,12 @@ info "Enabling and starting xray, sing-box and sparky-manager ..."
 PANEL_WAS_ACTIVE=0
 systemctl is-active --quiet sparky-manager 2>/dev/null && PANEL_WAS_ACTIVE=1
 systemctl enable --now xray sing-box sparky-manager
+# The v12 services (best-effort: a missing package only warns — the
+# panel retries the service on the next config render).
+for _svc in openvpn-server@sparky-manager ocserv strongswan; do
+    systemctl enable --now "$_svc" 2>/dev/null || \
+        warn "Could not start ${_svc} (its package may not be installed). The panel will retry it on the next config render."
+done
 # A regenerated certificate is only picked up when the panel
 # restarts (enable --now does not restart a running service).
 if [ "$CERT_REGENERATED" -eq 1 ] && [ "$PANEL_WAS_ACTIVE" -eq 1 ]; then
@@ -1216,6 +1527,17 @@ if [ -n "$FAILED" ]; then
     die "Install verification failed. Fix the errors above and re-run the installer (it is idempotent)."
 fi
 info "Verification passed: panel answers 200 on /${WEB_PATH}/health, xray and sing-box are active."
+# Soft check for the v12 services: warn, never fail the install.
+for _svc in openvpn-server@sparky-manager ocserv strongswan; do
+    if systemctl cat "$_svc" >/dev/null 2>&1; then
+        systemctl is-active --quiet "$_svc" || \
+            warn "${_svc} is not active; check: systemctl status ${_svc}"
+    fi
+done
+if command -v ocserv >/dev/null 2>&1 && [ -f /etc/ocserv/ocserv.conf ]; then
+    ocserv -t -c /etc/ocserv/ocserv.conf >/dev/null 2>&1 || \
+        warn "ocserv config check failed; the panel will report the error on the next render."
+fi
 
 # ---------------------------------------------------------------------------
 # Login box — printed and saved to /root/sparky-manager-login.txt (0600).
@@ -1256,6 +1578,14 @@ umask 077
     echo "    Hysteria2      UDP 443"
     echo "    WireGuard      UDP 51820"
     echo "    Shadowsocks    TCP 8388"
+    echo ""
+    echo "  More protocols in the panel (create as inbounds):"
+    echo "    OpenVPN        UDP 1194  (.ovpn file)"
+    echo "    OpenConnect    TCP+UDP 4433  (AnyConnect profile)"
+    echo "    AmneziaWG      UDP 51821  (vpn:// link + .conf)"
+    echo "    IKEv2          UDP 500 + 4500  (.mobileconfig)"
+    echo ""
+    echo "  Panel logs: Logs page in the panel (data/logs/panel.log)."
     echo ""
     echo "  Subscriptions, QR codes and users are inside the panel."
     echo "  Reprint this anytime:  sudo sparky-manager info"

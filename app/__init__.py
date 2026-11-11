@@ -5,4 +5,4 @@ Public project, domain-agnostic: works with a bare server IP, no
 domain or certificate is ever required.
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"

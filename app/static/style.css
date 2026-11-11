@@ -243,6 +243,8 @@ h3 { font-size: 1rem; margin: 0 0 0.5rem; font-weight: 600; }
 .badge-ok { background: var(--ok-soft); color: var(--ok); }
 .badge-off { background: rgba(143, 163, 189, 0.14); color: var(--muted); }
 .badge-warn { background: var(--warn-soft); color: var(--warn); }
+.badge-err { background: var(--danger-soft); color: var(--danger); }
+.log-line { margin: 0; font-family: var(--mono); font-size: 0.85rem; white-space: pre-wrap; word-break: break-word; }
 .chip {
   display: inline-block;
   padding: 0.1rem 0.55rem;

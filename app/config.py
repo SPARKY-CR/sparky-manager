@@ -94,6 +94,52 @@ class Settings:
         return Path("/etc/wireguard/wg0.conf")
 
     @property
+    def ovpn_config(self) -> Path:
+        return Path("/etc/openvpn/server/sparky-manager.conf")
+
+    @property
+    def ocserv_config(self) -> Path:
+        return Path("/etc/ocserv/ocserv.conf")
+
+    @property
+    def ocserv_passwd(self) -> Path:
+        return Path("/etc/ocserv/ocpasswd")
+
+    @property
+    def awg_config(self) -> Path:
+        return Path("/etc/amnezia/amneziawg/awg0.conf")
+
+    @property
+    def swanctl_config(self) -> Path:
+        return Path("/etc/swanctl/swanctl.conf")
+
+    @property
+    def ca_dir(self) -> Path:
+        """Dedicated CA + server cert for the VPN servers (OpenVPN /
+        ocserv / IKEv2 share one trust anchor)."""
+        return self.data_dir / "ca"
+
+    @property
+    def ca_cert(self) -> Path:
+        return self.ca_dir / "ca-cert.pem"
+
+    @property
+    def ca_key(self) -> Path:
+        return self.ca_dir / "ca-key.pem"
+
+    @property
+    def vpn_server_cert(self) -> Path:
+        return self.ca_dir / "server-cert.pem"
+
+    @property
+    def vpn_server_key(self) -> Path:
+        return self.ca_dir / "server-key.pem"
+
+    @property
+    def ovpn_auth_script(self) -> Path:
+        return self.home / "scripts" / "ovpn-auth.py"
+
+    @property
     def login_file(self) -> Path:
         return LOGIN_FILE
 
@@ -145,6 +191,16 @@ def get_settings_dict() -> dict:
         "xray_config": str(s.xray_config),
         "singbox_config": str(s.singbox_config),
         "wg_config": str(s.wg_config),
+        "ovpn_config": str(s.ovpn_config),
+        "ocserv_config": str(s.ocserv_config),
+        "ocserv_passwd": str(s.ocserv_passwd),
+        "awg_config": str(s.awg_config),
+        "swanctl_config": str(s.swanctl_config),
+        "ca_cert": str(s.ca_cert),
+        "ca_key": str(s.ca_key),
+        "vpn_server_cert": str(s.vpn_server_cert),
+        "vpn_server_key": str(s.vpn_server_key),
+        "ovpn_auth_script": str(s.ovpn_auth_script),
         "versions_file": str(s.versions_file),
     }
 
@@ -180,6 +236,16 @@ PANEL_HOST = SETTINGS.panel_host
 XRAY_CONFIG = SETTINGS.xray_config
 SINGBOX_CONFIG = SETTINGS.singbox_config
 WG_CONFIG = SETTINGS.wg_config
+OVPN_CONFIG = SETTINGS.ovpn_config
+OCSERV_CONFIG = SETTINGS.ocserv_config
+OCSERV_PASSWD = SETTINGS.ocserv_passwd
+AWG_CONFIG = SETTINGS.awg_config
+SWANCTL_CONFIG = SETTINGS.swanctl_config
+CA_CERT = SETTINGS.ca_cert
+CA_KEY = SETTINGS.ca_key
+VPN_SERVER_CERT = SETTINGS.vpn_server_cert
+VPN_SERVER_KEY = SETTINGS.vpn_server_key
+OVPN_AUTH_SCRIPT = SETTINGS.ovpn_auth_script
 DEFAULT_REALITY_SNI = SETTINGS.reality_sni
 WEB_PATH = SETTINGS.web_path
 
@@ -203,4 +269,14 @@ __all__ = [
     "XRAY_CONFIG",
     "SINGBOX_CONFIG",
     "WG_CONFIG",
+    "OVPN_CONFIG",
+    "OCSERV_CONFIG",
+    "OCSERV_PASSWD",
+    "AWG_CONFIG",
+    "SWANCTL_CONFIG",
+    "CA_CERT",
+    "CA_KEY",
+    "VPN_SERVER_CERT",
+    "VPN_SERVER_KEY",
+    "OVPN_AUTH_SCRIPT",
 ]

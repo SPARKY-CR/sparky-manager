@@ -31,6 +31,22 @@ DEFAULT_ADMIN_USERNAME = "admin"
 PANEL_SERVICES = ("sparky-manager", "xray", "sing-box")
 # wg-quick is a template unit (wg-quick@wg0); checked by status only.
 WG_SERVICE = "wg-quick@wg0"
+# v12 protocols: only checked/restarted when their unit exists (the
+# package may not be installed — e.g. AmneziaWG on a kernel without
+# the module — and status must not fail for a service that was never
+# installed).
+VPN_SERVICES = (
+    "openvpn-server@sparky-manager",
+    "ocserv",
+    "strongswan",
+    "awg-quick@awg0",
+)
+
+
+def _unit_exists(service: str) -> bool:
+    """True when systemd knows the unit (``systemctl cat`` succeeds)."""
+    ok, _ = _run_systemctl("cat", service)
+    return ok
 
 
 def _run_systemctl(*args: str) -> tuple[bool, str]:
@@ -107,6 +123,13 @@ def cmd_status() -> int:
         print(f"{service}: {state}")
         if state != "active":
             all_active = False
+    for service in VPN_SERVICES:
+        if not _unit_exists(service):
+            continue
+        ok, state = _run_systemctl("is-active", service)
+        print(f"{service}: {state}")
+        if state != "active":
+            all_active = False
     return 0 if all_active else 1
 
 
@@ -119,10 +142,21 @@ def cmd_restart() -> int:
     """``systemctl restart sparky-manager xray sing-box`` (tolerant).
 
     Prints a line per service; returns 0 only if every restart
-    succeeded, 1 otherwise — but never raises.
+    succeeded, 1 otherwise — but never raises. The v12 services are
+    restarted too when their unit exists; a missing/broken one does
+    not fail the core restart.
     """
     failed: list[str] = []
     for service in PANEL_SERVICES:
+        ok, _ = _run_systemctl("restart", service)
+        if ok:
+            print(f"{service}: restarted")
+        else:
+            print(f"{service}: restart FAILED", file=sys.stderr)
+            failed.append(service)
+    for service in VPN_SERVICES:
+        if not _unit_exists(service):
+            continue
         ok, _ = _run_systemctl("restart", service)
         if ok:
             print(f"{service}: restarted")
@@ -150,7 +184,16 @@ def cmd_backup(path: str | None = None) -> int:
     sources: list[Path] = []
     if settings.data_dir.exists():
         sources.append(settings.data_dir)
-    for cfg in (settings.xray_config, settings.singbox_config):
+    for cfg in (
+        settings.xray_config,
+        settings.singbox_config,
+        settings.wg_config,
+        settings.ovpn_config,
+        settings.ocserv_config,
+        settings.ocserv_passwd,
+        settings.awg_config,
+        settings.swanctl_config,
+    ):
         if cfg.exists():
             sources.append(cfg)
     if not sources:

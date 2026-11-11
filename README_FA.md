@@ -90,8 +90,12 @@ sudo sparky-manager backup    # پشتیبان در /root/sparky-manager-backup-
 
 با دامنه و گواهی، TUIC (8443)، AnyTLS (8444)، Naive (8445) و
 ShadowTLS (8446) هم در دسترس‌اند — ببینید
-[docs/PORTS.md](docs/PORTS.md). چک‌لیست وارد کردن در ZedSecure در
-[docs/ZEDSECURE.md](docs/ZEDSECURE.md) است.
+[docs/PORTS.md](docs/PORTS.md). از نسخهٔ ۱٫۲٫۰ چهار پروتکل دیگر هم
+هست (به‌عنوان اینباند ساخته می‌شوند؛ دامنه نمی‌خواهند): OpenVPN
+(UDP 1194، فایل `.ovpn`)، OpenConnect (TCP+UDP 4433، پروفایل
+AnyConnect)، AmneziaWG (UDP 51821، لینک `vpn://` — به ماژول کرنل
+نیاز دارد) و IKEv2 (UDP 500+4500، فایل `.mobileconfig`). چک‌لیست
+وارد کردن در ZedSecure در [docs/ZEDSECURE.md](docs/ZEDSECURE.md) است.
 
 ## پرسش‌های متداول
 
@@ -123,8 +127,9 @@ ShadowTLS (8446) هم در دسترس‌اند — ببینید
 
 ## محدودیت‌های فاز ۱ (فهرست صادقانه)
 
-- OpenVPN / OpenConnect و AmneziaWG فاز ۲ هستند، نه در MVP.
-- IKEv2 در فاز ۱ نیست (پشتیبانی بومی آن فاز ۲ است).
+- OpenVPN، OpenConnect، AmneziaWG و IKEv2 بومی (strongSwan) فاز ۲
+  بودند — هر چهارتاشان در **نسخهٔ ۱٫۲٫۰** اضافه شدند (AmneziaWG
+  مشروط است: به ماژول کرنل نیاز دارد و پنل وقتی نیست، صریح می‌گوید).
 - sing-box هیچ API آمار به‌ازای کاربر ندارد: برای اینباندهای اشتراکی
   sing-box، ترافیک «نامشخص» نمایش داده می‌شود، نه یک عدد ساختگی.
 - فروشندگی / چند مدیر / صورتحساب و مدیریت چند سرور وجود ندارد.

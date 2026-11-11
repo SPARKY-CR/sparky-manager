@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %} — {{ t.logs }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ t.logs }}</h1>
+</div>
+
+<div class="card">
+  <p class="muted">{{ t.logs_hint }}</p>
+  <p class="muted"><span class="chip" dir="ltr">{{ log_path }}</span></p>
+  <form method="get" action="{{ base_path }}/logs" class="field-grid">
+    <label>
+      {{ t.log_filter_level }}
+      <select name="level">
+        <option value=""{% if not level %} selected{% endif %}>—</option>
+        {% for lv in ["DEBUG", "INFO", "WARNING", "ERROR"] %}
+        <option value="{{ lv }}"{% if level == lv %} selected{% endif %}>{{ lv }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      {{ t.log_search }}
+      <input type="text" name="q" value="{{ q }}" placeholder="{{ t.log_search_ph }}">
+    </label>
+    <label>
+      {{ t.log_filter_level }} / {{ t.log_message }}
+      <input type="number" name="limit" min="50" max="2000" step="50" value="{{ limit }}">
+    </label>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{{ t.log_search }}</button>
+      <a class="btn btn-small" href="{{ base_path }}/logs/download">{{ t.log_download }}</a>
+    </div>
+  </form>
+  <form method="post" action="{{ base_path }}/logs/clear" class="inline-form" data-confirm="{{ t.confirm_clear_logs }}">
+    <button type="submit" class="btn btn-small btn-danger">{{ t.log_clear }}</button>
+  </form>
+</div>
+
+{% if files %}
+<div class="card">
+  <h2>{{ t.log_files }}</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>{{ t.log_file }}</th><th>{{ t.size }}</th><th>{{ t.status }}</th></tr>
+      </thead>
+      <tbody>
+        {% for f in files %}
+        <tr>
+          <td><span class="chip" dir="ltr">{{ f.name }}</span></td>
+          <td><span class="num" dir="ltr">{{ (f.size_bytes / 1024) | round(1) }} KB</span></td>
+          <td><span class="badge {{ 'badge-ok' if f.current else 'badge-off' }}">{{ t.enabled if f.current else t.disabled }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  {% if lines %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>{{ t.log_time }}</th><th>{{ t.log_filter_level }}</th><th>{{ t.log_message }}</th></tr>
+      </thead>
+      <tbody>
+        {% for line in lines %}
+        <tr>
+          <td><span class="num" dir="ltr">{{ line.ts }}</span></td>
+          <td><span class="badge {{ 'badge-ok' if line.level == 'INFO' else 'badge-warn' if line.level == 'WARNING' else 'badge-err' if line.level in ('ERROR', 'CRITICAL') else 'badge-off' }}">{{ line.level }}</span></td>
+          <td><pre class="log-line" dir="ltr">{{ line.message }}</pre></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="muted">{{ lines | length }} / {{ total }}</p>
+  {% else %}
+  <div class="empty">
+    <p class="muted">{{ t.log_empty }}</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

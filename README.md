@@ -93,8 +93,12 @@ sudo sparky-manager backup    # backup to /root/sparky-manager-backup-<date>.tar
 
 With a domain + certificate, the panel can also serve TUIC (8443),
 AnyTLS (8444), Naive (8445), and ShadowTLS (8446) — see
-[docs/PORTS.md](docs/PORTS.md). The ZedSecure import checklist is in
-[docs/ZEDSECURE.md](docs/ZEDSECURE.md).
+[docs/PORTS.md](docs/PORTS.md). Since v1.2.0 it also runs four more
+protocols (create them as inbounds; no domain needed): OpenVPN
+(UDP 1194, `.ovpn` file), OpenConnect (TCP+UDP 4433, AnyConnect
+profile), AmneziaWG (UDP 51821, `vpn://` link — needs the kernel
+module), and IKEv2 (UDP 500+4500, `.mobileconfig`). The ZedSecure
+import checklist is in [docs/ZEDSECURE.md](docs/ZEDSECURE.md).
 
 ## FAQ
 
@@ -125,8 +129,9 @@ ZedSecure already bundles; a server panel has nothing to run for them.
 
 ## Phase 1 limits (honest list)
 
-- OpenVPN / OpenConnect and AmneziaWG are Phase 2, not in the MVP.
-- IKEv2 is not in Phase 1 (native support is Phase 2).
+- OpenVPN, OpenConnect, AmneziaWG and native IKEv2 (strongSwan) were
+  Phase 2 — all four shipped in **v1.2.0** (AmneziaWG gated: it needs
+  the kernel module; the panel says plainly when it is missing).
 - sing-box has no per-user stats API: shared-port sing-box inbounds show
   "traffic: n/a" rather than an invented number.
 - No reseller / multi-admin / billing, no multi-node management.

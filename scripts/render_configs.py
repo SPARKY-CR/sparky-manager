@@ -506,12 +506,16 @@ def main(argv: list[str] | None = None) -> int:
         except (TypeError, ValueError):
             wg_port = DEFAULT_WG_PORT
     server_key = _wireguard_server_key(settings, warnings=warnings)
+    # No DNS in the SERVER config: the line only changes the server's
+    # own resolver, it is never pushed to clients, and it makes
+    # `wg-quick up` fail hard on any system without a resolvconf
+    # provider (see app.wgapply). Client configs still carry DNS.
     wg_text = render_wg_config(
         server_key,
         wg_peers,
         address=settings.get("wg_address", DEFAULT_WG_ADDRESS),
         listen_port=wg_port,
-        dns=settings.get("dns", "1.1.1.1"),
+        dns="",
     )
 
     # -- write -------------------------------------------------------------

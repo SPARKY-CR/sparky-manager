@@ -83,10 +83,10 @@ Exact pain points were never spelled out, so this design fixes the
 | Feature | 3X-UI (MHSanaei) | vpn-ui (Sir-MmD) | sparky-manager (this design) |
 |---|---|---|---|
 | Core(s) | Xray-core (stock) | Patched Xray-core + many daemons, single Go binary | **Xray-core (stock) + sing-box (stock), side by side** |
-| Xray protocols | VLESS, VMess, Trojan, SS, WG, AmneziaWG, TUIC v5, Hysteria2, MTProto, HTTP/SOCKS, TUN | All of 3X-UI + AnyTLS, NaiveProxy (in patched core) + PPTP/L2TP/OpenVPN/OpenConnect/SSTP/IKEv2/SSH/GRE/MTProto | Phase 1: VLESS, VMess, Trojan, SS, Hysteria2 (Xray) + TUIC, AnyTLS, Naive, ShadowTLS (sing-box) + WireGuard (native) |
+| Xray protocols | VLESS, VMess, Trojan, SS, WG, AmneziaWG, TUIC v5, Hysteria2, MTProto, HTTP/SOCKS, TUN | All of 3X-UI + AnyTLS, NaiveProxy (in patched core) + PPTP/L2TP/OpenVPN/OpenConnect/SSTP/IKEv2/SSH/GRE/MTProto | Phase 1: VLESS, VMess, Trojan, SS, Hysteria2 (Xray) + TUIC, AnyTLS, Naive, ShadowTLS (sing-box) + WireGuard (native); v1.2.0 adds OpenVPN, OpenConnect, AmneziaWG, IKEv2 |
 | sing-box protocols | — (Xray only) | — (patched Xray only) | **TUIC, AnyTLS, Naive, ShadowTLS via real sing-box** |
-| IKEv2 | — | Bundled strongSwan | **Protocol label only in Phase 1** (§5.4) — native support is Phase 2 |
-| OpenVPN / OpenConnect | — | Bundled daemons | Phase 2 (§8) |
+| IKEv2 | — | Bundled strongSwan | **Native strongSwan since v1.2.0** (§5.4) |
+| OpenVPN / OpenConnect | — | Bundled daemons | v1.2.0 (§8) |
 | Subscription formats | v2rayNG-style links, JSON, Clash | Same + TXT/PDF export | **Dual: v2rayNG base64 links AND sing-box JSON** (§6), QR, per-user link |
 | Per-user quota / expiry / enable-disable | Yes | Yes + Freeze + bulk ops | Yes (MVP core); Freeze = enable/disable; bulk ops Phase 2 |
 | Traffic stats / online users | Xray gRPC stats | Xray gRPC + RADIUS/nftables for daemons | Xray gRPC + `wg show` + nftables-per-port for sing-box (§6.4) |
@@ -134,9 +134,9 @@ Exact pain points were never spelled out, so this design fixes the
   Xray-core       sing-box           WireGuard (native)
   :10085 API      config.json        wg0 · wg show
   (127.0.0.1)     no stats API (*)   per-peer counters
-  gRPC stats      nftables/port      AmneziaWG: Phase 2
-  config.json     accounting (*)     IKEv2: not provided
-                                     OpenVPN/ocserv: Phase 2
+  gRPC stats      nftables/port      AmneziaWG: v1.2.0 (gated — see §5.3)
+  config.json     accounting (*)     IKEv2: v1.2.0 (strongSwan, §5.4)
+                                     OpenVPN/ocserv: v1.2.0
        │               │                   │
        └───────────────┴───────────────────┘
                        ▼
@@ -379,24 +379,30 @@ carry the install instead (see open question Q2).
   + QR code (ZedSecure imports WireGuard configs; also `wireguard://` links).
   This is the *same* model commercial providers use and the same one
   vpn-ui uses for "WireGuard (C)".
-- **AmneziaWG:** **Phase 2, gated.** Needs a DKMS kernel module that
+- **AmneziaWG:** **v1.2.0, gated.** Needs a DKMS kernel module that
   fails to build on kernel ≥ 7.1 and on RHEL-family kernels (vpn-ui's own
-  README says so). The installer must *detect and refuse* with a clear
-  message rather than fail silently. ZedSecure supports it, so it stays
-  on the roadmap, not in MVP.
+  README says so). The installer *tries* the Amnezia PPA (suite pinned
+  to `noble` on Ubuntu 26.04, which the PPA does not publish) and falls
+  back cleanly — it never breaks the rest of the install. If the module
+  is missing, the panel renders the config but reports honestly
+  ("amneziawg is not installed") instead of pretending the inbound
+  works. ZedSecure imports it via `vpn://` links and `.conf` files;
+  upstream sing-box has no AmneziaWG support, so the sing-box feed
+  carries none of it.
 
-### 5.4 IKEv2 — protocol label only in Phase 1
+### 5.4 IKEv2 — native strongSwan since v1.2.0
 
 The panel is built from scratch and does not detect, show, link to, or
-depend on any other project. `ikev2` exists in the panel only as a
-**protocol/core label** in the data model (for a future native IKEv2
-implementation): there is no IKEv2 status card, no external-manager
-link, and the panel never reads another project's files.
+depend on any other project. `ikev2` is a native protocol in the data
+model since v1.2.0: the panel renders `/etc/swanctl/swanctl.conf`
+(`remote-access` connection, EAP-MSCHAPv2 + server certificate) and a
+`.mobileconfig` per user, and applies it with `swanctl --load-all`.
+The strongSwan code is written from scratch for this panel — it does
+not reuse, read, or depend on any other project's IKEv2 code.
 
-Port plan note: if strongSwan/IKEv2 runs on the same server it uses
-UDP 500/4500 — the panel never assigns those ports to its own inbounds
-(the inbound form rejects them, and the defaults are 443 TCP/UDP,
-51820 UDP, 8388 TCP).
+Port plan note: strongSwan/IKEv2 uses UDP 500/4500 — the panel never
+assigns those ports to its own inbounds (the inbound form rejects
+them, except an IKEv2 inbound itself, which uses 500).
 
 ### 5.5 What the panel does NOT run (by design)
 
@@ -406,7 +412,7 @@ UDP 500/4500 — the panel never assigns those ports to its own inbounds
 | **Tor** (obfs4 / Snowflake / Conjure) | ❌ No (Phase 3 at most) | Tor is a third-party anonymity network. Running a bridge is a separate project (obfs4 bridge + Tor daemon + bridge-line distribution) with its own abuse/ops profile. ZedSecure already bundles Tor; the panel gains nothing by owning it in MVP. |
 | **DNS tunnels** (DNSTT / VayDNS / MasterDNS) | ❌ No | These tunnel through DNS on networks that allow little else. They need a DNS server + a tunnel endpoint (iodine-style) and a domain with NS records — a niche fallback, not a general VPN server. ZedSecure bundles the clients; the panel does not need a DNS-tunnel server for its core job. Revisit only if James explicitly asks. |
 | **SSH** (as a VPN) | ❌ No server in MVP | ZedSecure lists SSH as an engine, but SSH-as-VPN (dynamic SOCKS) is a manual fallback, not a managed multi-user service. The server already has SSH; the panel doesn't need to manage it. |
-| OpenVPN / OpenConnect | ⏳ Phase 2 | Real servers (OpenVPN daemon, ocserv) with `.ovpn` export — valuable, but each is a daemon with its own PKI. Deliberately deferred so Phase 1 ships. |
+| OpenVPN / OpenConnect | ✅ v1.2.0 | Real servers (OpenVPN daemon, ocserv) with `.ovpn` / AnyConnect-profile export; one shared CA under `data/ca/` with the IKEv2 server cert. |
 
 ---
 
@@ -457,7 +463,9 @@ Only the user's *enabled* inbounds are included.
 | AnyTLS | `anytls://<password>@<host>:8444?sni=<host>#<name>` |
 | Naive | `naive+https://<user>:<password>@<host>:8445#<name>` |
 | WireGuard | No share-link standard — export `.conf` file + QR of the file content (§6.3) |
-| IKEv2 / OpenVPN | No share link — `.mobileconfig` / `.ovpn` file export (Phase 2 for both) |
+| AmneziaWG | `vpn://` + base64url of the whole `.conf` text (v1.2.0); no sing-box outbound (upstream has no AmneziaWG support) |
+| IKEv2 / OpenVPN | No share link — `.mobileconfig` / `.ovpn` file export (both in v1.2.0) |
+| OpenConnect | No share link — AnyConnect profile XML + host / port / credentials (v1.2.0) |
 
 URL-encode the `#name` fragment and any password containing `@`, `#`,
 `?`, `/`. Base64 is **encoding, not encryption** — anyone with the link
@@ -507,7 +515,7 @@ feature done (see §10, Q5).
 | Xray inbounds | gRPC Stats API on `127.0.0.1:10085` (`QueryStats` per `user>>>…>>>traffic>>>uplink/downlink` + `inbound>>>…`). Poll every 60 s. | Per user, per inbound. Accurate. |
 | WireGuard | `wg show wg0 transfer` (bytes per peer public key → map to client). Poll every 60 s. | Per peer. Accurate. |
 | sing-box inbounds | **No stats API.** Per-user dedicated port + nftables counter per port (`nft add rule … counter`), polled every 60 s. | Per user *only if* the user has a dedicated port for that protocol. Shared-port sing-box inbounds cannot be attributed per user — the UI must say "traffic: n/a (shared port)" rather than invent a number. |
-| IKEv2 | Not in Phase 1 (native support is Phase 2). | — |
+| IKEv2 | Native since v1.2.0; no per-user traffic API yet (same gap as OpenVPN/ocserv — `swanctl --list-sas` / occtl exist but are not wired into the panel yet). | — |
 | Online status | Xray: a user with non-zero traffic delta in the last 60–120 s, or present in `QueryStats` with recent activity → "online". WireGuard: `latest handshake < 3 min ago`. sing-box: no live sessions API — show "last seen" from traffic deltas only, never fake "online". | Best-effort, labelled as such. |
 
 Enforcement runs in the sweeper (every 5 min): expired or over-quota
@@ -565,7 +573,7 @@ One-liner install:
 
 ```bash
 curl -Ls https://raw.githubusercontent.com/SPARKY-CR/sparky-manager/main/install.sh | sudo bash
-# or pinned:  curl -Ls …/install.sh | sudo bash -s -- --version 1.1.0
+# or pinned:  curl -Ls …/install.sh | sudo bash -s -- --version 1.2.0
 ```
 
 `install.sh` outline (idempotent — safe to re-run):
@@ -631,21 +639,23 @@ first): `sparky-manager info | status | restart | update-cores | backup | restor
   QR codes + single links; token rotation.
 - Traffic: Xray gRPC + `wg show` + nftables-per-port for sing-box;
   dashboard totals + per-user used/remaining + expiry countdown.
-- IKEv2: protocol label only in Phase 1; native support in Phase 2.
+- IKEv2: native strongSwan since v1.2.0 (EAP-MSCHAPv2 + server cert,
+  `.mobileconfig` export); OpenVPN + OpenConnect since v1.2.0;
+  AmneziaWG since v1.2.0 (gated on the kernel module).
 - Tests: config-render golden tests (render → `xray -test` /
   `sing-box check` on known inputs), link-builder tests (round-trip:
   build a link → parse it back), subscription tests (both formats parse
   in a reference parser), install dry-run on Ubuntu 24.04 + Debian 12.
 
-### Phase 2
-- OpenVPN (daemon + `.ovpn` export) and OpenConnect/ocserv.
-- AmneziaWG — **only** when the installer can verify the kernel module
-  builds on that host; otherwise it stays unavailable with a clear reason.
+### Phase 2 (v1.2.0: OpenVPN, OpenConnect, AmneziaWG, native IKEv2 — done)
+- ~~OpenVPN (daemon + `.ovpn` export) and OpenConnect/ocserv.~~ Done in v1.2.0.
+- ~~AmneziaWG — **only** when the installer can verify the kernel module
+  builds on that host; otherwise it stays unavailable with a clear reason.~~ Done in v1.2.0 (gated: the panel reports honestly when the tools are missing).
 - Zero-downtime user add/remove (Xray gRPC `AddUser`/`RemoveUser`).
 - Bulk operations (traffic/days/enable/delete) + Freeze.
 - Clash/Mihomo YAML subscription format.
 - Optional second admin (read-only role).
-- Native IKEv2 (strongSwan) support.
+- ~~Native IKEv2 (strongSwan) support.~~ Done in v1.2.0.
 - Telegram-bot hook — only if James asks.
 
 ### Phase 3 (only if asked)

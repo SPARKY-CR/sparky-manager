@@ -16,7 +16,34 @@ this is the plan the installer ships with.
 | Naive | TCP 8445 | sing-box; TLS mandatory |
 | ShadowTLS v3 + SS2022 | TCP 8446 | Inner Shadowsocks on 127.0.0.1 only, `strict_mode` |
 | WireGuard | UDP 51820 | Native `wg0` |
+| OpenVPN | UDP 1194 | Username/password auth (`auth-user-pass-verify` against the panel DB); `.ovpn` file export, CA embedded |
+| OpenConnect (ocserv) | TCP + UDP 4433 | Password auth (`ocpasswd`); 443 is taken by the default VLESS/Hysteria2 pair, so 4433. AnyConnect profile XML export |
+| AmneziaWG | UDP 51821 | WireGuard fork with obfuscation (`awg0`); needs the AmneziaWG kernel module or `amneziawg-go` — the installer tries the Amnezia PPA (pinned to `noble` on Ubuntu 26.04) and the panel says plainly when it is missing |
+| IKEv2 (strongSwan) | UDP 500 + 4500 | EAP-MSCHAPv2 + server certificate; `.mobileconfig` export. Both ports are reserved by design — the inbound form rejects them for other protocols |
 | Subscription endpoint | Same panel port, `/sub/<token>` | Separate port only if the admin wants it unlisted |
+
+## Forwarding and NAT (v12 protocols)
+
+The installer enables IPv4 forwarding (`net.ipv4.ip_forward = 1`,
+persisted in `/etc/sysctl.d/99-sparky-manager.conf`) — without it
+the VPN servers cannot route client traffic. **NAT is not added
+automatically**: for clients to reach the internet, the server needs
+a MASQUERADE rule for each client subnet, e.g. with nftables:
+
+```
+table ip nat {
+  chain postrouting {
+    type nat hook postrouting priority 100; policy accept;
+    ip saddr { 10.8.0.0/24, 10.8.1.0/24, 10.9.0.0/24, 10.10.10.0/24, 10.20.0.0/24 } masquerade
+  }
+}
+```
+
+(The WireGuard subnets 10.8.0.0/24 and 10.8.1.0/24, OpenVPN
+10.9.0.0/24, OpenConnect 10.10.10.0/24, IKEv2 10.20.0.0/24.) The
+panel does not write firewall rules itself — a wrong NAT rule can
+break the server's own networking, so it stays a documented manual
+step.
 
 ## No domain? What is omitted
 
@@ -34,7 +61,7 @@ inbounds become available as an option.
 
 ## Ports the panel does NOT use
 
-IKEv2 uses UDP 500/4500 — those belong to strongSwan/IKEv2 when it runs
-on the same server, and the panel reserves them by simply never using
-them (the inbound form rejects them). Xray's stats API listens only on loopback (`127.0.0.1:10085`)
-and is never public.
+Xray's stats API listens only on loopback (`127.0.0.1:10085`) and is
+never public. UDP 500/4500 are reserved for IKEv2 by design — the
+inbound form rejects them for every other protocol (an IKEv2 inbound
+itself uses port 500).

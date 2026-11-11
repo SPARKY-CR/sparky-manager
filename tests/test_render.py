@@ -181,6 +181,9 @@ def test_rerender_configs_writes_xray_without_unusable_users(
     monkeypatch.setattr(main_mod, "WG_CONFIG_PATH",
                         str(tmp_path / "wg0.conf"))
     monkeypatch.setattr(main_mod, "_restart_service", lambda name: None)
+    monkeypatch.setattr(main_mod, "_apply_wireguard_config",
+                        lambda content, **kw: None)
+    monkeypatch.setattr(main_mod, "_apply_ikev2_config", lambda: None)
     errors = rerender_configs(db)
     # sing-box TLS inbounds are omitted (no cert in the DB settings),
     # which surfaces as warnings — the Xray write itself must succeed.

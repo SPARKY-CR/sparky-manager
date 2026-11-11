@@ -19,6 +19,15 @@
       {{ t.reality_sni }}
       <input type="text" name="reality_sni" value="{{ settings.get('reality_sni', 'www.microsoft.com') }}" dir="ltr">
     </label>
+    <label>
+      {{ t.log_level }}
+      <select name="log_level" dir="ltr">
+        {% for lv in ["DEBUG", "INFO", "WARNING", "ERROR"] %}
+        <option value="{{ lv }}"{% if settings.get('log_level', 'INFO') == lv %} selected{% endif %}>{{ lv }}</option>
+        {% endfor %}
+      </select>
+      <span class="muted">{{ t.log_level_hint }}</span>
+    </label>
     <div class="form-actions">
       <button type="submit" class="btn btn-primary">{{ t.save }}</button>
     </div>

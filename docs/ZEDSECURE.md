@@ -21,8 +21,10 @@ so a user never has to care which engine a protocol belongs to.
 | Naive | ✅ `naive+https://` | ✅ `type: naive` | Needs a domain + certificate. **Note the `naive+https` scheme** — a common gotcha; verify against the real ZedSecure importer |
 | ShadowTLS v3 + SS | ⚠️ link form only | ✅ sing-box JSON | Carried as TWO outbounds: `shadowtls` (outer handshake) + a `shadowsocks` outbound that detours through it. The bare share-link form is unreliable; prefer the sing-box JSON or the ZedSecure bundle. Verify against ZedSecure before relying on the link form |
 | WireGuard | ❌ no share-link standard | ✅ endpoint (`type: wireguard` under `endpoints`) | sing-box 1.13+ removed the WireGuard *outbound*; the feed carries it as an endpoint (`address` + `peers[]`), plus a standard `.conf` file + QR code of the file content |
-| IKEv2 | ❌ | ❌ | Phase 2 (native support, `.mobileconfig` export) |
-| OpenVPN / OpenConnect | ❌ | ❌ | Phase 2 (`.ovpn` file export) |
+| AmneziaWG | ✅ `vpn://` (base64url of the whole `.conf`) | ❌ upstream sing-box has no AmneziaWG | Only sing-box forks support it (Hiddify's `"type": "awg"` endpoint, sing-box-lx's root-promoted AWG fields) — the stock sing-box feed must not carry a plain WireGuard endpoint for it (the obfuscation parameters would be lost). Export is the `vpn://` link + the `.conf` file |
+| IKEv2 | ❌ | ❌ | Native strongSwan (EAP-MSCHAPv2 + server cert). Export is the `.mobileconfig` file (VPN payload + the panel CA as a trusted root). iOS 13+ needs the user to enable full trust for the CA in Settings after installing |
+| OpenVPN | ❌ | ❌ | Username/password auth; export is the `.ovpn` file (CA embedded, password prompt) + its QR code |
+| OpenConnect | ❌ | ❌ | Password auth; export is the AnyConnect profile XML + host / port / username / password in the bundle |
 
 ## The ZedSecure bundle (`/sub/<token>/zedsecure.json`)
 
@@ -71,6 +73,45 @@ over-quota user → HTTP 403 with an empty body. The
       "remark": "WireGuard (native)",
       "singbox_endpoint": {"type": "wireguard", "...": "..."},
       "wireguard_conf": "[Interface]\nPrivateKey = ...\n..."
+    },
+    {
+      "tag": "openvpn",
+      "protocol": "openvpn",
+      "core": "openvpn",
+      "port": 1194,
+      "remark": "OpenVPN",
+      "openvpn_config": "client\ndev tun\nproto udp\nremote 203.0.113.10 1194\n...\n<ca>\n-----BEGIN CERTIFICATE-----\n..."
+    },
+    {
+      "tag": "openconnect",
+      "protocol": "openconnect",
+      "core": "openconnect",
+      "port": 4433,
+      "remark": "OpenConnect",
+      "openconnect": {
+        "host": "203.0.113.10",
+        "port": 4433,
+        "username": "alice",
+        "password": "…",
+        "profile_xml": "<?xml version=\"1.0\" …?><AnyConnectProfile …>…"
+      }
+    },
+    {
+      "tag": "amneziawg",
+      "protocol": "amneziawg",
+      "core": "amneziawg",
+      "port": 51821,
+      "remark": "AmneziaWG",
+      "share_link": "vpn://…",
+      "amneziawg_conf": "[Interface]\nPrivateKey = …\nJc = 4\n…"
+    },
+    {
+      "tag": "ikev2",
+      "protocol": "ikev2",
+      "core": "ikev2",
+      "port": 500,
+      "remark": "IKEv2",
+      "ikev2_mobileconfig": "<?xml version=\"1.0\" …?><!DOCTYPE plist …>…"
     }
   ],
   "links": ["vless://...", "trojan://..."],
@@ -88,7 +129,16 @@ over-quota user → HTTP 403 with an empty body. The
   WireGuard inbounds. A ShadowTLS entry's companion
   Shadowsocks detour outbound (tag `<tag>-ss`) lives in the
   feed's `outbounds`, not on the entry — the pair is only usable
-  together.
+  together. The file-export protocols add their file contents:
+  `openvpn_config` (the `.ovpn` text), `openconnect` (host /
+  port / username / password / `profile_xml`), `amneziawg_conf`
+  (the `.conf` text — the `vpn://` link is the `share_link`),
+  `ikev2_mobileconfig` (the `.mobileconfig` plist text). The same
+  files are also downloadable per user (token-gated):
+  `/sub/<token>/openvpn.ovpn`, `/sub/<token>/openconnect.xml`,
+  `/sub/<token>/amneziawg.conf`, `/sub/<token>/ikev2.mobileconfig`
+  (403 for an unknown / disabled / expired user, 404 when the user
+  has no usable inbound of that protocol).
 - `links` is the same flat list the v2rayNG feed carries.
 - `singbox` is the whole sing-box feed object, so the app can take
   it wholesale.
@@ -106,6 +156,10 @@ over-quota user → HTTP 403 with an empty body. The
    at a time from the user's page.
 4. WireGuard: download the `.conf` file from the user's page, or scan
    its QR code; ZedSecure imports WireGuard configs directly.
+5. File exports: on the user's page, under "File exports", the
+   OpenVPN `.ovpn`, OpenConnect profile XML, AmneziaWG `.conf`
+   (+ its `vpn://` link), and IKEv2 `.mobileconfig` are all
+   downloadable — one file per protocol the user actually has.
 
 ## Subscription behaviour to know about
 
@@ -131,11 +185,15 @@ has nothing to run for them, and ZedSecure already bundles them:
   DNS server plus a tunnel endpoint and NS records.
 - **SSH as a VPN** — a manual fallback (dynamic SOCKS); the server
   already has SSH and the panel does not manage it.
-- **OpenConnect** — Cisco AnyConnect gateways; Phase 2 at most.
 
 ## Before calling the feeds "done"
 
 Import **both** feeds into the real ZedSecure app on a phone and
 connect with each protocol — especially Naive (`naive+https://`) and
 ShadowTLS, whose link forms vary between clients. The spec alone is
-not a test.
+not a test. The same applies to the v12 file exports: import the
+`.ovpn` into ZedSecure's OpenVPN engine, the `vpn://` link / `.conf`
+into its AmneziaWG engine, the AnyConnect profile into its
+OpenConnect engine, and install the `.mobileconfig` on iOS — no
+public documentation exists for ZedSecure's import parser, so the
+real app is the only verification that matters.
