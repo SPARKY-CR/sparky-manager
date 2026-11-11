@@ -149,7 +149,12 @@ pick_random_port() {
 # secret panel web path (like 3X-UI's webBasePath). The panel only
 # answers under /<path>; without it the root returns 404.
 pick_random_web_path() {
-    tr -dc 'a-z0-9' < /dev/urandom | head -c 12
+    # NOTE: `|| true` is load-bearing. `tr` reads an infinite stream;
+    # `head` exits after 12 bytes and `tr` then dies with SIGPIPE
+    # (exit 141). With `set -euo pipefail` that would kill the whole
+    # installer silently — exactly what happened on the server (it
+    # stopped right after "Reusing existing panel port", no error).
+    tr -dc 'a-z0-9' < /dev/urandom | head -c 12 || true
 }
 
 # ---------------------------------------------------------------------------
