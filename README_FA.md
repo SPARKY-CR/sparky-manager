@@ -2,7 +2,7 @@
 
 پنل VPN چند هسته‌ای که از صفر ساخته شده است: **Xray-core + sing-box +
 WireGuard** با یک رابط وب فارسی. برای کلاینت
-[ZedSecure](https://github.com/EbiDevSharp/ZedSecure) ساخته شده است —
+[ZedSecure](https://github.com/CluvexStudio/ZedSecure) ساخته شده است —
 پنل همهٔ پروتکل‌هایی را که ZedSecure می‌تواند به آن‌ها وصل شود و به
 سرور نیاز دارند، در دو قالب اشتراکی که ZedSecure می‌فهمد ارائه می‌دهد
 (لینک‌های v2rayNG و JSON مربوط به sing-box)، به‌همراه QR کد.
