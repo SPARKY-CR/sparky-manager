@@ -2,7 +2,7 @@
 
 A multi-core VPN panel built from scratch: **Xray-core + sing-box + native
 WireGuard**, managed through one Persian-first web UI. It is made for the
-[ZedSecure](https://github.com/EbiDevSharp/ZedSecure) client — the panel
+[ZedSecure](https://github.com/CluvexStudio/ZedSecure) client — the panel
 serves everything ZedSecure can connect to that needs a server, in the two
 subscription formats ZedSecure understands (v2rayNG links and sing-box
 JSON), plus QR codes.
