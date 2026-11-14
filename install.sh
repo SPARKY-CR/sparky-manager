@@ -518,11 +518,15 @@ if command -v sudo >/dev/null 2>&1 && command -v visudo >/dev/null 2>&1; then
     cat > /etc/sudoers.d/sparky-manager <<'EOF'
 # sparky-manager panel: restart its services and read WireGuard stats.
 # Installed by install.sh; validated with visudo -cf before use.
-# v12: the WireGuard apply path uses `systemctl start` (not restart)
-# and `wg show` (interface check), swanctl loads the IKEv2 config,
-# ocserv -t validates its config, and journalctl tails give the panel
-# the real error behind a failed restart (see app.wgapply / app.main).
-sparky-manager ALL=(root) NOPASSWD: /usr/bin/systemctl restart xray, /usr/bin/systemctl restart sing-box, /usr/bin/systemctl restart sparky-manager, /usr/bin/systemctl restart wg-quick@wg0, /usr/bin/systemctl restart openvpn-server@sparky-manager, /usr/bin/systemctl restart ocserv, /usr/bin/systemctl restart strongswan, /usr/bin/systemctl start wg-quick@wg0, /usr/bin/systemctl start awg-quick@awg0, /usr/bin/systemctl is-active xray, /usr/bin/systemctl is-active sing-box, /usr/bin/systemctl is-active sparky-manager, /usr/bin/systemctl is-active wg-quick@wg0, /usr/bin/systemctl status xray, /usr/bin/systemctl status sing-box, /usr/bin/systemctl status sparky-manager, /usr/bin/systemctl status wg-quick@wg0, /usr/bin/wg show wg0 transfer, /usr/bin/wg show wg0, /usr/bin/awg show awg0, /usr/bin/wg-quick up wg0, /usr/bin/wg-quick down wg0, /usr/bin/swanctl --load-all, /usr/bin/swanctl --list-conns, /usr/bin/ocserv -t -c *, /usr/bin/journalctl -u xray -n 50 --no-pager, /usr/bin/journalctl -u sing-box -n 50 --no-pager, /usr/bin/journalctl -u sparky-manager -n 50 --no-pager, /usr/bin/journalctl -u wg-quick@wg0 -n 50 --no-pager, /usr/bin/journalctl -u openvpn-server@sparky-manager -n 50 --no-pager, /usr/bin/journalctl -u ocserv -n 50 --no-pager, /usr/bin/journalctl -u strongswan -n 50 --no-pager, /usr/bin/journalctl -u awg-quick@awg0 -n 50 --no-pager
+# v13: the WireGuard apply path (app.wgapply) also runs `wg-quick
+# strip` and `wg syncconf` on temp files in the config dir, and the
+# same for AmneziaWG (`awg-quick strip` / `awg syncconf`). Without
+# these rules every re-render fails with "I'm sorry sparky-manager.
+# I'm afraid I can't do that" — seen on the live server 2026-11-14:
+# the strip step was denied from the first user creation, so no
+# WireGuard config ever applied. The temp names are mkstemp
+# `.wg-strip-*.conf` / `.wg-syncconf-*.conf` in the config dir.
+sparky-manager ALL=(root) NOPASSWD: /usr/bin/systemctl restart xray, /usr/bin/systemctl restart sing-box, /usr/bin/systemctl restart sparky-manager, /usr/bin/systemctl restart wg-quick@wg0, /usr/bin/systemctl restart openvpn-server@sparky-manager, /usr/bin/systemctl restart ocserv, /usr/bin/systemctl restart strongswan, /usr/bin/systemctl start wg-quick@wg0, /usr/bin/systemctl start awg-quick@awg0, /usr/bin/systemctl is-active xray, /usr/bin/systemctl is-active sing-box, /usr/bin/systemctl is-active sparky-manager, /usr/bin/systemctl is-active wg-quick@wg0, /usr/bin/systemctl status xray, /usr/bin/systemctl status sing-box, /usr/bin/systemctl status sparky-manager, /usr/bin/systemctl status wg-quick@wg0, /usr/bin/wg show wg0 transfer, /usr/bin/wg show wg0, /usr/bin/awg show awg0, /usr/bin/wg-quick up wg0, /usr/bin/wg-quick down wg0, /usr/bin/wg-quick strip /etc/wireguard/.wg-strip-*.conf, /usr/bin/wg syncconf wg0 /etc/wireguard/.wg-syncconf-*.conf, /usr/bin/awg-quick strip /etc/amnezia/amneziawg/.wg-strip-*.conf, /usr/bin/awg syncconf awg0 /etc/amnezia/amneziawg/.wg-syncconf-*.conf, /usr/bin/swanctl --load-all, /usr/bin/swanctl --list-conns, /usr/bin/ocserv -t -c *, /usr/bin/journalctl -u xray -n 50 --no-pager, /usr/bin/journalctl -u sing-box -n 50 --no-pager, /usr/bin/journalctl -u sparky-manager -n 50 --no-pager, /usr/bin/journalctl -u wg-quick@wg0 -n 50 --no-pager, /usr/bin/journalctl -u openvpn-server@sparky-manager -n 50 --no-pager, /usr/bin/journalctl -u ocserv -n 50 --no-pager, /usr/bin/journalctl -u strongswan -n 50 --no-pager, /usr/bin/journalctl -u awg-quick@awg0 -n 50 --no-pager
 EOF
     chmod 0440 /etc/sudoers.d/sparky-manager
     chown root:root /etc/sudoers.d/sparky-manager
