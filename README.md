@@ -24,7 +24,7 @@ code from 3X-UI, vpn-ui, Marzban, or any other panel.
   prints one big login box with the full URL, username and password,
   and saves it to `/root/sparky-manager-login.txt`;
   `sudo sparky-manager info` reprints it. Fix the port with `--port`.
-- **No domain needed.** It works with a bare server IP. The default
+- **No domain needed.** It works with a bare server IP. The recommended
   first pair — **VLESS + Reality (TCP 443)** and **Hysteria2 (UDP 443)**,
   plus **WireGuard (UDP 51820)** — needs no domain and no certificate.
   With no domain the installer tries for a trusted Let's Encrypt
@@ -82,7 +82,10 @@ sudo sparky-manager restart   # restart panel + cores
 sudo sparky-manager backup    # backup to /root/sparky-manager-backup-<date>.tar.gz
 ```
 
-## Default protocols (no domain needed)
+## Protocols (no domain needed)
+
+A fresh install creates no inbounds — add them from the panel
+(Inbounds → Add inbound). The table lists the recommended ports:
 
 | Protocol | Port | Core |
 |---|---|---|

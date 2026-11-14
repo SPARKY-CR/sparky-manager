@@ -178,6 +178,10 @@ button { font-family: inherit; }
 h1 { font-size: 1.45rem; margin: 0.2rem 0 1.1rem; font-weight: 700; }
 h2 { font-size: 1.12rem; margin: 0 0 0.8rem; font-weight: 700; }
 h3 { font-size: 1rem; margin: 0 0 0.5rem; font-weight: 600; }
+/* Long names/tags/URLs must wrap instead of overflowing the card
+   on narrow phone screens. */
+h1, h2, h3 { overflow-wrap: anywhere; }
+.card a { overflow-wrap: anywhere; }
 .muted { color: var(--muted); }
 
 .page-head {
@@ -335,6 +339,11 @@ select option { background: var(--surface-2); color: var(--ink); }
   margin-block: 0.4rem 1rem;
   font-weight: 500;
   border: 1px solid transparent;
+  /* Error flashes carry long unbroken text (paths, JSON, core
+     output) — let it wrap instead of overflowing the screen. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
 }
 .flash::before { content: ""; flex: 0 0 auto; width: 9px; height: 9px; margin-top: 0.55rem; border-radius: 50%; background: currentColor; }
 .flash-ok { background: var(--ok-soft); color: var(--ok); border-color: rgba(52, 211, 153, 0.3); }
@@ -356,6 +365,9 @@ select option { background: var(--surface-2); color: var(--ink); }
   font-family: var(--mono);
 }
 .copy-row { display: flex; gap: 0.5rem; align-items: flex-start; }
+/* The copy button keeps its own width — it must never squeeze or
+   wrap (a wrapped button label breaks the whole row on phones). */
+.copy-row .btn { flex: 0 0 auto; white-space: nowrap; }
 .link-item { border-block-start: 1px solid var(--line-soft); padding-block: 0.9rem; }
 .link-item:first-of-type { border-block-start: none; padding-block-start: 0.2rem; }
 .link-item:last-of-type { padding-block-end: 0; }
@@ -475,6 +487,10 @@ body.auth-page .container { max-width: 440px; padding-top: 2rem; }
   .stat-icon { width: 40px; height: 40px; }
   .stat-num { font-size: 1.3rem; }
   .card { padding: 0.95rem; }
+  /* Stack link + copy button: the link gets the full width to read,
+     and the button becomes a full-width, easy-to-tap target. */
+  .copy-row { flex-direction: column; align-items: stretch; }
+  .copy-row .btn { width: 100%; padding-block: 0.5rem; }
   .qr { width: 160px; height: 160px; }
   th, td { padding: 0.55rem 0.45rem; }
   h1 { font-size: 1.3rem; }

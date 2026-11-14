@@ -596,10 +596,10 @@ curl -Ls https://raw.githubusercontent.com/SPARKY-CR/sparky-manager/main/install
 6. Generate Reality keypair, WireGuard server keypair, admin password
    (if not supplied), per-user subscription salt. Write
    `/opt/sparky-manager/data/panel.db` (initialised by the app on first run).
-7. Render the **default inbounds** (VLESS-Reality :443 TCP,
-   Hysteria2 :443 UDP via whichever core owns it, Shadowsocks :8388,
-   WireGuard :51820) + `xray`/`sing-box`/`wg0` configs; validate both
-   cores; `systemctl enable --now xray sing-box sparky-manager`.
+7. Write the minimal `xray`/`sing-box`/`wg0` configs (fallbacks until
+   the admin creates inbounds — a fresh install seeds no inbounds);
+   validate both cores; `systemctl enable --now xray sing-box
+   sparky-manager`.
 8. If a domain was given: obtain the Let's Encrypt cert, then restart
    the panel once with TLS enabled.
 9. **Verify before finishing:** `curl -k https://127.0.0.1:<panel-port>/<web-path>/health`

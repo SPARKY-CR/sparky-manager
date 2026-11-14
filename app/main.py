@@ -1333,79 +1333,8 @@ def rerender_configs(db: Session) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Startup: tables, default admin, default inbounds
+# Startup: tables, default admin, key settings
 # ---------------------------------------------------------------------------
-
-
-def _default_inbounds(reality: Optional[dict[str, str]] = None) -> list[dict[str, Any]]:
-    """Default inbounds created when the DB is empty (DESIGN §3/§8).
-
-    ``reality`` (when given) carries the installer's Reality keypair /
-    short-id so the VLESS-Reality inbound's ``stream_json`` holds the
-    public key + short-id the share links and subscriptions need
-    (``links`` / ``subscription`` read them from the inbound, not from
-    settings). The private key goes to settings as well, for the Xray
-    renderer, which accepts either place.
-    """
-    reality_block: dict[str, Any] = {
-        "sni": "www.microsoft.com",
-        "dest": "www.microsoft.com:443",
-    }
-    if reality:
-        if reality.get("private_key"):
-            reality_block["private_key"] = reality["private_key"]
-        if reality.get("public_key"):
-            reality_block["public_key"] = reality["public_key"]
-        if reality.get("short_id"):
-            reality_block["short_id"] = reality["short_id"]
-    return [
-        {
-            "tag": "vless-reality",
-            "core": "xray",
-            "protocol": "vless",
-            "port": 443,
-            "remark": "VLESS + Reality",
-            "stream_json": json.dumps(
-                {
-                    "network": "tcp",
-                    "security": "reality",
-                    "transport": "tcp",
-                    "reality": reality_block,
-                }
-            ),
-        },
-        {
-            "tag": "hysteria2",
-            "core": "xray",
-            "protocol": "hysteria2",
-            "port": 443,
-            "remark": "Hysteria2 (UDP 443, shares port with VLESS-Reality)",
-            "stream_json": json.dumps({"transport": "udp", "security": "tls"}),
-        },
-        {
-            "tag": "shadowsocks",
-            "core": "xray",
-            "protocol": "shadowsocks",
-            "port": 8388,
-            "remark": "Shadowsocks 2022",
-            "stream_json": json.dumps(
-                {
-                    "network": "tcp,udp",
-                    "security": "none",
-                    "transport": "tcp",
-                    "method": "2022-blake3-aes-128-gcm",
-                }
-            ),
-        },
-        {
-            "tag": "wireguard",
-            "core": "wireguard",
-            "protocol": "wireguard",
-            "port": 51820,
-            "remark": "WireGuard (native)",
-            "stream_json": json.dumps({"transport": "udp"}),
-        },
-    ]
 
 
 def _env_secret(key: str) -> str:
@@ -1430,7 +1359,11 @@ def _env_or_generate(key: str, generator) -> tuple[str, bool]:
 
 
 def ensure_defaults(db: Session) -> Optional[str]:
-    """Seed the DB on first run: admin, default inbounds, key settings.
+    """Seed the DB on first run: admin and key settings.
+
+    No inbounds are created: a fresh install starts empty and the
+    admin adds inbounds from the panel (each VLESS inbound gets its
+    own fresh Reality keypair at creation time).
 
     Bootstrap rule (installer contract): secrets prefer the
     environment variables the installer wrote to
@@ -1468,9 +1401,10 @@ def ensure_defaults(db: Session) -> Optional[str]:
             logger.info("admin account created from SPARKY_ADMIN_PASSWORD")
 
     # Reality keypair / short-id: env first, generate only if absent.
-    # Stored in settings (Xray renderer reads reality_private_key from
-    # settings) and embedded in the default inbound (links read the
-    # public key / short-id from the inbound's stream_json).
+    # Stored in settings (the Xray renderer reads reality_private_key
+    # from settings as a fallback); inbounds created from the panel
+    # carry their own keypair in stream_json, which is where the links
+    # read the public key / short-id from.
     reality: dict[str, str] = {}
     settings_now = {row.key: (row.value or "") for row in db.query(Setting).all()}
     if settings_now.get("reality_private_key"):
@@ -1553,24 +1487,6 @@ def ensure_defaults(db: Session) -> Optional[str]:
                 logger.exception("amneziawg keypair generation failed")
         db.commit()
 
-    if db.query(Inbound).count() == 0:
-        # One transaction per row, so a single conflicting row (e.g.
-        # UNIQUE(port, protocol)) is skipped with a warning instead of
-        # rolling back the whole seed.
-        from sqlalchemy.exc import IntegrityError
-
-        for row in _default_inbounds(reality or None):
-            try:
-                db.add(Inbound(**row))
-                db.commit()
-            except IntegrityError:
-                db.rollback()
-                logger.warning(
-                    "default inbound %s skipped: port %s conflicts "
-                    "(UNIQUE(port, protocol))",
-                    row["tag"],
-                    row["port"],
-                )
     return generated_password
 
 # ---------------------------------------------------------------------------

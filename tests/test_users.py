@@ -132,6 +132,45 @@ def test_inbound_same_port_and_protocol_rejected(db):
     db.rollback()
 
 
+def test_ensure_defaults_creates_no_inbounds(db_engine):
+    """A fresh install seeds no inbounds — only the admin + keys.
+
+    ``ensure_defaults()`` used to create the four default inbounds
+    (vless-reality, hysteria2, shadowsocks, wireguard). A fresh
+    install now starts empty; the admin adds inbounds from the panel.
+    """
+    from app.db import SessionLocal
+    from app.main import ensure_defaults
+    from app.models import Admin
+
+    session = SessionLocal()
+    try:
+        ensure_defaults(session)
+        assert session.query(Admin).count() == 1
+        assert session.query(Inbound).count() == 0
+        # Idempotent: a second run still creates nothing.
+        ensure_defaults(session)
+        assert session.query(Admin).count() == 1
+        assert session.query(Inbound).count() == 0
+    finally:
+        session.close()
+
+
+def test_user_detail_page_renders_copy_label(authed_client, seeded):
+    """The copy buttons show the translated label, not a method repr.
+
+    Regression: the template used ``{{ t.copy }}``, which Jinja2
+    resolves to the dict's ``copy`` *method* (``<built-in method copy
+    of dict object at 0x...>``) instead of the ``"copy"`` translation
+    key — the buttons rendered the repr and broke the mobile layout.
+    """
+    user = next(iter(seeded["users"].values()))
+    resp = authed_client.get(f"/users/{user.id}")
+    assert resp.status_code == 200, resp.text
+    assert "built-in method" not in resp.text
+    assert "کپی" in resp.text
+
+
 # ---------------------------------------------------------------------------
 # Creating / toggling / deleting users (API + HTML)
 # ---------------------------------------------------------------------------
