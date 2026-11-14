@@ -355,6 +355,14 @@ STRINGS: dict[str, dict[str, str]] = {
         "traffic_used": "ترافیک مصرف‌شده",
         "online_now": "آنلاین (تقریبی)",
         "recent_users": "کاربران اخیر",
+        "protocol_distribution": "توزیع پروتکل‌ها",
+        "recent_activity": "فعالیت‌های اخیر",
+        "view_all": "مشاهدهٔ همه",
+        "refresh": "تازه‌سازی",
+        "search_inbounds": "جستجوی اینباند…",
+        "all_protocols": "همهٔ پروتکل‌ها",
+        "all_statuses": "همهٔ وضعیت‌ها",
+        "no_matches": "موردی پیدا نشد.",
         "name": "نام",
         "status": "وضعیت",
         "enabled": "فعال",
@@ -461,6 +469,14 @@ STRINGS: dict[str, dict[str, str]] = {
         "traffic_used": "Traffic used",
         "online_now": "Online (approx.)",
         "recent_users": "Recent users",
+        "protocol_distribution": "Protocol distribution",
+        "recent_activity": "Recent activity",
+        "view_all": "View all",
+        "refresh": "Refresh",
+        "search_inbounds": "Search inbounds…",
+        "all_protocols": "All protocols",
+        "all_statuses": "All states",
+        "no_matches": "No matches.",
         "name": "Name",
         "status": "Status",
         "enabled": "Enabled",
@@ -2138,6 +2154,15 @@ def dashboard(
         online = sum(1 for r in rows if (r.up_bytes or 0) + (r.down_bytes or 0) > 0)
     except Exception:  # noqa: BLE001
         online = 0
+    # Inbound node cards + protocol distribution (dashboard sections).
+    inbounds = db.query(Inbound).order_by(Inbound.id).all()
+    clients_by_inbound = {
+        i.id: db.query(Client).filter(Client.inbound_id == i.id).count()
+        for i in inbounds
+    }
+    recent_audit = (
+        db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(6).all()
+    )
     return templates.TemplateResponse(request, "dashboard.html",
         _template_ctx(
             request,
@@ -2149,6 +2174,10 @@ def dashboard(
                 "total_inbounds": total_inbounds,
                 "traffic_used": traffic_used,
                 "online": online,
+                "inbounds": inbounds,
+                "clients_by_inbound": clients_by_inbound,
+                "today": today,
+                "recent_audit": recent_audit,
             },
         ),
     )

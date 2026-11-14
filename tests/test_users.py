@@ -369,3 +369,78 @@ def test_is_online_window():
     assert is_online(user, 181) is False
     assert is_online(user, None) is False
     assert is_online(_user(enabled=False), 10) is False
+
+
+# ---------------------------------------------------------------------------
+# Obsidian Telemetry UI (Stitch design): dashboard + inbounds pages
+# ---------------------------------------------------------------------------
+
+def test_dashboard_renders_inbound_nodes_and_distribution(authed_client, seeded):
+    """The Stitch dashboard layout renders with real data: inbound
+    node cards, the protocol distribution bar, and the activity
+    timeline — no fake servers or numbers."""
+    resp = authed_client.get("/dashboard")
+    assert resp.status_code == 200, resp.text
+    # Metric cards (real stats).
+    assert "metric-card" in resp.text
+    # Inbound node cards for the seeded inbounds.
+    assert "node-card" in resp.text
+    assert "vless-reality" in resp.text
+    assert "hysteria2" in resp.text
+    # Protocol distribution (bar + legend rows).
+    assert "dist-bar" in resp.text
+    assert "توزیع پروتکل‌ها" in resp.text
+    # Recent activity section (empty state when no audit rows yet).
+    assert "فعالیت‌های اخیر" in resp.text
+    # No fake Stitch demo data leaks in.
+    assert "1,428" not in resp.text
+    assert "US-East" not in resp.text
+
+
+def test_dashboard_activity_shows_audit_entries(authed_client, db, seeded):
+    from app.models import AuditLog
+
+    db.add(AuditLog(action="user.create", detail="alice"))
+    db.commit()
+    resp = authed_client.get("/dashboard")
+    assert resp.status_code == 200, resp.text
+    assert "user.create" in resp.text
+    assert "alice" in resp.text
+
+
+def test_inbounds_page_renders_filter_and_stats(authed_client, seeded):
+    """The Stitch configuration screen: filter strip, stats ribbon,
+    protocol chips and icon actions — all from the real inbounds."""
+    resp = authed_client.get("/inbounds")
+    assert resp.status_code == 200, resp.text
+    assert 'id="inbound-search"' in resp.text
+    assert 'id="filter-protocol"' in resp.text
+    assert 'id="filter-status"' in resp.text
+    assert 'id="inbounds-table"' in resp.text
+    # Protocol chips + filter data attributes on the rows.
+    assert "chip-proto" in resp.text
+    assert 'data-protocol="vless"' in resp.text
+    assert 'data-tag="vless-reality"' in resp.text
+    # Icon action buttons (toggle/delete) keep their forms.
+    assert 'class="icon-btn' in resp.text
+    assert "/toggle" in resp.text
+    assert "/delete" in resp.text
+    # The add form is still on the page (anchor target of the CTA).
+    assert 'id="add-inbound"' in resp.text
+    assert 'id="add-inbound-form"' in resp.text
+    # No fake Stitch data leaks in.
+    assert "1,428" not in resp.text
+    assert "US-East" not in resp.text
+
+
+def test_inbounds_page_empty_state_has_no_filter(authed_client, db, seeded):
+    """With no inbounds the filter strip and stats hide; the empty
+    state and the add form stay."""
+    db.query(Client).delete()
+    db.query(Inbound).delete()
+    db.commit()
+    resp = authed_client.get("/inbounds")
+    assert resp.status_code == 200, resp.text
+    assert "هنوز اینباندی ساخته نشده است." in resp.text
+    assert 'id="inbound-search"' not in resp.text
+    assert 'id="add-inbound-form"' in resp.text

@@ -53,6 +53,34 @@
     });
   }
 
+  // Inbounds table filter: search by tag, filter by protocol/status.
+  // All client-side; the table rows carry data-tag / data-protocol /
+  // data-status attributes. Without JS the full table just shows.
+  var inboundSearch = document.getElementById("inbound-search");
+  var inboundTable = document.getElementById("inbounds-table");
+  if (inboundSearch && inboundTable) {
+    var protoFilter = document.getElementById("filter-protocol");
+    var statusFilter = document.getElementById("filter-status");
+    var emptyRow = document.getElementById("filter-empty");
+    var applyInboundFilter = function () {
+      var q = inboundSearch.value.trim().toLowerCase();
+      var proto = protoFilter ? protoFilter.value : "";
+      var status = statusFilter ? statusFilter.value : "";
+      var visible = 0;
+      inboundTable.querySelectorAll("tbody tr[data-tag]").forEach(function (row) {
+        var ok = (!q || row.getAttribute("data-tag").indexOf(q) !== -1)
+          && (!proto || row.getAttribute("data-protocol") === proto)
+          && (!status || row.getAttribute("data-status") === status);
+        row.hidden = !ok;
+        if (ok) visible += 1;
+      });
+      if (emptyRow) emptyRow.hidden = visible !== 0;
+    };
+    inboundSearch.addEventListener("input", applyInboundFilter);
+    if (protoFilter) protoFilter.addEventListener("change", applyInboundFilter);
+    if (statusFilter) statusFilter.addEventListener("change", applyInboundFilter);
+  }
+
   // Show/hide password: <button data-toggle-password="input-id">
   document.querySelectorAll("[data-toggle-password]").forEach(function (btn) {
     btn.addEventListener("click", function () {

@@ -8,13 +8,20 @@
 </head>
 <body class="{{ 'auth-page' if not admin else '' }}">
 {% set here = request.url.path %}
+{% set crumb = t.dashboard %}
+{% if here.endswith('/inbounds') %}{% set crumb = t.inbounds %}
+{% elif '/users' in here %}{% set crumb = t.users %}
+{% elif here.endswith('/settings') %}{% set crumb = t.settings %}
+{% elif here.endswith('/logs') %}{% set crumb = t.logs %}
+{% endif %}
 <div class="app-shell">
   {% if admin %}
   <aside class="sidebar">
     <a class="brand" href="{{ base_path }}/dashboard">
       <span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.5l7.5 2.8v5.4c0 5-3.2 8.6-7.5 10.8-4.3-2.2-7.5-5.8-7.5-10.8V5.3L12 2.5z"/><path d="M13 7.2l-3.6 5h2.5l-1.1 4.6 3.6-5h-2.5l1.1-4.6z" fill="currentColor" stroke="none"/></svg></span>
-      <span>{{ t.app_name }}</span>
+      <span>{{ t.app_name }}<small>{{ 'پنل مدیریت' if lang == 'fa' else 'Admin panel' }}</small></span>
     </a>
+    <a class="btn btn-primary btn-block sidebar-cta" href="{{ base_path }}/inbounds#add-inbound"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true" style="width:16px;height:16px"><path d="M12 5v14M5 12h14"/></svg>{{ t.add_inbound }}</a>
     <nav class="side-nav">
       <a class="nav-link{{ ' active' if here.endswith('/dashboard') }}" href="{{ base_path }}/dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg>{{ t.dashboard }}</a>
       <a class="nav-link{{ ' active' if here.endswith('/inbounds') }}" href="{{ base_path }}/inbounds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13.5l9 5 9-5"/></svg>{{ t.inbounds }}</a>
@@ -40,6 +47,23 @@
   {% endif %}
   <div class="main-col">
     {% if admin %}
+    <header class="topbar">
+      <nav class="crumbs" aria-label="breadcrumb">
+        <a href="{{ base_path }}/dashboard">{{ t.app_name }}</a>
+        <span class="crumb-sep">/</span>
+        <span class="crumb-here">{{ crumb }}</span>
+      </nav>
+      <div class="topbar-actions">
+        <div class="lang-switch">
+          {% if lang == 'fa' %}
+            <a href="{{ request.url.path }}?lang=en">EN</a>
+          {% else %}
+            <a href="{{ request.url.path }}?lang=fa">فا</a>
+          {% endif %}
+        </div>
+        <a class="icon-btn" href="{{ request.url.path }}" title="{{ t.refresh }}" aria-label="{{ t.refresh }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 3v4h-4"/></svg></a>
+      </div>
+    </header>
     <header class="mobile-topbar">
       <a class="brand" href="{{ base_path }}/dashboard">
         <span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.5l7.5 2.8v5.4c0 5-3.2 8.6-7.5 10.8-4.3-2.2-7.5-5.8-7.5-10.8V5.3L12 2.5z"/><path d="M13 7.2l-3.6 5h2.5l-1.1 4.6 3.6-5h-2.5l1.1-4.6z" fill="currentColor" stroke="none"/></svg></span>
