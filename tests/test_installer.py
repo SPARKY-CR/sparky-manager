@@ -55,11 +55,17 @@ def _extract_function(text: str, name: str) -> str:
 
 
 def _extract_heredoc(text: str, start_marker: str) -> str:
-    """Content between a ``cat > ... <<EOF`` line and the next ``EOF``."""
+    """Content between a ``cat > ... <<EOF`` line and the next ``EOF``.
+
+    Ends with a newline, exactly as ``cat`` writes the heredoc: the
+    last content line in install.sh is newline-terminated, and tools
+    like visudo reject a file without the terminator (CI failure:
+    "missing line terminator at end of file").
+    """
     lines = text.splitlines()
     start = next(i for i, line in enumerate(lines) if start_marker in line)
     end = next(i for i in range(start + 1, len(lines)) if lines[i] == "EOF")
-    return "\n".join(lines[start + 1 : end])
+    return "\n".join(lines[start + 1 : end]) + "\n"
 
 
 def _run_bash(script: str, env: dict | None = None, timeout: int = 60):
@@ -86,6 +92,9 @@ def test_sudoers_block_validates_and_covers_v12():
     block = _extract_heredoc(
         text, "cat > /etc/sudoers.d/sparky-manager <<'EOF'"
     )
+    # The file cat writes ends with a newline; visudo rejects a file
+    # without the terminator ("missing line terminator at end of file").
+    assert block.endswith("\n")
     # Every command the panel needs (v12 additions included).
     for needed in (
         "/usr/bin/systemctl restart openvpn-server@sparky-manager",
