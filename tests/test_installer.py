@@ -21,6 +21,13 @@ What is covered:
 * The minimal server configs in install.sh carry the same required
   directives the panel's own validators require (installer / panel
   consistency).
+* ``fix_panel_cert_perms`` (LE-rollback regression): the panel key
+  stays group-readable by sparky-manager, or uvicorn dies with
+  PermissionError in load_cert_chain; missing files still return 0.
+* The Let's Encrypt rollback: backups preserve ownership/mode
+  (``cp -p``), every ``.bak`` restore re-applies the permissions,
+  the reloadcmd restarts only units that exist yet, and a re-run
+  heals a pair an older installer left unreadable.
 """
 
 import re
@@ -292,3 +299,92 @@ def test_minimal_configs_match_panel_validators():
     for line in ("ListenPort = 51821", "Jc = 4", "S1 = 15", "H1 = 100"):
         assert line in awg, line
     assert "HeaderProtectionKey = ${AWG_PUBLIC_KEY}" not in awg
+
+
+def test_fix_panel_cert_perms(tmp_path):
+    """The cert-permission helper (LE-rollback regression): the panel
+    key must stay group-readable by sparky-manager, or uvicorn dies
+    with PermissionError in load_cert_chain. ``chown`` is stubbed
+    (the ``sparky-manager`` group does not exist in this VM) and its
+    calls are asserted instead; ``chmod`` is real.
+    """
+    text = _install_text()
+    fn = _extract_function(text, "fix_panel_cert_perms")
+    root = tmp_path / "root"
+    fn = fn.replace("/opt/sparky-manager", str(root / "opt" / "sparky-manager"))
+    certs = root / "opt" / "sparky-manager" / "certs"
+    certs.mkdir(parents=True)
+    (certs / "privkey.pem").write_text("KEY")
+    (certs / "fullchain.pem").write_text("CERT")
+    (certs / "privkey.pem").chmod(0o600)
+    (certs / "fullchain.pem").chmod(0o600)
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    (stub_dir / "chown").write_text(
+        "#!/bin/bash\necho \"chown $@\" >> \"$STUB_LOG\"\nexit 0\n"
+    )
+    (stub_dir / "chown").chmod(0o755)
+    import os
+    import stat
+
+    env = {
+        "PATH": str(stub_dir) + os.pathsep + os.environ.get("PATH", ""),
+        "STUB_LOG": str(tmp_path / "calls.log"),
+    }
+    script = (
+        "set -euo pipefail\n" + fn + "\n"
+        "fix_panel_cert_perms\n"
+        "fix_panel_cert_perms\n"  # idempotent
+        "echo OK\n"
+    )
+    proc = _run_bash(script, env=env)
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "OK" in proc.stdout
+    assert stat.S_IMODE((certs / "privkey.pem").stat().st_mode) == 0o640
+    assert stat.S_IMODE((certs / "fullchain.pem").stat().st_mode) == 0o644
+    calls = (tmp_path / "calls.log").read_text()
+    assert "chown root:sparky-manager" in calls
+    assert "privkey.pem" in calls and "fullchain.pem" in calls
+    # Missing files: still rc 0 (rollback paths must not die).
+    (certs / "privkey.pem").unlink()
+    (certs / "fullchain.pem").unlink()
+    proc = _run_bash(script, env=env)
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "OK" in proc.stdout
+
+
+def test_le_rollback_restores_cert_permissions():
+    """LE-install rollback regression (first real-server install):
+    restoring the .bak pair must re-apply the panel-readable
+    permissions, backups must preserve them, the reloadcmd must not
+    fail when the units do not exist yet, and a re-run must heal a
+    pair an older installer left unreadable."""
+    text = _install_text()
+    fn = _extract_function(text, "obtain_le_ip_cert")
+    lines = fn.splitlines()
+    # Backups preserve ownership/mode.
+    assert "cp -p /opt/sparky-manager/certs/fullchain.pem" in fn
+    assert "cp -p /opt/sparky-manager/certs/privkey.pem" in fn
+    # Every .bak restore is followed by the permission fix-up.
+    restores = [
+        i
+        for i, line in enumerate(lines)
+        if ".pem.bak" in line and line.strip().startswith("mv ")
+    ]
+    assert len(restores) == 4, restores  # two rollback paths x two files
+    for i in restores:
+        window = "\n".join(lines[i : i + 6])
+        assert "fix_panel_cert_perms" in window, lines[i]
+    # The reloadcmd restarts only units that exist (at install time
+    # none do yet); a bare restart would fail --installcert.
+    assert "systemctl restart sparky-manager sing-box" not in fn
+    assert "list-unit-files" in fn
+    # A re-run heals permissions left broken by an older installer.
+    main_lines = text.splitlines()
+    call = next(
+        i
+        for i, line in enumerate(main_lines)
+        if line.strip() == "obtain_le_ip_cert || true"
+    )
+    window = "\n".join(main_lines[call : call + 6])
+    assert "fix_panel_cert_perms" in window
