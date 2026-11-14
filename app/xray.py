@@ -490,6 +490,13 @@ def _build_shadowsocks(
     Single-client form follows DESIGN.md §5.1
     (``settings: {method, password, network}``); with several clients
     a ``clients`` list is added so each password stays usable.
+
+    The method lives ONLY in ``settings``: Xray 26.11.9 rejects a
+    2022 multi-user inbound whose users carry a method
+    ("shadowsocks 2022 (multi-user): users must have empty method")
+    and the whole config then fails ``xray -test`` — seen on the
+    live server 2026-11-14, where a 2-user SS inbound blocked every
+    re-render (exit 23). Users here carry just their password.
     """
     usable = _usable_clients(clients, need=("password",))
     if not usable:
@@ -508,11 +515,7 @@ def _build_shadowsocks(
     }
     if len(usable) > 1:
         inbound_settings["clients"] = [
-            {
-                "password": client["password"],
-                "method": _clean_str(client.get("method")) or method,
-            }
-            for client in usable
+            {"password": client["password"]} for client in usable
         ]
     return {
         "tag": inbound["tag"],
@@ -773,6 +776,14 @@ def validate_xray_config(cfg: dict) -> tuple[bool, list[str]]:
                     errors.append(
                         f"inbound '{tag}': client #{c_index} is "
                         "missing 'password'"
+                    )
+                # Xray rejects a 2022 multi-user inbound whose users
+                # carry a method ("users must have empty method") —
+                # catch it here instead of at `xray -test` time.
+                if protocol == "shadowsocks" and client.get("method"):
+                    errors.append(
+                        f"inbound '{tag}': client #{c_index} must not "
+                        "carry 'method' (the method lives in settings)"
                     )
         if protocol == "shadowsocks" and not isinstance(clients, list):
             if not settings_obj.get("password"):

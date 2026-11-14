@@ -137,6 +137,41 @@ def test_xray_shadowsocks_2022_renders(db, render_settings):
     assert ss["settings"]["password"]
 
 
+def test_xray_shadowsocks_multiuser_users_carry_no_method():
+    """Xray 26.11.9 rejects a 2022 multi-user inbound whose users
+    carry a method ("users must have empty method") — the whole
+    config then fails ``xray -test`` and nothing applies. Seen on
+    the live server 2026-11-14: the SS inbound had 2 users and
+    every re-render failed with exit 23."""
+    cfg = xray.render_xray_config(
+        [{"tag": "shadowsocks", "core": "xray", "protocol": "shadowsocks",
+          "port": 8388, "enabled": True, "stream_json": {}}],
+        {"shadowsocks": [{"password": "pw-alice-001"},
+                         {"password": "pw-bob-002"}]},
+        {},
+    )
+    ss = next(i for i in cfg["inbounds"] if i["tag"] == "shadowsocks")
+    assert ss["settings"]["method"] == SS_METHOD
+    assert len(ss["settings"]["clients"]) == 2
+    for user in ss["settings"]["clients"]:
+        assert "method" not in user
+        assert user["password"]
+    ok, errors = xray.validate_xray_config(cfg)
+    assert ok, errors
+
+
+def test_xray_validator_rejects_shadowsocks_user_method():
+    bad = {"inbounds": [{"tag": "ss", "port": 8388, "protocol": "shadowsocks",
+                         "settings": {"method": SS_METHOD, "password": "pw",
+                                      "network": "tcp,udp",
+                                      "clients": [{"password": "pw",
+                                                   "method": SS_METHOD}]}}],
+           "outbounds": [{"protocol": "freedom", "tag": "direct"}]}
+    ok, errors = xray.validate_xray_config(bad)
+    assert not ok
+    assert any("method" in e for e in errors)
+
+
 def test_render_omits_unusable_clients(db, render_settings, seeded):
     """Expired / over-quota / disabled users (and a disabled client)
     never reach the rendered configs — DESIGN.md §4."""
