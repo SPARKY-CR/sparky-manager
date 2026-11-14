@@ -809,6 +809,28 @@ chown root:sparky-manager "$INSTALL_ENV"
 chmod 0640 /opt/sparky-manager/data/panel.env
 chown root:sparky-manager /opt/sparky-manager/data/panel.env
 
+# fix_panel_cert_perms — the panel runs as user sparky-manager (see
+# the systemd unit), so the key must be group-readable or uvicorn dies
+# with PermissionError in load_cert_chain. Still private: only root
+# and the sparky-manager group can read it. Called after every step
+# that (re)writes the pair: self-signed generation, the Let's Encrypt
+# install, both rollback restores, and once unconditionally after the
+# LE step so a re-run heals a pair an older installer left unreadable.
+fix_panel_cert_perms() {
+    local cert_dir="/opt/sparky-manager/certs"
+    if [ -f "$cert_dir/privkey.pem" ]; then
+        chmod 0640 "$cert_dir/privkey.pem"
+        chown root:sparky-manager "$cert_dir/privkey.pem"
+    fi
+    if [ -f "$cert_dir/fullchain.pem" ]; then
+        chmod 0644 "$cert_dir/fullchain.pem"
+        chown root:sparky-manager "$cert_dir/fullchain.pem"
+    fi
+    # Always 0: the rollback paths call this while already handling a
+    # failure, and must not die under `set -e` when a file is absent.
+    return 0
+}
+
 # obtain_le_ip_cert — replace the self-signed panel certificate with a
 # TRUSTED Let's Encrypt certificate for the bare public IP, the same
 # trick 3x-ui's SSL menu uses (no domain needed). Since 2026-01-15
@@ -887,12 +909,28 @@ obtain_le_ip_cert() {
     else
         info "Let's Encrypt certificate for ${SERVER_IP} already issued; installing it ..."
     fi
+    # Re-resolve: a fresh --issue may have landed the certificate in
+    # the <IP>_ecc/ directory, and --installcert needs --ecc to find
+    # it. Without this, a successful ECC issue fails the install.
+    _resolve_le_cert
+    if ! _le_cert_usable; then
+        warn "Could not find a usable Let's Encrypt certificate after issuing; keeping the self-signed one."
+        return 1
+    fi
     # Back up the self-signed pair before overwriting it, so a bad
     # install can be rolled back instead of breaking the panel's TLS.
-    cp /opt/sparky-manager/certs/fullchain.pem /opt/sparky-manager/certs/fullchain.pem.bak 2>/dev/null || true
-    cp /opt/sparky-manager/certs/privkey.pem /opt/sparky-manager/certs/privkey.pem.bak 2>/dev/null || true
+    # -p preserves ownership and mode: a plain cp would make the
+    # backups root:root, and restoring them would leave the key
+    # unreadable by the panel user (uvicorn PermissionError).
+    cp -p /opt/sparky-manager/certs/fullchain.pem /opt/sparky-manager/certs/fullchain.pem.bak 2>/dev/null || true
+    cp -p /opt/sparky-manager/certs/privkey.pem /opt/sparky-manager/certs/privkey.pem.bak 2>/dev/null || true
     info "Installing the trusted certificate for the panel ..."
-    local _reload="chmod 0640 /opt/sparky-manager/certs/privkey.pem; chown root:sparky-manager /opt/sparky-manager/certs/privkey.pem /opt/sparky-manager/certs/fullchain.pem; systemctl restart sparky-manager sing-box"
+    # Restart only units that exist: this function runs before the
+    # systemd units are written, and a bare `systemctl restart` of a
+    # missing unit fails the whole --installcert. At renewal time the
+    # units exist, and a failed restart still fails the install
+    # (|| exit 1), so a bad renewal is not silent.
+    local _reload="chmod 0640 /opt/sparky-manager/certs/privkey.pem; chown root:sparky-manager /opt/sparky-manager/certs/privkey.pem /opt/sparky-manager/certs/fullchain.pem; for sparky_reload_unit in sparky-manager sing-box; do if systemctl list-unit-files \"\$sparky_reload_unit.service\" >/dev/null 2>&1; then systemctl restart \"\$sparky_reload_unit\" || exit 1; fi; done"
     if ! "$acme" --installcert -d "$SERVER_IP" "${_ecc_args[@]}" \
             --key-file /opt/sparky-manager/certs/privkey.pem \
             --fullchain-file /opt/sparky-manager/certs/fullchain.pem \
@@ -900,15 +938,17 @@ obtain_le_ip_cert() {
         warn "Could not install the Let's Encrypt certificate; keeping the self-signed one."
         mv /opt/sparky-manager/certs/fullchain.pem.bak /opt/sparky-manager/certs/fullchain.pem 2>/dev/null || true
         mv /opt/sparky-manager/certs/privkey.pem.bak /opt/sparky-manager/certs/privkey.pem 2>/dev/null || true
+        # The restored pair must be readable by the panel user again.
+        fix_panel_cert_perms
         return 1
     fi
-    chmod 0640 /opt/sparky-manager/certs/privkey.pem
-    chmod 0644 /opt/sparky-manager/certs/fullchain.pem
-    chown root:sparky-manager /opt/sparky-manager/certs/privkey.pem /opt/sparky-manager/certs/fullchain.pem
+    fix_panel_cert_perms
     if ! openssl x509 -noout -issuer -in /opt/sparky-manager/certs/fullchain.pem 2>/dev/null | grep -qi "Let's Encrypt"; then
         warn "Installed certificate is not from Let's Encrypt; restoring the self-signed one."
         mv /opt/sparky-manager/certs/fullchain.pem.bak /opt/sparky-manager/certs/fullchain.pem 2>/dev/null || true
         mv /opt/sparky-manager/certs/privkey.pem.bak /opt/sparky-manager/certs/privkey.pem 2>/dev/null || true
+        # The restored pair must be readable by the panel user again.
+        fix_panel_cert_perms
         return 1
     fi
     rm -f /opt/sparky-manager/certs/fullchain.pem.bak /opt/sparky-manager/certs/privkey.pem.bak
@@ -956,11 +996,8 @@ if [ ! -f /opt/sparky-manager/certs/fullchain.pem ] || [ ! -f /opt/sparky-manage
         -addext "subjectAltName=${SAN}" 2>/dev/null
     # 0640, not 0600: the panel runs as user sparky-manager (see the
     # systemd unit), so the key must be group-readable or uvicorn
-    # dies with PermissionError in load_cert_chain. Still private:
-    # only root and the sparky-manager group can read it.
-    chmod 0640 /opt/sparky-manager/certs/privkey.pem
-    chmod 0644 /opt/sparky-manager/certs/fullchain.pem
-    chown root:sparky-manager /opt/sparky-manager/certs/privkey.pem /opt/sparky-manager/certs/fullchain.pem
+    # dies with PermissionError in load_cert_chain.
+    fix_panel_cert_perms
 else
     info "Keeping the existing panel certificate."
 fi
@@ -968,6 +1005,9 @@ fi
 # self-signed one above on any failure.
 LE_CERT_OK=0
 obtain_le_ip_cert || true
+# Heal a pair an older installer left unreadable (pre-fix rollback):
+# a re-run must not keep failing on the same permissions.
+fix_panel_cert_perms
 CERT_FINGERPRINT="$(openssl x509 -noout -fingerprint -sha256 \
     -in /opt/sparky-manager/certs/fullchain.pem | cut -d'=' -f2)"
 CERT_ISSUER="$(openssl x509 -noout -issuer -in /opt/sparky-manager/certs/fullchain.pem 2>/dev/null | sed 's/^issuer=//')"
