@@ -49,10 +49,20 @@ Professional upgrade (Phase 3) adds: the ``/menu`` / ``/status`` /
 user edit, a guided inbound-create flow + inbound delete, service
 restart, backup delivery as a document, and a friendly answer for
 stale/invalid callbacks instead of silence.
+
+Bot polish adds: HTML formatting (bold titles, bold field labels —
+all bot messages go out with ``parse_mode="HTML"`` and every
+user-controlled value is escaped with :func:`h` first, because
+Telegram rejects malformed HTML), a persistent reply keyboard
+(``/start`` and ``/menu`` install it; taps arrive as plain text and
+:func:`_on_text` matches the exact labels), and two-column inline
+keyboards where they fit. Handlers, flows, callback data and command
+behavior are unchanged — presentation only.
 """
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import secrets
@@ -277,6 +287,9 @@ BOT_STRING_KEYS = (
     "bot_backup_failed",
     "bot_backup_too_large",
     "bot_stale_callback",
+    # Bot polish: persistent reply keyboard.
+    "bot_reply_menu",
+    "bot_reply_keyboard_hint",
 )
 
 # ---------------------------------------------------------------------------
@@ -338,6 +351,11 @@ class TelegramSender:
     inject a fake with the same methods. ``send`` returns False (never
     raises) when Telegram is unreachable — the dispatcher treats a
     failed reply as "the admin did not see it" and moves on.
+
+    All bot messages go out with ``parse_mode="HTML"`` (bold titles,
+    structured layout) — so every user-controlled value in a message
+    is escaped with :func:`h` first: Telegram rejects a message whose
+    HTML is malformed, and one stray ``<`` would fail the whole reply.
     """
 
     def __init__(self, token: str):
@@ -347,7 +365,11 @@ class TelegramSender:
         self, chat_id: int, text: str, reply_markup: Optional[dict] = None
     ) -> bool:
         return telegram_mod.send_message(
-            self.token, str(chat_id), text, reply_markup=reply_markup
+            self.token,
+            str(chat_id),
+            text,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
         )
 
     def edit(
@@ -363,6 +385,7 @@ class TelegramSender:
             message_id,
             text,
             reply_markup=reply_markup,
+            parse_mode="HTML",
         )
 
     def answer(self, callback_query_id: str, text: Optional[str] = None) -> bool:
@@ -415,6 +438,65 @@ def _main_menu_kb(t: dict[str, str]) -> dict[str, Any]:
             ],
         ]
     )
+
+
+def _main_reply_kb(t: dict[str, str]) -> dict[str, Any]:
+    """Persistent reply keyboard: the main actions, one tap away.
+
+    Unlike the inline menu it stays in the chat until replaced, so
+    the admin never has to scroll back to a menu message. Taps arrive
+    as plain-text messages — :func:`_on_text` matches these exact
+    labels. Sent with ``/start`` and ``/menu`` (the inline menu
+    stays the detailed menu for the flows).
+    """
+    return {
+        "keyboard": [
+            [
+                {"text": t["bot_menu_users"]},
+                {"text": t["bot_menu_inbounds"]},
+            ],
+            [
+                {"text": t["bot_menu_status"]},
+                {"text": t["bot_reply_menu"]},
+            ],
+        ],
+        "resize_keyboard": True,
+        "is_persistent": True,
+    }
+
+
+def h(value: Any) -> str:
+    """Escape a user-controlled value for Telegram's HTML parse mode.
+
+    Telegram rejects a message whose HTML is malformed, so every
+    value the admin or the system supplied — user names, notes,
+    inbound tags and remarks, SNI, share links (full of ``&``), error
+    text — goes through here before it is embedded in a message.
+    Trusted i18n strings do NOT go through this: they carry the
+    ``<b>`` tags themselves (see :func:`_b`). Quotes are left alone —
+    they are harmless in HTML text content.
+    """
+    return html.escape(str(value), quote=False)
+
+
+def _b(text: str) -> str:
+    """Bold a trusted string (i18n text, fixed labels) — never pass
+    user input here; escape it with :func:`h` first."""
+    return f"<b>{text}</b>"
+
+
+def _titled(text: str) -> str:
+    """Bold the header line of a two-part message (``header\\n\\nbody``).
+
+    Whole-message i18n strings (welcome, help, prompts) keep their
+    plain text in the string table; the bold header is added here so
+    the strings stay readable and reusable. A message without a
+    blank-line-separated header is returned unchanged.
+    """
+    head, sep, rest = text.partition("\n\n")
+    if not sep:
+        return text
+    return f"<b>{head}</b>{sep}{rest}"
 
 
 def _format_bytes(n: int) -> str:
@@ -522,10 +604,14 @@ def _rerender(ctx: _Ctx) -> list[str]:
 
 
 def _rerender_note(ctx: _Ctx, errors: list[str]) -> Optional[str]:
-    """One-line warning appended to a reply when re-rendering failed."""
+    """One-line warning appended to a reply when re-rendering failed.
+
+    The error text comes from the system (config validators, shell
+    output) and can contain anything, so it is HTML-escaped — one
+    stray ``<`` would fail the whole reply."""
     if not errors:
         return None
-    return "⚠️ " + ctx.t["bot_rerender_failed"] + " " + "; ".join(errors)[:400]
+    return "⚠️ " + ctx.t["bot_rerender_failed"] + " " + h("; ".join(errors)[:400])
 
 
 def _show(ctx: _Ctx, message_id: Optional[int], text: str, keyboard: Any = None) -> None:
@@ -699,9 +785,21 @@ def _on_command(ctx: _Ctx, text: str) -> None:
         return
     _end_conversation(ctx.chat_id)  # any other command abandons the flow
     if command in ("/start", "/menu"):
-        ctx.sender.send(ctx.chat_id, t["bot_welcome"], reply_markup=_main_menu_kb(t))
+        ctx.sender.send(
+            ctx.chat_id, _titled(t["bot_welcome"]), reply_markup=_main_menu_kb(t)
+        )
+        # (Re-)install the persistent reply keyboard: one message can
+        # only carry one reply markup, so the quick menu rides along
+        # as a second, short message.
+        ctx.sender.send(
+            ctx.chat_id,
+            t["bot_reply_keyboard_hint"],
+            reply_markup=_main_reply_kb(t),
+        )
     elif command == "/help":
-        ctx.sender.send(ctx.chat_id, t["bot_help"], reply_markup=_main_menu_kb(t))
+        ctx.sender.send(
+            ctx.chat_id, _titled(t["bot_help"]), reply_markup=_main_menu_kb(t)
+        )
     elif command == "/status":
         _show_status(ctx, None)
     elif command == "/users":
@@ -715,7 +813,36 @@ def _on_command(ctx: _Ctx, text: str) -> None:
 
 
 def _on_text(ctx: _Ctx, text: str) -> None:
-    """Free text: a guided-flow step, or the menu hint when idle."""
+    """Free text: a reply-keyboard tap, a guided-flow step, or the
+    menu hint when idle."""
+    # Reply-keyboard taps arrive as plain text — match the exact
+    # label first, so a tap during a flow abandons the flow and acts
+    # (like a command does). Labels carry emoji, so a typed value
+    # (name, number, query) can essentially never collide with one.
+    reply_actions = {
+        ctx.t["bot_menu_users"]: "users",
+        ctx.t["bot_menu_inbounds"]: "inb",
+        ctx.t["bot_menu_status"]: "status",
+        ctx.t["bot_reply_menu"]: "main",
+    }
+    action = reply_actions.get(text)
+    if action is not None:
+        _end_conversation(ctx.chat_id)
+        if action == "users":
+            _show_users(ctx, None, page=0)
+        elif action == "inb":
+            _show_inbounds(ctx, None)
+        elif action == "status":
+            _show_status(ctx, None)
+        else:
+            # The reply keyboard is already in the chat — no need to
+            # re-send it; show the inline menu instead.
+            ctx.sender.send(
+                ctx.chat_id,
+                _titled(ctx.t["bot_welcome"]),
+                reply_markup=_main_menu_kb(ctx.t),
+            )
+        return
     conv = _get_conversation(ctx.chat_id)
     if conv is None:
         ctx.sender.send(
@@ -794,7 +921,7 @@ def _start_create(ctx: _Ctx, message_id: Optional[int]) -> None:
     _show(
         ctx,
         message_id,
-        t["bot_create_name"],
+        _titled(t["bot_create_name"]),
         _kb([[(t["bot_cancel"], "c:cancel")]]),
     )
 
@@ -875,7 +1002,7 @@ def _flow_expiry(ctx: _Ctx, conv: dict, text: str) -> None:
         return
     _audit(ctx, "user.create", f"{name} [telegram]")
     errors = _rerender(ctx)
-    text_out = t["bot_create_done"].format(name=name)
+    text_out = t["bot_create_done"].format(name=h(name))
     note = _rerender_note(ctx, errors)
     if note:
         text_out += "\n\n" + note
@@ -1000,12 +1127,12 @@ def _on_menu_callback(ctx: _Ctx, message_id: Optional[int], parts: list) -> None
     t = ctx.t
     action = parts[1] if len(parts) > 1 else ""
     if action == "main":
-        _show(ctx, message_id, t["bot_welcome"], _main_menu_kb(t))
+        _show(ctx, message_id, _titled(t["bot_welcome"]), _main_menu_kb(t))
     elif action == "help":
         _show(
             ctx,
             message_id,
-            t["bot_help"],
+            _titled(t["bot_help"]),
             _kb([[(t["bot_back_main"], "m:main")]]),
         )
     elif action == "users":
@@ -1055,13 +1182,15 @@ def _show_users(
     rows = users[page * USERS_PAGE_SIZE : (page + 1) * USERS_PAGE_SIZE]
     if query:
         lines = [
-            t["bot_search_title"].format(
-                query=query, page=page + 1, pages=pages
+            _b(
+                t["bot_search_title"].format(
+                    query=h(query), page=page + 1, pages=pages
+                )
             ),
             "",
         ]
     else:
-        lines = [t["bot_users_title"].format(page=page + 1, pages=pages), ""]
+        lines = [_b(t["bot_users_title"].format(page=page + 1, pages=pages)), ""]
     if not users:
         lines.append(t["bot_search_no_match"] if query else t["bot_no_users"])
     kb_rows: list[list[tuple[str, str]]] = []
@@ -1078,7 +1207,7 @@ def _show_users(
             else "—"
         )
         lines.append(
-            f"{emoji} {user.name} — "
+            f"{emoji} {h(user.name)} — "
             f"{_format_bytes(user.traffic_used_bytes or 0)}/{limit} — {expiry}"
         )
         kb_rows.append([(user.name, f"u:v:{user.id}")])
@@ -1103,7 +1232,7 @@ def _start_search(ctx: _Ctx, message_id: Optional[int]) -> None:
     _show(
         ctx,
         message_id,
-        ctx.t["bot_search_prompt"],
+        _titled(ctx.t["bot_search_prompt"]),
         _kb([[(ctx.t["bot_cancel"], "c:cancel")]]),
     )
 
@@ -1148,35 +1277,34 @@ def _show_user(
         inbound = ctx.db.get(Inbound, client.inbound_id)
         if inbound is None:
             continue
-        name = inbound.tag
+        name = h(inbound.tag)
         if client_is_frozen(client):
             name += " 🧊"
         inbound_names.append(name)
     lines = [
-        f"👤 {user.name}",
-        f"{t['status']}: {emoji} {label}",
-        f"{t['bot_traffic']}: {_format_bytes(user.traffic_used_bytes or 0)} / {limit}",
-        f"{t['bot_expires']}: {_expiry_text(ctx, user)}",
-        f"{t['bot_inbounds']}: {', '.join(inbound_names) if inbound_names else '—'}",
+        _b(f"👤 {h(user.name)}"),
+        f"{_b(t['status'] + ':')} {emoji} {label}",
+        f"{_b(t['bot_traffic'] + ':')} {_format_bytes(user.traffic_used_bytes or 0)} / {limit}",
+        f"{_b(t['bot_expires'] + ':')} {_expiry_text(ctx, user)}",
+        f"{_b(t['bot_inbounds'] + ':')} {', '.join(inbound_names) if inbound_names else '—'}",
     ]
     text = "\n".join(lines)
     if note:
         text += "\n\n" + note
     frozen = _user_frozen(ctx, user)
     kb_rows: list[list[tuple[str, str]]] = [
-        [(t["bot_links"], f"u:links:{user.id}")],
+        [(t["bot_links"], f"u:links:{user.id}"), (t["bot_edit"], f"u:edit:{user.id}")],
         [
             (
                 t["bot_unfreeze"] if frozen else t["bot_freeze"],
                 f"u:{'unfrz' if frozen else 'frz'}:{user.id}",
-            )
+            ),
+            (t["bot_extend"], f"u:ext:{user.id}"),
         ],
         [
-            (t["bot_extend"], f"u:ext:{user.id}"),
             (t["bot_reset_traffic"], f"u:rst:{user.id}"),
+            (t["bot_delete"], f"u:del:{user.id}"),
         ],
-        [(t["bot_edit"], f"u:edit:{user.id}")],
-        [(t["bot_delete"], f"u:del:{user.id}")],
         [(t["bot_back_users"], "u:list:0")],
     ]
     _show(ctx, message_id, text, _kb(kb_rows))
@@ -1205,9 +1333,11 @@ def _show_edit_menu(ctx: _Ctx, message_id: Optional[int], user_id: int) -> None:
         t["bot_edit_pick"],
         _kb(
             [
-                [(t["bot_edit_name"], f"u:edit:{user_id}:name")],
-                [(t["bot_edit_limit"], f"u:edit:{user_id}:limit")],
-                [(t["bot_edit_expiry"], f"u:edit:{user_id}:expiry")],
+                [
+                    (t["bot_edit_name"], f"u:edit:{user_id}:name"),
+                    (t["bot_edit_limit"], f"u:edit:{user_id}:limit"),
+                    (t["bot_edit_expiry"], f"u:edit:{user_id}:expiry"),
+                ],
                 [(t["bot_back"], f"u:v:{user_id}")],
             ]
         ),
@@ -1229,7 +1359,7 @@ def _start_edit(
         )
         return
     prompts = {
-        "name": t["bot_edit_name_prompt"].format(name=user.name),
+        "name": t["bot_edit_name_prompt"].format(name=h(user.name)),
         "limit": t["bot_edit_limit_prompt"],
         "expiry": t["bot_edit_expiry_prompt"],
     }
@@ -1373,14 +1503,14 @@ def _send_links(ctx: _Ctx, message_id: Optional[int], user_id: int) -> None:
             _kb([[(t["bot_back"], f"u:v:{user_id}")]]),
         )
         return
-    lines = [t["bot_links_title"].format(name=user.name), ""]
+    lines = [_b(t["bot_links_title"].format(name=h(user.name))), ""]
     if sub_url:
-        lines.append(f"{t['bot_sub_link']}:")
-        lines.append(sub_url)
+        lines.append(_b(t["bot_sub_link"] + ":"))
+        lines.append(h(sub_url))
         lines.append("")
     for entry in links:
-        lines.append(f"{entry['inbound'].tag}:")
-        lines.append(entry["link"])
+        lines.append(_b(h(entry["inbound"].tag) + ":"))
+        lines.append(h(entry["link"]))
         lines.append("")
     _send_long(
         ctx,
@@ -1432,7 +1562,7 @@ def _show_extend_menu(ctx: _Ctx, message_id: Optional[int], user_id: int) -> Non
     _show(
         ctx,
         message_id,
-        t["bot_extend_prompt"].format(name=user.name),
+        t["bot_extend_prompt"].format(name=h(user.name)),
         _kb(
             [
                 [
@@ -1489,7 +1619,7 @@ def _show_reset_confirm(ctx: _Ctx, message_id: Optional[int], user_id: int) -> N
     _show(
         ctx,
         message_id,
-        t["bot_reset_confirm"].format(name=user.name),
+        t["bot_reset_confirm"].format(name=h(user.name)),
         _kb(
             [
                 [
@@ -1536,7 +1666,7 @@ def _show_delete_confirm(ctx: _Ctx, message_id: Optional[int], user_id: int) -> 
     _show(
         ctx,
         message_id,
-        t["bot_delete_confirm"].format(name=user.name),
+        t["bot_delete_confirm"].format(name=h(user.name)),
         _kb(
             [
                 [
@@ -1638,20 +1768,24 @@ def _show_inbounds(
 ) -> None:
     t = ctx.t
     inbounds = ctx.db.query(Inbound).order_by(Inbound.port, Inbound.tag).all()
-    lines = [t["bot_inbounds_title"], ""]
+    lines = [_b(t["bot_inbounds_title"]), ""]
     kb_rows: list[list[tuple[str, str]]] = []
     if not inbounds:
         lines.append(t["bot_no_inbounds"])
+    tag_buttons: list[tuple[str, str]] = []
     for inbound in inbounds:
         emoji = "✅" if inbound.enabled else "❌"
         count = (
             ctx.db.query(Client).filter(Client.inbound_id == inbound.id).count()
         )
         lines.append(
-            f"{emoji} {inbound.tag} — {inbound.protocol}:{inbound.port} "
+            f"{emoji} {h(inbound.tag)} — {inbound.protocol}:{inbound.port} "
             f"({count} {t['clients']})"
         )
-        kb_rows.append([(inbound.tag, f"i:v:{inbound.id}")])
+        tag_buttons.append((inbound.tag, f"i:v:{inbound.id}"))
+    # Two tag buttons per row (button text is plain — never escaped).
+    for i in range(0, len(tag_buttons), 2):
+        kb_rows.append(tag_buttons[i : i + 2])
     kb_rows.append([(t["bot_new_inbound"], "i:new")])
     kb_rows.append([(t["bot_back_main"], "m:main")])
     text = "\n".join(lines)
@@ -1668,7 +1802,11 @@ def _show_inbounds(
 def _show_inbound_protocol_picker(ctx: _Ctx, message_id: Optional[int]) -> None:
     """First step of the inbound-create flow: pick a protocol."""
     t = ctx.t
-    rows = [[(protocol.upper(), f"i:new:{protocol}")] for protocol in BOT_CREATE_PROTOCOLS]
+    protos = [
+        (protocol.upper(), f"i:new:{protocol}")
+        for protocol in BOT_CREATE_PROTOCOLS
+    ]
+    rows = [protos[i : i + 2] for i in range(0, len(protos), 2)]
     rows.append([(t["bot_cancel"], "c:cancel")])
     _show(ctx, message_id, t["bot_create_inbound_protocol"], _kb(rows))
 
@@ -1732,7 +1870,9 @@ def _flow_inbound_port(ctx: _Ctx, conv: dict, text: str) -> None:
         conv["step"] = "inb_sni"
         ctx.sender.send(
             ctx.chat_id,
-            t["bot_create_inbound_sni"].format(protocol=protocol.upper(), sni=default_sni),
+            t["bot_create_inbound_sni"].format(
+                protocol=protocol.upper(), sni=h(default_sni)
+            ),
         )
         return
     _create_inbound_from_flow(ctx, conv)
@@ -1801,7 +1941,7 @@ def _create_inbound_from_flow(ctx: _Ctx, conv: dict) -> None:
     _audit(ctx, "inbound.create", f"{tag} {protocol}:{port} [telegram]")
     errors = _rerender(ctx)
     text_out = t["bot_create_inbound_done"].format(
-        tag=tag, protocol=protocol, port=port
+        tag=h(tag), protocol=protocol, port=port
     )
     note = _rerender_note(ctx, errors)
     if note:
@@ -1835,7 +1975,7 @@ def _show_inbound_delete_confirm(
     _show(
         ctx,
         message_id,
-        t["bot_inbound_delete_confirm"].format(tag=inbound.tag),
+        t["bot_inbound_delete_confirm"].format(tag=h(inbound.tag)),
         _kb(
             [
                 [
@@ -1886,15 +2026,15 @@ def _show_inbound(
         return
     count = ctx.db.query(Client).filter(Client.inbound_id == inbound.id).count()
     lines = [
-        f"📡 {inbound.tag}",
-        f"{t['status']}: {'✅ ' + t['enabled'] if inbound.enabled else '❌ ' + t['disabled']}",
-        f"{t['protocol']}: {inbound.protocol}",
-        f"{t['core']}: {inbound.core}",
-        f"{t['port']}: {inbound.port}",
-        f"{t['clients']}: {count}",
+        _b(f"📡 {h(inbound.tag)}"),
+        f"{_b(t['status'] + ':')} {'✅ ' + t['enabled'] if inbound.enabled else '❌ ' + t['disabled']}",
+        f"{_b(t['protocol'] + ':')} {inbound.protocol}",
+        f"{_b(t['core'] + ':')} {inbound.core}",
+        f"{_b(t['port'] + ':')} {inbound.port}",
+        f"{_b(t['clients'] + ':')} {count}",
     ]
     if inbound.remark:
-        lines.append(f"{t['remark']}: {inbound.remark}")
+        lines.append(f"{_b(t['remark'] + ':')} {h(inbound.remark)}")
     text = "\n".join(lines)
     if note:
         text += "\n\n" + note
@@ -1905,8 +2045,7 @@ def _show_inbound(
         text,
         _kb(
             [
-                [(toggle_label, f"i:tg:{inbound.id}")],
-                [(t["bot_delete"], f"i:del:{inbound.id}")],
+                [(toggle_label, f"i:tg:{inbound.id}"), (t["bot_delete"], f"i:del:{inbound.id}")],
                 [(t["bot_back_inbounds"], "i:list")],
             ]
         ),
@@ -1976,7 +2115,7 @@ def _show_status(ctx: _Ctx, message_id: Optional[int]) -> None:
     ``traffic_daily``. A section whose data is unavailable is skipped,
     never invented."""
     t = ctx.t
-    lines = [t["bot_status_title"], ""]
+    lines = [_b(t["bot_status_title"]), ""]
     status = None
     if system_status_mod is not None:
         try:
@@ -1987,22 +2126,22 @@ def _show_status(ctx: _Ctx, message_id: Optional[int]) -> None:
         load = status.get("load")
         if load:
             lines.append(
-                f"{t['cpu_load']}: {load[0]:.2f} / {load[1]:.2f} / {load[2]:.2f}"
+                f"{_b(t['cpu_load'] + ':')} {load[0]:.2f} / {load[1]:.2f} / {load[2]:.2f}"
             )
         mem = status.get("memory")
         if mem:
             lines.append(
-                f"{t['memory']}: "
+                f"{_b(t['memory'] + ':')} "
                 f"{_format_bytes(mem['total'] - mem['available'])} / "
                 f"{_format_bytes(mem['total'])}"
             )
         disk = status.get("disk")
         if disk:
             lines.append(
-                f"{t['disk']}: {_format_bytes(disk['used'])} / "
+                f"{_b(t['disk'] + ':')} {_format_bytes(disk['used'])} / "
                 f"{_format_bytes(disk['total'])}"
             )
-        lines.append(f"{t['uptime']}: {status.get('uptime') or '—'}")
+        lines.append(f"{_b(t['uptime'] + ':')} {h(status.get('uptime') or '—')}")
         services = status.get("services") or {}
         if services:
             parts = []
@@ -2025,8 +2164,8 @@ def _show_status(ctx: _Ctx, message_id: Optional[int]) -> None:
         )
     )
     today_total, total_14d = _traffic_summary(ctx)
-    lines.append(f"{t['bot_traffic_today']}: {_format_bytes(today_total)}")
-    lines.append(f"{t['bot_traffic_14d']}: {_format_bytes(total_14d)}")
+    lines.append(f"{_b(t['bot_traffic_today'] + ':')} {_format_bytes(today_total)}")
+    lines.append(f"{_b(t['bot_traffic_14d'] + ':')} {_format_bytes(total_14d)}")
     _show(ctx, message_id, "\n".join(lines), _kb([[(t["bot_back_main"], "m:main")]]))
 
 
@@ -2066,13 +2205,13 @@ def _show_services(
         "unknown": t["bot_service_unknown"],
     }
     state_emoji = {"running": "✅", "stopped": "❌"}.get
-    lines = [t["bot_services_title"], ""]
+    lines = [_b(t["bot_services_title"]), ""]
     kb_rows: list[list[tuple[str, str]]] = []
     for key in _SERVICE_NAMES:
         state = states.get(key, "unknown")
         emoji = state_emoji(state, "❓")
         lines.append(
-            f"{emoji} {_SERVICE_NAMES[key]} — "
+            f"{emoji} {_b(_SERVICE_NAMES[key])} — "
             f"{state_labels.get(state, t['bot_service_unknown'])}"
         )
         if key in _SERVICE_RESTART_UNITS:
@@ -2127,7 +2266,11 @@ def _restart_service_via_bot(
         logger.exception("telegram bot service restart failed")
         error = t["bot_action_failed"]
     if error is not None:
-        note = t["bot_service_restart_failed"] + " " + str(error)[:800]
+        note = (
+            t["bot_service_restart_failed"].format(name=name)
+            + " "
+            + h(str(error)[:800])
+        )
         _show_services(ctx, message_id, note=note)
         return None
     # A zero exit code is not proof the service is up — re-check.
@@ -2135,7 +2278,11 @@ def _restart_service_via_bot(
     # the state could not be verified (no systemd answer).
     state = _service_states(ctx).get(key, "unknown")
     if state == "stopped":
-        note = t["bot_service_restart_failed"] + " " + t["bot_service_stopped"]
+        note = (
+            t["bot_service_restart_failed"].format(name=name)
+            + " "
+            + t["bot_service_stopped"]
+        )
         _show_services(ctx, message_id, note=note)
         return None
     _audit(ctx, "service.restart", f"{key} [telegram]")
@@ -2172,7 +2319,7 @@ def _on_service_callback(ctx: _Ctx, message_id: Optional[int], parts: list) -> O
 
 def _show_backup(ctx: _Ctx, message_id: Optional[int]) -> None:
     t = ctx.t
-    text = t["bot_backup_title"] + "\n\n" + t["bot_backup_hint"]
+    text = _b(t["bot_backup_title"]) + "\n\n" + t["bot_backup_hint"]
     _show(
         ctx,
         message_id,

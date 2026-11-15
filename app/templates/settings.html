@@ -78,6 +78,9 @@
           </select>
           <span class="muted">{{ t.telegram_transport_hint }}</span>
         </label>
+        {% if telegram_webhook_warning %}
+        <p class="flash flash-warn" role="alert">{{ telegram_webhook_warning }}</p>
+        {% endif %}
         <div class="form-actions">
           <button type="submit" class="btn btn-primary">{{ t.save }}</button>
         </div>
@@ -110,7 +113,22 @@
         <dt>{{ t.telegram_diag_polling_offset }}</dt>
         <dd dir="ltr">{{ telegram_polling_status.offset or '—' }}</dd>
         {% endif %}
+        {% if settings.get('telegram_transport', telegram_transport_default) == 'webhook' %}
+        <dt>{{ t.telegram_webhook_url }}</dt>
+        <dd dir="ltr">{% if telegram_webhook_info_display == "unavailable" %}{{ t.telegram_webhook_info_unavailable }}{% elif telegram_webhook_info_display and telegram_webhook_info_display.url %}{{ telegram_webhook_info_display.url }}{% else %}{{ t.telegram_webhook_not_registered }}{% endif %}</dd>
+        {% if telegram_webhook_info_display and telegram_webhook_info_display != "unavailable" %}
+        <dt>{{ t.telegram_webhook_pending }}</dt>
+        <dd dir="ltr">{{ telegram_webhook_info_display.pending if telegram_webhook_info_display.pending is not none else '—' }}</dd>
+        {% if telegram_webhook_info_display.last_error %}
+        <dt>{{ t.telegram_webhook_last_error }}</dt>
+        <dd>{{ telegram_webhook_info_display.last_error }}{% if telegram_webhook_info_display.last_error_date %} ({{ telegram_webhook_info_display.last_error_date }}){% endif %}</dd>
+        {% endif %}
+        {% endif %}
+        {% endif %}
       </dl>
+      {% if telegram_webhook_warning %}
+      <p class="flash flash-warn" role="alert">{{ telegram_webhook_warning }}</p>
+      {% endif %}
       <form method="post" action="{{ base_path }}/settings/telegram-commands">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="section" value="telegram">

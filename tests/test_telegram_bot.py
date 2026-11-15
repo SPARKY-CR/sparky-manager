@@ -405,30 +405,34 @@ def test_duplicate_update_id_processed_once(db, sender):
     _dispatch(db, update, sender)
     _dispatch(db, update, sender)
     _dispatch(db, dict(update), sender)
-    assert len(sender.sent) == 1
+    # /start sends 2 messages (welcome + reply-keyboard hint) — the
+    # duplicate updates must not add a third or fourth.
+    assert len(sender.sent) == 2
 
 
 def test_distinct_update_ids_all_processed(db, sender):
     _configure_bot(db)
     _dispatch(db, _message("/start", update_id=1), sender)
     _dispatch(db, _message("/start", update_id=2), sender)
-    assert len(sender.sent) == 2
+    assert len(sender.sent) == 4
 
 
 def test_start_shows_main_menu(db, sender):
     _configure_bot(db)
     _dispatch(db, _message("/start"), sender)
-    assert len(sender.sent) == 1
+    assert len(sender.sent) == 2
     chat_id, text, markup = sender.sent[0]
     assert chat_id == ADMIN_CHAT
     assert "sparky-manager" in text
     assert _button_data(markup) == ["m:users", "m:inb", "m:status", "m:help", "m:svc", "m:bkp"]
+    # Second message installs the persistent reply keyboard.
+    assert sender.sent[1][2].get("keyboard")
 
 
 def test_start_with_bot_suffix(db, sender):
     _configure_bot(db)
     _dispatch(db, _message("/start@SparkyManagerBot"), sender)
-    assert len(sender.sent) == 1
+    assert len(sender.sent) == 2
     assert _button_data(sender.sent[0][2]) == ["m:users", "m:inb", "m:status", "m:help", "m:svc", "m:bkp"]
 
 
@@ -899,8 +903,8 @@ def test_server_status_traffic_summary_window(db, sender, seeded):
     text = sender.edited[0][2]
     # Today + 14d are both 1024 B — the 20-day-old gigabyte is excluded
     # (had it counted, the 14d line would read 1.0 GB).
-    assert "ترافیک امروز: 1.0 KB" in text
-    assert "ترافیک ۱۴ روز گذشته: 1.0 KB" in text
+    assert "<b>📈 ترافیک امروز:</b> 1.0 KB" in text
+    assert "<b>📈 ترافیک ۱۴ روز گذشته:</b> 1.0 KB" in text
 
 
 # ---------------------------------------------------------------------------
@@ -1101,7 +1105,9 @@ def test_create_flow_failure_reports_and_survives(db, sender, monkeypatch):
     assert db.query(User).filter(User.name == "failuser").first() is not None
     # The bot still works afterwards.
     _dispatch(db, _message("/start"), sender)
-    assert "sparky-manager" in sender.sent[-1][1]
+    # /start sends welcome + reply-keyboard hint — the welcome is
+    # among the last two sends.
+    assert any("sparky-manager" in s[1] for s in sender.sent[-2:])
 
 
 # ---------------------------------------------------------------------------
@@ -1156,7 +1162,8 @@ def test_webhook_admin_start_delivers(test_client, db, webhook_calls):
     resp = test_client.post(f"/telegram/webhook/{SECRET}", json=_message("/start"))
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
-    assert len(webhook_calls["sent"]) == 1
+    # /start sends welcome + reply-keyboard hint.
+    assert len(webhook_calls["sent"]) == 2
     token, chat_id, text, markup = webhook_calls["sent"][0]
     assert token == TOKEN
     assert chat_id == str(ADMIN_CHAT)
@@ -1223,7 +1230,7 @@ def test_webhook_respects_web_prefix(mounted_client, db, webhook_calls):
         f"/k7x9q2/telegram/webhook/{SECRET}", json=_message("/start")
     )
     assert resp.status_code == 200
-    assert len(webhook_calls["sent"]) == 1
+    assert len(webhook_calls["sent"]) == 2
 
 
 # ---------------------------------------------------------------------------

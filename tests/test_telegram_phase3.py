@@ -279,7 +279,7 @@ def test_bot_commands_list_matches_implemented_commands():
 def test_menu_command_shows_main_menu(db, sender):
     _configure_bot(db)
     _dispatch(db, _message("/menu"), sender)
-    assert len(sender.sent) == 1
+    assert len(sender.sent) == 2
     text, markup = sender.sent[0][1], sender.sent[0][2]
     assert "sparky-manager" in text
     data = _button_data(markup)
@@ -1162,10 +1162,15 @@ def test_settings_page_shows_diagnostics(authed_client, db):
     assert TOKEN not in text
 
 
-def test_settings_page_hides_polling_rows_on_webhook(authed_client, db):
+def test_settings_page_hides_polling_rows_on_webhook(authed_client, db, monkeypatch):
     _configure_bot(db)
     main_mod.set_setting(db, "telegram_transport", "webhook")
     main_mod.set_setting(db, "telegram_polling_last_poll", "2026-11-15T10:00:00")
+    # The page fetches getWebhookInfo on load in webhook mode — stub
+    # it so the test never touches the network.
+    monkeypatch.setattr(
+        telegram_mod, "get_webhook_info", lambda token, **kw: None
+    )
     page = authed_client.get("/settings")
     assert page.status_code == 200
     assert "2026-11-15T10:00:00" not in page.text

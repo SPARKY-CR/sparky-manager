@@ -326,6 +326,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "telegram_webhook_status_failed": "دریافت وضعیت وب‌هوک ناموفق بود — توکن و اتصال را بررسی کنید.",
         "telegram_domain_required": "برای وب‌هوک اول باید دامنه را در تنظیمات وارد کنید.",
         "telegram_webhook_port_warning": "تلگرام فقط روی پورت‌های ۴۴۳، ۸۰، ۸۸ و ۸۴۴۳ وب‌هوک می‌فرستد؛ پورت فعلی پنل در این لیست نیست (نصب‌کننده را با ‎--port 8443‎ دوباره اجرا کنید یا از ریورس‌پروکسی استفاده کنید).",
+        "telegram_webhook_blocked_warning": "تلگرام نمی‌تواند وب‌هوک را روی پورت {port} دریافت کند — وب‌هوک فقط روی پورت‌های ۴۴۳، ۸۰، ۸۸ و ۸۴۴۳ کار می‌کند و بدون دامنه آدرس وب‌هوک هم ساخته نمی‌شود. برای اینکه ربات پیام بگیرد، روش اتصال را «پولینگ» انتخاب کنید.",
+        "telegram_webhook_port_note": "آدرس عمومی پنل باید روی یکی از پورت‌های ۴۴۳، ۸۰، ۸۸ یا ۸۴۴۳ باشد تا تلگرام وب‌هوک بفرستد — اگر پنل پشت ریورس‌پروکسی است، پورت عمومی ممکن است ۴۴۳ باشد هرچند پنل روی پورت دیگری کار می‌کند.",
+        "telegram_webhook_info_unavailable": "در دسترس نیست",
         # Telegram management bot — transport (polling, Phase 4 follow-up).
         "telegram_transport": "روش دریافت پیام‌های ربات",
         "telegram_transport_webhook": "وب‌هوک",
@@ -476,6 +479,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "bot_backup_failed": "ساخت یا ارسال بکاپ ناموفق بود.",
         "bot_backup_too_large": "بکاپ بزرگ‌تر از حد تلگرام (۵۰ مگابایت) است — از صفحهٔ تنظیمات پنل دانلود کنید.",
         "bot_stale_callback": "این دکمه دیگر معتبر نیست — از منو ادامه بدهید.",
+        "bot_reply_menu": "🏠 منوی اصلی",
+        "bot_reply_keyboard_hint": "🎛️ منوی سریع:",
         # -- Phase 4 (UI redesign) --
         "nav_overview": "نمای کلی",
         "nav_management": "مدیریت",
@@ -820,6 +825,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "telegram_webhook_status_failed": "Could not fetch webhook status — check the token and connection.",
         "telegram_domain_required": "Set a domain in settings first — the webhook needs a public HTTPS URL.",
         "telegram_webhook_port_warning": "Telegram only delivers webhooks on ports 443, 80, 88 and 8443; the panel's current port is not in that list (re-run the installer with --port 8443 or use a reverse proxy).",
+        "telegram_webhook_blocked_warning": "Telegram cannot deliver webhooks on port {port} — webhooks only work on ports 443, 80, 88 and 8443, and without a domain no webhook URL can be built at all. Switch the connection method to “Polling” so the bot receives messages.",
+        "telegram_webhook_port_note": "The panel's public URL must be on one of the ports 443, 80, 88 or 8443 for Telegram to deliver webhooks — if the panel sits behind a reverse proxy, the public port may be 443 even though the panel itself runs on another port.",
+        "telegram_webhook_info_unavailable": "Unavailable",
         # Telegram management bot — transport (polling, Phase 4 follow-up).
         "telegram_transport": "How the bot receives updates",
         "telegram_transport_webhook": "Webhook",
@@ -970,6 +978,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "bot_backup_failed": "Creating or sending the backup failed.",
         "bot_backup_too_large": "The backup is larger than Telegram's limit (50 MB) — download it from the panel settings page instead.",
         "bot_stale_callback": "This button is no longer valid — continue from the menu.",
+        "bot_reply_menu": "🏠 Main menu",
+        "bot_reply_keyboard_hint": "🎛️ Quick menu:",
         # -- Phase 4 (UI redesign) --
         "nav_overview": "Overview",
         "nav_management": "Management",

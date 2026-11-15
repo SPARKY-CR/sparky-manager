@@ -784,6 +784,9 @@ details.add-form[open] > summary { margin-block-end: 0.85rem; }
 .flash::before { content: ""; flex: 0 0 auto; width: 9px; height: 9px; margin-top: 0.55rem; border-radius: 50%; background: currentColor; }
 .flash-ok { background: var(--ok-soft); color: var(--ok); border-color: rgba(74, 225, 118, 0.3); }
 .flash-err { background: var(--danger-soft); color: var(--danger); border-color: rgba(239, 68, 68, 0.3); }
+/* Inline warning (e.g. the webhook port warning on the settings
+   page): same box as a flash, amber instead of red. */
+.flash-warn { background: var(--warn-soft); color: var(--warn); border-color: rgba(245, 158, 11, 0.3); }
 
 /* ---- links & QR ---- */
 .link-box {

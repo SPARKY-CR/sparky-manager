@@ -606,5 +606,7 @@ def test_loop_dedups_repeated_update(db, monkeypatch, fast_loop):
 
     monkeypatch.setattr(telegram_mod, "get_updates", _get_updates)
     _run_loop()
-    assert len(sent) == 1
+    # /start sends 2 messages (welcome + reply-keyboard hint) — the
+    # duplicate update must not add more.
+    assert len(sent) == 2
     assert "sparky-manager" in sent[0]

@@ -150,6 +150,7 @@ def send_message(
     text: str,
     *,
     reply_markup: Optional[dict[str, Any]] = None,
+    parse_mode: Optional[str] = None,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> bool:
     """Send ``text`` to ``chat_id`` via the Bot API. True on success.
@@ -159,7 +160,9 @@ def send_message(
     an error, or ``httpx`` is unavailable. The token is never logged.
     ``reply_markup`` (Phase 4) is an inline-keyboard dict; it is only
     sent when given, so notification calls keep the exact Phase 3
-    payload.
+    payload. ``parse_mode`` (bot polish) is likewise only sent when
+    given — the management bot passes ``"HTML"``; notifications stay
+    plain text.
     """
     token = (token or "").strip()
     chat_id = (chat_id or "").strip()
@@ -172,6 +175,8 @@ def send_message(
     payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup
+    if parse_mode is not None:
+        payload["parse_mode"] = parse_mode
     return _ok(_post(token, "sendMessage", payload, timeout=timeout))
 
 
@@ -182,6 +187,7 @@ def edit_message_text(
     text: str,
     *,
     reply_markup: Optional[dict[str, Any]] = None,
+    parse_mode: Optional[str] = None,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> bool:
     """Replace a sent message's text (and keyboard). True on success.
@@ -189,6 +195,7 @@ def edit_message_text(
     False when the message cannot be edited (too old, deleted, or
     identical text) — the caller falls back to sending a new message.
     Same never-raise / never-log-the-token contract as ``send_message``.
+    ``parse_mode`` is only sent when given (the bot passes ``"HTML"``).
     """
     token = (token or "").strip()
     chat_id = (chat_id or "").strip()
@@ -205,6 +212,8 @@ def edit_message_text(
     }
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup
+    if parse_mode is not None:
+        payload["parse_mode"] = parse_mode
     return _ok(_post(token, "editMessageText", payload, timeout=timeout))
 
 

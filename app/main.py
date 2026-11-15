@@ -3017,6 +3017,10 @@ TELEGRAM_POLL_IDLE_SECONDS = 10.0
 TELEGRAM_POLL_SHORT_CALL_SECONDS = 5.0
 TELEGRAM_POLL_BACKOFF_BASE = 5.0
 TELEGRAM_POLL_BACKOFF_MAX = 60.0
+# getWebhookInfo cache for the settings page (bot polish): the
+# diagnostics fetch on page load, but at most once per TTL, so a slow
+# Telegram never slows every render.
+TELEGRAM_WEBHOOK_INFO_TTL_SECONDS = 300
 
 # BackupError.code -> STRINGS key for the restore error message.
 _RESTORE_ERROR_KEYS = {
@@ -3122,6 +3126,116 @@ def _mask_webhook_url(url: str) -> str:
     if not tail or len(tail) <= 4:
         return url
     return f"{head}/••••{tail[-4:]}"
+
+
+def _webhook_port_state(settings: dict[str, str]) -> str:
+    """Webhook viability for the current config: ``"ok"`` | ``"note"``
+    | ``"blocked"``.
+
+    Telegram only delivers webhooks on ports 443/80/88/8443. The
+    effective port is the one Telegram would call: an explicit port
+    on the domain setting wins (``_public_panel_url`` respects it),
+    else the panel port. ``"ok"`` — the effective port is
+    Telegram-supported. ``"note"`` — a domain is set but the
+    effective port is not supported: a reverse proxy may still serve
+    443, so this is a nudge to verify, not a verdict. ``"blocked"`` —
+    no domain and an unsupported port: no webhook URL can even be
+    built, so webhooks cannot work and polling is the only option.
+    """
+    domain = (settings.get("domain") or "").strip()
+    domain = re.sub(r"^https?://", "", domain, flags=re.IGNORECASE).strip().rstrip("/")
+    port = PANEL_PORT
+    if ":" in domain:
+        tail = domain.rpartition(":")[2]
+        if tail.isdigit():
+            port = int(tail)
+    if port in TELEGRAM_WEBHOOK_PORTS:
+        return "ok"
+    if domain:
+        return "note"
+    return "blocked"
+
+
+def _webhook_info_fields(info: dict) -> dict:
+    """The getWebhookInfo fields the panel stores (URL included —
+    callers mask it before display). Shared by the manual refresh
+    action and the cached page-load fetch so both write the same
+    shape."""
+    return {
+        key: info[key]
+        for key in (
+            "url",
+            "pending_update_count",
+            "last_error_date",
+            "last_error_message",
+            "last_synchronization_error_date",
+        )
+        if key in info
+    }
+
+
+def _format_webhook_error_date(value: Any) -> Optional[str]:
+    """A getWebhookInfo unix timestamp as ``YYYY-MM-DD HH:MM UTC``,
+    or None when absent/invalid (the template omits the date then)."""
+    try:
+        ts = int(value)
+    except (TypeError, ValueError):
+        return None
+    try:
+        return datetime.fromtimestamp(ts, tz=timezone.utc).strftime(
+            "%Y-%m-%d %H:%M UTC"
+        )
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _get_webhook_info_cached(db: Session, token: str) -> Optional[dict]:
+    """getWebhookInfo, cached briefly (``TELEGRAM_WEBHOOK_INFO_TTL_SECONDS``).
+
+    The settings page calls this on load when the transport is
+    webhook; the cache keeps a slow Telegram from slowing every
+    render (a fetch happens at most once per TTL). A failed fetch
+    returns the stale cached value when one exists, else None —
+    never raises, never logs the token (``app.telegram`` already
+    guarantees that). Entries stored before the cache existed (no
+    ``fetched_at``) count as stale and are re-fetched.
+    """
+    raw = ""
+    try:
+        raw = get_settings(db).get("telegram_webhook_info", "") or ""
+    except Exception:  # noqa: BLE001 — a DB error means "no cache"
+        raw = ""
+    cached = None
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            cached = parsed if isinstance(parsed, dict) else None
+        except ValueError:
+            cached = None
+    if cached is not None:
+        try:
+            fetched = datetime.fromisoformat(str(cached.get("fetched_at", "")))
+            if fetched.tzinfo is None:
+                fetched = fetched.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) - fetched < timedelta(
+                seconds=TELEGRAM_WEBHOOK_INFO_TTL_SECONDS
+            ):
+                return cached
+        except ValueError:
+            pass
+    try:
+        info = telegram_mod.get_webhook_info(token, timeout=5.0)
+    except Exception:  # noqa: BLE001 — fetch failure: fall back to cache
+        info = None
+    if info is None:
+        return cached
+    kept = _webhook_info_fields(info)
+    kept["fetched_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        set_setting(db, "telegram_webhook_info", json.dumps(kept))
+    except Exception:  # noqa: BLE001 — cache write failure is not fatal
+        pass
+    return kept
 
 
 def _notify_expiring_users(db: Session, now: Optional[datetime] = None) -> int:
@@ -3261,6 +3375,48 @@ def settings_page(
             webhook_info = parsed if isinstance(parsed, dict) else None
         except ValueError:
             webhook_info = None
+    # Effective transport (invalid stored values fall back to the
+    # default, exactly like save_settings normalizes them).
+    effective_transport = (settings.get("telegram_transport") or "").strip().lower()
+    if effective_transport not in TELEGRAM_TRANSPORTS:
+        effective_transport = TELEGRAM_TRANSPORT_DEFAULT
+    # Webhook port warning (bot polish): when the transport is webhook
+    # and the effective port is not one Telegram delivers to, the
+    # admin gets a warning under the transport select AND in the
+    # diagnostics area (same text, passed once). Saving is never
+    # blocked — this is a warning, not validation.
+    webhook_warning = None
+    if effective_transport == "webhook":
+        t = t_for(get_lang(request))
+        port_state = _webhook_port_state(settings)
+        if port_state == "blocked":
+            webhook_warning = t["telegram_webhook_blocked_warning"].format(
+                port=PANEL_PORT
+            )
+        elif port_state == "note":
+            webhook_warning = t["telegram_webhook_port_note"]
+    # Webhook diagnostics (bot polish): getWebhookInfo on page load
+    # when the transport is webhook and a bot token is configured,
+    # cached briefly (see _get_webhook_info_cached) so a slow
+    # Telegram never slows every render. The fetch refreshes the
+    # stored ``telegram_webhook_info`` too, so the webhook section
+    # below shows fresh data as well. A failed fetch shows
+    # "unavailable" in the diagnostics area, never a 500.
+    webhook_info_display = None
+    if effective_transport == "webhook" and settings.get("telegram_bot_token"):
+        fresh_info = _get_webhook_info_cached(db, settings["telegram_bot_token"])
+        if fresh_info is not None:
+            webhook_info = fresh_info
+            webhook_info_display = {
+                "url": _mask_webhook_url(fresh_info.get("url", "") or ""),
+                "pending": fresh_info.get("pending_update_count"),
+                "last_error": fresh_info.get("last_error_message"),
+                "last_error_date": _format_webhook_error_date(
+                    fresh_info.get("last_error_date")
+                ),
+            }
+        else:
+            webhook_info_display = "unavailable"
     # Bot identity (getMe, cached by the refresh action) — public
     # info only (id, username, first name), never the token.
     bot_identity = None
@@ -3287,6 +3443,8 @@ def settings_page(
                 "telegram_webhook_registered_at", ""
             ),
             "telegram_webhook_info": webhook_info,
+            "telegram_webhook_warning": webhook_warning,
+            "telegram_webhook_info_display": webhook_info_display,
             "telegram_bot_identity": bot_identity,
             "telegram_commands_registered_at": settings.get(
                 "telegram_commands_registered_at", ""
@@ -3420,6 +3578,64 @@ def save_settings(
                 )
             else:
                 logger.warning("telegram polling webhook removal failed")
+    webhook_err = ""
+    if transport == "webhook":
+        # Mirror of the polling block: switching to webhook must
+        # actually register it with Telegram, or /start stays
+        # silently dead (the pre-polish bug — set_webhook was only
+        # reachable from the manual button). The call runs on every
+        # save with transport=webhook (idempotent), so a domain or
+        # token change re-registers with the new URL. Only a failure
+        # AT the switch is shown; a success is announced only on the
+        # switch, not on every unrelated save. The audit entry is
+        # written only for a switch or a changed URL, not for every
+        # no-op re-save.
+        effective_token = (
+            (telegram_bot_token or "").strip()
+            or settings_before.get("telegram_bot_token", "")
+        ).strip()
+        switched = transport != previous_transport
+        if not effective_token:
+            if switched:
+                webhook_err = t["telegram_not_configured"]
+        else:
+            # Domain/token may have been saved by this same request —
+            # re-read so the URL is built from the new values.
+            settings_now = get_settings(db)
+            secret = _ensure_webhook_secret(db)
+            url = _public_panel_url(
+                settings_now, f"/telegram/webhook/{secret}"
+            )
+            if url is None:
+                if switched:
+                    webhook_err = t["telegram_domain_required"]
+            else:
+                ok, error = telegram_mod.set_webhook(effective_token, url)
+                if ok:
+                    previous_url = settings_now.get("telegram_webhook_url", "")
+                    set_setting(db, "telegram_webhook_url", url)
+                    set_setting(
+                        db,
+                        "telegram_webhook_registered_at",
+                        datetime.now(timezone.utc).isoformat(),
+                    )
+                    if switched or url != previous_url:
+                        _audit(db, admin.id, "telegram.webhook_register", "")
+                    if switched:
+                        msg = t["telegram_webhook_registered"]
+                elif switched:
+                    # Telegram's errors do not echo the URL, but the
+                    # description is user-visible text — strip the
+                    # secret defensively anyway (same as the manual
+                    # route).
+                    detail = error.replace(secret, "••••") if error else ""
+                    webhook_err = t["telegram_webhook_failed"] + (
+                        f" {detail}" if detail else ""
+                    )
+                    if PANEL_PORT not in TELEGRAM_WEBHOOK_PORTS:
+                        webhook_err += " " + t["telegram_webhook_port_warning"]
+                else:
+                    logger.warning("telegram webhook registration failed")
     audit_domain = (
         domain.strip()
         if domain is not None
@@ -3434,6 +3650,8 @@ def save_settings(
     # reports (long) errors.
     if polling_err:
         err_parts.append(polling_err)
+    if webhook_err:
+        err_parts.append(webhook_err)
     if commands_err:
         err_parts.append(commands_err)
     if errors:
@@ -3540,9 +3758,11 @@ def refresh_telegram_webhook_status(
 ):
     """Refresh the stored webhook status from Telegram's getWebhookInfo.
 
-    The status is fetched on demand (not on every settings-page
-    render) so a slow or dead Telegram never slows the page. Only the
-    useful fields are stored; the URL is masked at render time.
+    The status is also fetched on settings-page load when the
+    transport is webhook (cached, see ``_get_webhook_info_cached``);
+    this manual action forces a fresh fetch. Only the useful fields
+    are stored (same shape as the cache, including ``fetched_at``);
+    the URL is masked at render time.
     """
     t = t_for(get_lang(request))
     if not _telegram_configured(db):
@@ -3551,17 +3771,8 @@ def refresh_telegram_webhook_status(
     info = telegram_mod.get_webhook_info(settings.get("telegram_bot_token", ""))
     if info is None:
         return _settings_redirect(request, section, err=t["telegram_webhook_status_failed"])
-    kept = {
-        key: info[key]
-        for key in (
-            "url",
-            "pending_update_count",
-            "last_error_date",
-            "last_error_message",
-            "last_synchronization_error_date",
-        )
-        if key in info
-    }
+    kept = _webhook_info_fields(info)
+    kept["fetched_at"] = datetime.now(timezone.utc).isoformat()
     set_setting(db, "telegram_webhook_info", json.dumps(kept))
     return _settings_redirect(request, section, msg=t["telegram_webhook_status_ok"])
 

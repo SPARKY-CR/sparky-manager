@@ -147,7 +147,9 @@ def test_webhook_works_without_csrf_token(test_client, db, monkeypatch):
     })
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
-    assert len(sent) == 1
+    # /start sends welcome + reply-keyboard hint.
+    assert len(sent) == 2
+    assert "sparky-manager" in sent[0]
 
 
 @pytest.mark.parametrize("path", [
