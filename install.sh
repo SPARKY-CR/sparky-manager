@@ -605,7 +605,16 @@ if command -v sudo >/dev/null 2>&1 && command -v visudo >/dev/null 2>&1; then
 # temp path is a lone trailing `*`, the same form as the ocserv
 # rule. The panel writes that temp file itself, so the `*` grants
 # nothing the panel could not already do via wg0.conf.
-sparky-manager ALL=(root) NOPASSWD: /usr/bin/systemctl restart xray, /usr/bin/systemctl restart sing-box, /usr/bin/systemctl restart sparky-manager, /usr/bin/systemctl restart wg-quick@wg0, /usr/bin/systemctl restart openvpn-server@sparky-manager, /usr/bin/systemctl restart ocserv, /usr/bin/systemctl restart strongswan, /usr/bin/systemctl start wg-quick@wg0, /usr/bin/systemctl start awg-quick@awg0, /usr/bin/systemctl is-active xray, /usr/bin/systemctl is-active sing-box, /usr/bin/systemctl is-active sparky-manager, /usr/bin/systemctl is-active wg-quick@wg0, /usr/bin/systemctl status xray, /usr/bin/systemctl status sing-box, /usr/bin/systemctl status sparky-manager, /usr/bin/systemctl status wg-quick@wg0, /usr/bin/wg show wg0 transfer, /usr/bin/wg show wg0, /usr/bin/awg show awg0, /usr/bin/wg-quick up wg0, /usr/bin/wg-quick down wg0, /usr/bin/wg syncconf wg0 *, /usr/bin/awg syncconf awg0 *, /usr/bin/swanctl --load-all, /usr/bin/swanctl --list-conns, /usr/bin/ocserv -t -c *, /usr/bin/journalctl -u xray -n 50 --no-pager, /usr/bin/journalctl -u sing-box -n 50 --no-pager, /usr/bin/journalctl -u sparky-manager -n 50 --no-pager, /usr/bin/journalctl -u wg-quick@wg0 -n 50 --no-pager, /usr/bin/journalctl -u openvpn-server@sparky-manager -n 50 --no-pager, /usr/bin/journalctl -u ocserv -n 50 --no-pager, /usr/bin/journalctl -u strongswan -n 50 --no-pager, /usr/bin/journalctl -u awg-quick@awg0 -n 50 --no-pager
+# v15: the Cores page manages each core separately (start / stop /
+# restart), so the block now grants `start` + `stop` for every
+# managed unit and `restart awg-quick@awg0` (AmneziaWG restart was
+# previously impossible — only `start` was granted). Exact unit
+# names only, no wildcards anywhere in the new rules: newer sudo
+# rejects wildcards embedded in a command argument, and a lone
+# trailing `*` is not needed here. The panel itself
+# (sparky-manager) is deliberately NOT start/stop-managed: stopping
+# the panel from inside the panel would strand the request.
+sparky-manager ALL=(root) NOPASSWD: /usr/bin/systemctl restart xray, /usr/bin/systemctl restart sing-box, /usr/bin/systemctl restart sparky-manager, /usr/bin/systemctl restart wg-quick@wg0, /usr/bin/systemctl restart awg-quick@awg0, /usr/bin/systemctl restart openvpn-server@sparky-manager, /usr/bin/systemctl restart ocserv, /usr/bin/systemctl restart strongswan, /usr/bin/systemctl start wg-quick@wg0, /usr/bin/systemctl start awg-quick@awg0, /usr/bin/systemctl start xray, /usr/bin/systemctl start sing-box, /usr/bin/systemctl start openvpn-server@sparky-manager, /usr/bin/systemctl start ocserv, /usr/bin/systemctl start strongswan, /usr/bin/systemctl stop xray, /usr/bin/systemctl stop sing-box, /usr/bin/systemctl stop wg-quick@wg0, /usr/bin/systemctl stop awg-quick@awg0, /usr/bin/systemctl stop openvpn-server@sparky-manager, /usr/bin/systemctl stop ocserv, /usr/bin/systemctl stop strongswan, /usr/bin/systemctl is-active xray, /usr/bin/systemctl is-active sing-box, /usr/bin/systemctl is-active sparky-manager, /usr/bin/systemctl is-active wg-quick@wg0, /usr/bin/systemctl status xray, /usr/bin/systemctl status sing-box, /usr/bin/systemctl status sparky-manager, /usr/bin/systemctl status wg-quick@wg0, /usr/bin/wg show wg0 transfer, /usr/bin/wg show wg0, /usr/bin/awg show awg0, /usr/bin/wg-quick up wg0, /usr/bin/wg-quick down wg0, /usr/bin/wg syncconf wg0 *, /usr/bin/awg syncconf awg0 *, /usr/bin/swanctl --load-all, /usr/bin/swanctl --list-conns, /usr/bin/ocserv -t -c *, /usr/bin/journalctl -u xray -n 50 --no-pager, /usr/bin/journalctl -u sing-box -n 50 --no-pager, /usr/bin/journalctl -u sparky-manager -n 50 --no-pager, /usr/bin/journalctl -u wg-quick@wg0 -n 50 --no-pager, /usr/bin/journalctl -u openvpn-server@sparky-manager -n 50 --no-pager, /usr/bin/journalctl -u ocserv -n 50 --no-pager, /usr/bin/journalctl -u strongswan -n 50 --no-pager, /usr/bin/journalctl -u awg-quick@awg0 -n 50 --no-pager
 EOF
     chmod 0440 /etc/sudoers.d/sparky-manager
     chown root:root /etc/sudoers.d/sparky-manager
@@ -1342,7 +1351,7 @@ keepalive 10 120
 cipher AES-256-GCM
 auth SHA256
 tls-version-min 1.2
-client-cert-not-required
+verify-client-cert none
 username-as-common-name
 auth-user-pass-verify /opt/sparky-manager/scripts/ovpn-auth.py via-file
 user nobody
