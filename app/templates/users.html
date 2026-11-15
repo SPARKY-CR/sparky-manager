@@ -32,7 +32,35 @@
         {{ t.expires_days }}
         <input type="number" name="expires_days" min="0" step="1">
       </label>
+      {# Phase B items 9–10: an optional plan preset + an explicit
+         first-use expiry. Empty fields fall back to the plan; a
+         typed value always wins over the plan (see create_user). #}
+      {% if templates %}
+      <label>
+        {{ t.plan }}
+        <select name="template_id" dir="ltr">
+          <option value="">{{ t.plan_none }}</option>
+          {% for plan in templates %}
+          <option value="{{ plan.id }}">{{ plan.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% endif %}
+      <label>
+        {{ t.expiry_mode }}
+        <select name="expiry_mode" dir="ltr">
+          <option value="">{{ t.expiry_mode_default }}</option>
+          <option value="fixed">{{ t.expiry_fixed }}</option>
+          <option value="first_use">{{ t.expiry_first_use }}</option>
+        </select>
+      </label>
+      <label>
+        {{ t.usage_days }}
+        <input type="number" name="usage_days" min="0" step="1" dir="ltr">
+      </label>
     </div>
+    <p class="field-hint">{{ t.plan_hint }}</p>
+    <p class="field-hint">{{ t.usage_days_hint }}</p>
     <div class="form-actions">
       <button type="submit" class="btn btn-primary">{{ t.create }}</button>
     </div>
@@ -56,6 +84,17 @@
         <option value="expired"{% if status == 'expired' %} selected{% endif %}>{{ t.filter_expired }}</option>
       </select>
     </div>
+    {% if tags %}
+    <div class="filter-select">
+      <span class="filter-label">{{ t.tag_filter }}:</span>
+      <select name="tag" aria-label="{{ t.tag_filter }}">
+        <option value="">{{ t.tag_all }}</option>
+        {% for tag_name in tags %}
+        <option value="{{ tag_name }}"{% if tag == tag_name %} selected{% endif %}>{{ tag_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
     <div class="filter-select">
       <span class="filter-label">{{ t.sort_by }}:</span>
       <select name="sort" aria-label="{{ t.sort_by }}">
@@ -67,7 +106,7 @@
     </div>
     <div class="form-actions">
       <button type="submit" class="btn btn-primary">{{ t.filter_apply }}</button>
-      {% if q or status != 'all' or sort != 'created' %}
+      {% if q or status != 'all' or sort != 'created' or tag %}
       <a class="btn" href="{{ base_path }}/users">{{ t.filter_clear }}</a>
       {% endif %}
     </div>
@@ -96,7 +135,7 @@
         {% for u in users %}
         <tr>
           <td class="check-col"><input type="checkbox" name="user_ids" value="{{ u.id }}" form="bulk-form"></td>
-          <td data-label="{{ t.name }}"><a href="{{ base_path }}/users/{{ u.id }}">{{ u.name }}</a>{% if u.note %} <span class="muted">{{ u.note }}</span>{% endif %}</td>
+          <td data-label="{{ t.name }}"><a href="{{ base_path }}/users/{{ u.id }}">{{ u.name }}</a>{% if u.note %} <span class="muted">{{ u.note }}</span>{% endif %}{% if tags_by_user is defined and u.id in tags_by_user %}{% for tag_name in tags_by_user[u.id] %} <span class="chip">{{ tag_name }}</span>{% endfor %}{% endif %}</td>
           <td data-label="{{ t.status }}"><span class="badge {{ 'badge-ok' if u.enabled else 'badge-off' }}">{{ t.enabled if u.enabled else t.disabled }}</span>{% if u.id in frozen_ids %} <span class="badge badge-warn">{{ t.frozen }}</span>{% endif %}{% if u.id in expired_ids %} <span class="badge badge-err">{{ t.expired }}</span>{% endif %}</td>
           <td data-label="{{ t.used }}"><span class="num" dir="ltr">{{ (u.traffic_used_bytes / 1073741824) | round(2) }} GB</span></td>
           <td data-label="{{ t.limit }}">{{ ((u.traffic_limit_bytes / 1073741824) | round(2)) ~ ' GB' if u.traffic_limit_bytes else t.unlimited }}</td>
@@ -117,7 +156,7 @@
       </tbody>
     </table>
   </div>
-  {% set qs = '?q=' ~ (q | urlencode) ~ '&status=' ~ status ~ '&sort=' ~ sort %}
+  {% set qs = '?q=' ~ (q | urlencode) ~ '&status=' ~ status ~ '&sort=' ~ sort ~ '&tag=' ~ (tag | urlencode) %}
   {% if total_pages > 1 %}
   <nav class="pagination" aria-label="{{ t.page_of.format(page=page, pages=total_pages) }}">
     {% if page > 1 %}

@@ -43,6 +43,10 @@ from tests.conftest import ADMIN_PASSWORD, ADMIN_USERNAME
 CSRF_EXEMPT_POSTS = {
     # No session exists yet, so there is no token to check against.
     "/login",
+    # Phase B item 13: the TOTP step of the login — still no session;
+    # the request is authenticated by the signed pending-login cookie
+    # and still needs a valid 6-digit code (or a recovery code).
+    "/login/totp",
     # Unauthenticated external POST, authenticated by its path secret.
     "/telegram/webhook/{secret}",
 }
@@ -51,6 +55,10 @@ PUBLIC_GETS = {
     "/health",  # liveness probe (no data)
     "/",  # redirect to /login or /dashboard
     "/login",  # the login page itself
+    # Phase B item 13: the TOTP login step — no session yet; the page
+    # is only useful with the signed pending-login cookie (without
+    # it, the page redirects back to /login).
+    "/login/totp",
     "/u/{token}",  # token-gated public user page (128-bit token)
     "/sub/{token}",  # token-gated subscription feeds (128-bit token)
     "/sub/{token}/zedsecure.json",
@@ -112,7 +120,9 @@ def test_every_post_route_has_csrf_except_documented_exemptions():
 
 def test_every_admin_route_requires_auth():
     """Every GET route is either public-by-design (listed above) or
-    guarded by require_admin / require_admin_api."""
+    guarded by require_admin / require_admin_api — or, for the Phase
+    B item 12 API endpoints, by require_api_token (a scoped,
+    expiring, SHA-256-hashed bearer token)."""
     unguarded = []
     for methods, path, deps in _all_routes():
         if "GET" not in methods:
@@ -121,7 +131,11 @@ def test_every_admin_route_requires_auth():
             continue
         if path.startswith("/static"):
             continue
-        if "require_admin" not in deps and "require_admin_api" not in deps:
+        if (
+            "require_admin" not in deps
+            and "require_admin_api" not in deps
+            and "require_api_token" not in deps
+        ):
             unguarded.append(path)
     assert unguarded == [], f"GET routes without auth: {unguarded}"
 
@@ -141,6 +155,14 @@ ADMIN_GETS = [
     "/settings/backup",
     "/logs",
     "/logs/download",
+    # Phase B pages (the TOTP setup + QR are admin-only too — the
+    # /login/totp step is a different, unauthenticated route).
+    "/plans",
+    "/audit",
+    "/api-tokens",
+    "/webhooks",
+    "/settings/totp/setup",
+    "/settings/totp/qr",
 ]
 
 

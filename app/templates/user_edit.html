@@ -31,6 +31,81 @@
     <p class="field-hint">{{ t.expiry_date_hint }}</p>
   </div>
 
+  {# Phase B items 10–11: lifecycle. The expiry date above and the
+     first-use strategy interact: while the clock has not started,
+     first-use wins and the date is ignored (the clock sets it at
+     first use); once the clock has started, the date stands. #}
+  <div class="card form-section">
+    <h2>{{ t.lifecycle }}</h2>
+    {% if on_hold %}
+    <p><span class="badge badge-warn">{{ t.on_hold }}</span></p>
+    {% endif %}
+    <div class="field-grid">
+      <label>
+        {{ t.expiry_strategy }}
+        <select name="expiry_strategy" dir="ltr">
+          <option value="fixed"{% if values["expiry_strategy"] == 'fixed' %} selected{% endif %}>{{ t.expiry_fixed }}</option>
+          <option value="first_use"{% if values["expiry_strategy"] == 'first_use' %} selected{% endif %}>{{ t.expiry_first_use }}</option>
+        </select>
+      </label>
+      <label>
+        {{ t.usage_days }}
+        <input type="number" name="usage_days" min="0" step="1" value="{{ values["usage_days"] }}" dir="ltr">
+      </label>
+      <label>
+        {{ t.reset_cycle }}
+        <select name="reset_cycle" dir="ltr">
+          <option value="">{{ t.reset_cycle_none }}</option>
+          {% for cycle in reset_cycles %}
+          <option value="{{ cycle }}"{% if values["reset_cycle"] == cycle %} selected{% endif %}>{{ t["reset_" ~ cycle] }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        {{ t.reset_day }}
+        <input type="number" name="reset_day" min="1" max="28" value="{{ values["reset_day"] }}" dir="ltr">
+      </label>
+      <label>
+        {{ t.renewal_mode }}
+        <select name="renewal_mode" dir="ltr">
+          <option value="">{{ t.renewal_none }}</option>
+          {% for mode in renewal_modes %}
+          <option value="{{ mode }}"{% if values["renewal_mode"] == mode %} selected{% endif %}>{{ t["renewal_" ~ mode] }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        {{ t.renewal_interval_days }}
+        <input type="number" name="renewal_interval_days" min="0" step="1" value="{{ values["renewal_interval_days"] }}" dir="ltr">
+      </label>
+      <label>
+        {{ t.renewal_day }}
+        <input type="number" name="renewal_day" min="1" max="28" value="{{ values["renewal_day"] }}" dir="ltr">
+      </label>
+      <label>
+        {{ t.renewal_weekday }}
+        {% set weekdays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] %}
+        <select name="renewal_weekday" dir="ltr">
+          <option value="">{{ t.none }}</option>
+          {% for i in range(7) %}
+          <option value="{{ i }}"{% if values["renewal_weekday"] == i|string %} selected{% endif %}>{{ t["weekday_" ~ weekdays[i]] }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        {{ t.renewal_max }}
+        <input type="number" name="renewal_max" min="0" step="1" value="{{ values["renewal_max"] }}" dir="ltr">
+      </label>
+    </div>
+    <p class="field-hint">{{ t.usage_days_hint }}</p>
+    <p class="field-hint">{{ t.renewal_max_hint }}</p>
+    <dl class="kv">
+      <dt>{{ t.lifetime_used }}</dt><dd dir="ltr">{{ ((lifetime_bytes | default(0)) / 1073741824) | round(2) }} GB</dd>
+      {% if next_reset %}<dt>{{ t.next_reset }}</dt><dd dir="ltr">{{ next_reset }}</dd>{% endif %}
+      {% if renewal_preview %}<dt>{{ t.renewal_preview }}</dt><dd dir="ltr">{{ renewal_preview | join(', ') }}</dd>{% endif %}
+    </dl>
+  </div>
+
   <div class="card form-section">
     <h2>{{ t.per_client_settings }}</h2>
     {% if rows %}
@@ -39,7 +114,7 @@
         <thead>
           <tr>
             <th>{{ t.inbounds }}</th><th>{{ t.flow }}</th><th>{{ t.ip_limit }}</th>
-            <th>{{ t.frozen }}</th><th>{{ t.move_to }}</th>
+            <th>{{ t.device_limit }}</th><th>{{ t.frozen }}</th><th>{{ t.move_to }}</th>
           </tr>
         </thead>
         <tbody>
@@ -67,6 +142,10 @@
             <td data-label="{{ t.ip_limit }}">
               <input type="number" name="ip_limit_{{ c.id }}" min="0" max="1000" value="{{ values["ip_limit_" ~ c.id] }}" dir="ltr">
               <p class="field-hint">{{ t.ip_limit_hint }}</p>
+            </td>
+            <td data-label="{{ t.device_limit }}">
+              <input type="number" name="hwid_limit_{{ c.id }}" min="0" max="100" value="{{ values["hwid_limit_" ~ c.id] }}" dir="ltr">
+              <p class="field-hint">{{ t.hwid_limit_hint }}</p>
             </td>
             <td data-label="{{ t.frozen }}">
               <label class="check-label">

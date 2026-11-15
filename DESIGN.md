@@ -857,11 +857,16 @@ sparky-manager/
 │   │                          #   settings/audit, templates/redirects (§13)
 │   ├── routes/
 │   │   ├── __init__.py
-│   │   └── users.py           # /users* routes (APIRouter, §13)
+│   │   ├── users.py           # /users* routes (APIRouter, §13)
+│   │   └── phase_b.py         # /plans, /audit, /api-tokens, /api/v1/*,
+│   │                          #   /webhooks, TOTP setup, tags/devices/hosts (§15.6)
 │   ├── config.py              # settings, paths, versions.env
 │   ├── db.py                  # SQLAlchemy engine/session, init
 │   ├── models.py              # admins, settings, inbounds, users, clients,
-│   │                          #   traffic_daily, audit_log (§4)
+│   │                          #   traffic_daily, audit_log (§4) + Phase B:
+│   │                          #   user_templates, user_lifecycle, api_tokens,
+│   │                          #   webhook_endpoints, user_tags, devices,
+│   │                          #   managed_hosts (§15.6)
 │   ├── auth.py                # PBKDF2, sessions, rate limit
 │   ├── i18n.py                # fa (default) / en strings
 │   ├── xray.py                # render /usr/local/etc/xray/config.json + validate
@@ -883,11 +888,23 @@ sparky-manager/
 │   ├── backup.py              # backup ZIP / restore (§5.8)
 │   ├── system_status.py       # server status collector (§12)
 │   ├── panel_log.py           # rotating file log + redaction
-│   ├── panel_cli.py           # `sparky-manager info/status/restart/update-cores/backup`
+│   ├── panel_cli.py           # `sparky-manager info/status/restart/update-cores/backup/totp-disable`
+│   ├── events.py              # Telegram event bus (§15.5)
+│   ├── selfcheck.py           # client-eye self-check (§15.5)
+│   ├── plans.py               # user templates (§15.6)
+│   ├── lifecycle.py           # first-use expiry, resets, renewals (§15.6)
+│   ├── api_tokens.py          # scoped API tokens (§15.6)
+│   ├── totp.py                # TOTP 2FA, stdlib RFC 6238 (§15.6)
+│   ├── webhooks.py            # HMAC-signed outgoing webhooks (§15.6)
+│   ├── tags.py                # per-user tags (§15.6)
+│   ├── devices.py             # HWID devices + TTL (§15.6)
+│   ├── hosts.py               # managed hosts (§15.6)
 │   ├── templates/             # Jinja2, RTL, Persian-first
 │   │   ├── base.html  dashboard.html  inbounds.html  inbound_edit.html
 │   │   ├── users.html  user_detail.html  user_edit.html
 │   │   ├── settings.html  login.html  logs.html  error.html
+│   │   ├── plans.html  audit.html  api_tokens.html  api_token_created.html
+│   │   ├── webhooks.html  totp_setup.html  totp_login.html (§15.6)
 │   └── static/
 │       ├── style.css          # one hand-written stylesheet, no build step
 │       ├── app.js             # small vanilla JS (copy link, show QR, confirm dialogs)
@@ -900,7 +917,7 @@ sparky-manager/
 │   ├── sparky-manager.service
 │   ├── xray.service           # or use the cores' shipped units
 │   └── sing-box.service
-├── tests/                     # 1269 tests (conftest.py: seeded DB + CSRF client)
+├── tests/                     # 1447 tests (conftest.py: seeded DB + CSRF client)
 │   ├── test_links.py          # link round-trips for all 9 schemes
 │   ├── test_render.py         # golden configs → xray -test / sing-box check
 │   ├── test_subscription.py   # v2rayNG + sing-box feeds parse cleanly
@@ -909,8 +926,10 @@ sparky-manager/
 │   │   test_ui_phase4.py      # per-phase upgrade tests
 │   ├── test_xray_stats.py / test_rerender_lock.py /
 │   │   test_config_io.py      # Phase 5 tests
-│   └── test_phase6_*.py / test_links.py
-│                              # Phase 6: security sweep, loops, perf, UI
+│   ├── test_phase6_*.py / test_links.py
+│   │                          # Phase 6: security sweep, loops, perf, UI
+│   └── test_phase_b_*.py      # Phase B: plans, lifecycle, API tokens,
+│                              #   TOTP, webhooks, audit/tags, HWID, hosts
 └── docs/
     ├── PORTS.md               # §3 port plan
     ├── ZEDSECURE.md           # per-protocol import checklist for ZedSecure
@@ -1178,7 +1197,7 @@ found live issues and asked for a complete check of the project.
 `main.py` is 4,922 lines at this point (4,546 at the end of Phase 7;
 the post-upgrade batches added routes, diagnostics, the webhook
 set-on-save path, the Cores page and the bot UX work). The full suite
-is 1269 tests; i18n parity is 590 keys each.
+is 1447 tests; i18n parity is 769 keys each.
 
 - **Fix batch (evening, after the server upgrade).** The language
   toggle reverted on navigation (the `lang` cookie was only set on
@@ -1528,6 +1547,139 @@ pass): the PWA install flow, the copy-only subscription page in a
 real browser, and the Telegram topic routing were verified by
 tests only — the first real install / /start after deploy is the
 true check.
+
+### 15.6 Best-panel program, Phase B — migrations (2026-11-16)
+
+The second tier of the 26-idea adoption program: items 9–19. The
+tier is called "migrations" because every item needs durable state
+beyond what the settings table holds — but there is still no
+migration system (`create_all` only), so the rule from §6.4 held
+throughout: **new tables are fine, new columns on existing tables
+are not.** Seven new tables (`user_templates`, `user_lifecycle`,
+`api_tokens`, `webhook_endpoints`, `user_tags`, `devices`,
+`managed_hosts`); the 8 original tables are untouched. Per-client
+state that is genuinely per-client (`hwid_limit`, `last_fetch_at`)
+lives in `clients.extra_json`, and TOTP state lives in the
+settings table. No new dependency, no install.sh / sudoers /
+requirements / CI change. The deliberate decisions, per item:
+
+9. **User templates / plans** (`app/plans.py`, `/plans`). A plan
+   bundles quota, expiry (fixed days or start-on-first-use),
+   inbound selection and reset cycle. Applying a plan COPIES its
+   values onto the user at creation — the user never points back
+   at the plan, so editing or deleting a plan never rewrites
+   existing users. Form values override plan values when
+   non-empty; missing or disabled inbounds in a plan are dropped
+   at apply time (a plan must never fail creation because an
+   inbound was deleted since).
+10. **Start-on-first-use expiry** (`app/lifecycle.py`). The clock
+    starts at the first raw subscription fetch or the first
+    recorded traffic — NOT at the browser copy-only page (the
+    admin previewing a customer's link must not start the
+    customer's clock). A manually set `expires_at` wins over the
+    automatic clock (the first use is still stamped, so the "on
+    hold" badge clears honestly). `record_first_use` is
+    idempotent.
+11. **Lifecycle: renewals, reset cycles, lifetime**
+    (`app/lifecycle.py`, one row per user in `user_lifecycle`).
+    Reset cycles are per-USER — sparky's accounting unit is the
+    user (traffic is attributed per user via the Stats emails),
+    which is the honest mapping of 3x-ui's per-client cycle.
+    Cycles: daily / weekly / monthly (fixed day 1–28) /
+    month_rolling (from the creation day). Renewals fire only for
+    expired users; the computed date is always rolled forward
+    past "now", so a long-down panel never burns the cap on
+    already-past dates; the preview shows the next 3 dates,
+    capped by remaining renewals. The lifetime counter
+    accumulates every traffic delta and survives resets. The
+    sweeper runs from the expiry loop (`run_lifecycle_once`,
+    per-row try/except — one bad row never stops the pass) and
+    audits as the system.
+12. **Scoped expiring API tokens** (`app/api_tokens.py`,
+    `/api-tokens`, `/api/v1/*`). Tokens are `spk_` + 32 urlsafe
+    bytes, stored SHA-256 hashed, shown once on a rendered page
+    (never a redirect URL). Scopes `status:read` / `users:read` /
+    `inbounds:read` / `admin` (satisfies all); expiry optional
+    with a warning (Remnawave mandates expiry; sparky warns).
+    Auth via `Authorization: Bearer` or `X-API-Key`; 401 for a
+    missing/invalid/expired token, 403 for a valid token without
+    the scope; `last_used_at` stamped on every accepted call.
+    The v1 endpoints are read-only GETs and take no cookie, so
+    CSRF does not apply to them (same reasoning as the Telegram
+    webhook exemption). Revocation deletes the row (immediate —
+    the hash is gone).
+13. **TOTP 2FA** (`app/totp.py`, setup at `/settings/totp/setup`,
+    second login step at `/login/totp`). Pure-stdlib RFC 6238
+    (no pyotp — no new dependency), verified against the RFC
+    Appendix B vectors. The secret + recovery-code hashes live in
+    the settings table. The pending-login token is HMAC-signed
+    with the admin's password hash (stateless, 5-minute expiry,
+    dies on password change). The login failure counter clears
+    only after the code verifies — clearing at the password step
+    would let a password-holding attacker brute-force the 6-digit
+    code without lockout. Recovery: 8 one-time codes (hashed at
+    rest, shown once at setup) or, when those are gone too,
+    `sparky-manager totp-disable` on the server (needs SSH —
+    a stolen panel session cannot use it). The QR is served from
+    a route because the CSP blocks `data:` images.
+14. **HMAC-signed webhooks** (`app/webhooks.py`, `/webhooks`).
+    Every catalog event is POSTed as JSON with
+    `X-Sparky-Signature: sha256=<hex>` + `X-Sparky-Event`.
+    Dispatch hooks into `events.notify_event` INDEPENDENT of
+    Telegram enablement (webhooks are their own channel). An
+    empty event list means all catalog events. A blank secret is
+    auto-generated and shown once. There is no retry queue:
+    failures are recorded on the endpoint row (last status /
+    error / time). The secret is stored in the clear — it must be
+    usable to sign, like the Telegram bot token (§7 says the
+    backup ZIP is a credential bundle either way).
+15. **Audit log viewer** (`/audit`). The table already existed;
+    this is the viewer it never had — list newest-first, text
+    search over action/detail, 25/page pagination. System actions
+    (the lifecycle sweeper) show "System" as the actor. Entries
+    are read-only from the panel.
+16. **Per-user tags** (`app/tags.py`). Lowercased single tokens
+    (Unicode — Persian tags work), 20 per user, shown as chips on
+    the users list and filterable there. Adding a tag the user
+    already has is a no-op, not an error. Tags are deleted with
+    the user.
+17. **HWID devices** (`app/devices.py`). The limit ships OFF by
+    default (no limit = off for that client). Enforcement happens
+    ONLY at subscription fetch: a device over the limit has its
+    client OMITTED from the feed (never a whole-feed 404).
+    Clients that send no HWID header are never registered or
+    limited — v2rayNG / Hiddify send none, so a limit must never
+    lock them out (the documented trap). Allowed set is
+    first-come-first-served by `first_seen_at`; removing a device
+    frees its slot. TTL cleanup (default 90 days, 0 = never
+    prune) runs from the expiry sweeper; the TTL is a setting in
+    Settings → Advanced. Live connections are NOT dropped — the
+    limit only shapes the next feed fetch.
+18. **Managed hosts** (`app/hosts.py`, on the inbound edit page).
+    Per-inbound address/port/SNI overrides used in share links,
+    the v2rayng/sing-box feeds and the ZedSecure bundle; the
+    first enabled host wins. Reality keys are never touched —
+    only the server name the client sends changes. Adding a host
+    needs no re-render (server-side configs never carry hosts).
+    Documented limitation: file exports (`.conf` / `.ovpn` /
+    `.mobileconfig`) always use the default host.
+19. **Last fetch** (`last_fetch_at` in `clients.extra_json`,
+    shown on the user detail page). Stamped on every client a raw
+    feed actually served; the browser copy-only page does not
+    stamp, and HWID-excluded clients are not stamped.
+
+New pages: `/plans`, `/audit`, `/api-tokens`, `/webhooks`,
+`/settings/totp/setup` (nav: 8 → 12 links). All new POST routes
+carry CSRF except `/login/totp`, which is exempt like `/login`
+(no session yet; the signed pending token + the code itself are
+the auth — see the CSRF note in `app/main.py`).
+
+Honest limitations (no live server/Telegram verification in this
+pass): the TOTP flow against a real authenticator app, the
+webhook delivery to a real receiver, HWID enforcement against a
+real Happ/v2RayTun client, and the PWA-adjacent pages were
+verified by tests only — the first real login / delivery / fetch
+after deploy is the true check.
 
 ---
 

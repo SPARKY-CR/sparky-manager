@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %} — {{ t.api_tokens }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ t.api_tokens }}</h1>
+</div>
+<p class="field-hint">{{ t.api_tokens_desc }}</p>
+
+{# Tokens are read-only by design (the v1 endpoints are all GETs);
+   the "admin" scope only widens which read endpoints a token may
+   call, it never grants writes. #}
+<div class="card">
+  <h2>{{ t.api_token_create }}</h2>
+  <form method="post" action="{{ base_path }}/api-tokens">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="field-grid">
+      <label>
+        {{ t.api_token_name }}
+        <input type="text" name="name" maxlength="64" required>
+      </label>
+      <label>
+        {{ t.api_token_expires }}
+        <input type="number" name="expires_days" min="0" step="1" dir="ltr" placeholder="{{ t.api_token_never_expires }}">
+      </label>
+    </div>
+    <p class="field-hint">{{ t.api_token_never_expires_hint }}</p>
+    <fieldset>
+      <legend>{{ t.api_token_scopes }}</legend>
+      <div class="checkbox-grid">
+        {% for scope, key in scopes.items() %}
+        <label class="check-label">
+          <input type="checkbox" name="scopes" value="{{ scope }}">
+          <span>{{ t[key] }}</span>
+          <code dir="ltr">{{ scope }}</code>
+        </label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{{ t.create }}</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>{{ t.api_tokens }}</h2>
+  {% if tokens %}
+  <div class="table-wrap">
+    <table class="table-cards">
+      <thead>
+        <tr><th>{{ t.name }}</th><th>{{ t.api_token_scopes }}</th><th>{{ t.api_token_expires }}</th><th>{{ t.api_token_last_used }}</th><th>{{ t.actions }}</th></tr>
+      </thead>
+      <tbody>
+        {# A listed token is live by definition: revoking DELETES the
+           row (the hash is gone, so the token stops working
+           immediately), and an expired token simply stops
+           verifying — the expiry date is shown so the admin can see
+           it. There is no separate "revoked" state to display. #}
+        {% for token in tokens %}
+        <tr>
+          <td data-label="{{ t.name }}">{{ token.name }}</td>
+          <td data-label="{{ t.api_token_scopes }}">{% if token.scopes %}{% for scope in token.scopes %}<span class="chip" dir="ltr">{{ scope }}</span> {% endfor %}{% else %}{{ t.api_token_no_scopes }}{% endif %}</td>
+          <td data-label="{{ t.api_token_expires }}">{{ token.expires_at.strftime('%Y-%m-%d') if token.expires_at else t.api_token_never_expires }}</td>
+          <td data-label="{{ t.api_token_last_used }}">{{ token.last_used_at.strftime('%Y-%m-%d %H:%M') if token.last_used_at else t.never }}</td>
+          <td data-label="{{ t.actions }}">
+            <form method="post" action="{{ base_path }}/api-tokens/{{ token.id }}/revoke" class="inline-form" data-confirm="{{ t.confirm_delete }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="btn btn-small btn-danger">{{ t.api_token_revoke }}</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">{{ t.no_api_tokens }}</p>
+  {% endif %}
+</div>
+{% endblock %}

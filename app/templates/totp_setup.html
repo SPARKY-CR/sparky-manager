@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %} — {{ t.totp_setup_title }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ t.totp_setup_title }}</h1>
+</div>
+
+{% if recovery_codes is not none %}
+{# One-time state: the setup just completed, and these codes are
+   shown exactly once (only their hashes are stored). #}
+<div class="card">
+  <h2>{{ t.totp_recovery_codes }}</h2>
+  <p class="field-hint">{{ t.totp_recovery_hint }}</p>
+  <ul class="recovery-codes">
+    {% for code in recovery_codes %}
+    <li><code dir="ltr">{{ code }}</code></li>
+    {% endfor %}
+  </ul>
+  <p class="form-actions">
+    <a class="btn btn-primary" href="{{ base_path }}/settings?section=security">{{ t.back }}</a>
+  </p>
+</div>
+{% else %}
+<div class="card card-narrow">
+  <p class="field-hint">{{ t.totp_setup_scan }}</p>
+  {# The QR is served from a route (CSP blocks data: images) and
+     only while a setup is pending — after the setup completes or
+     is abandoned, the route answers 404. #}
+  <img class="qr" src="{{ base_path }}/settings/totp/qr" alt="{{ t.totp_setup_title }}" loading="lazy">
+  {% if totp_enabled %}
+  <p class="field-hint">{{ t.totp_status_enabled }}</p>
+  {% endif %}
+  <dl class="kv">
+    <dt>{{ t.totp_setup_secret }}</dt><dd dir="ltr">{{ secret }}</dd>
+  </dl>
+  <div class="copy-row">
+    <code dir="ltr" class="link-box">{{ secret }}</code>
+    <button type="button" class="btn btn-small" data-copy="{{ secret }}">{{ t["copy"] }}</button>
+  </div>
+  <form method="post" action="{{ base_path }}/settings/totp/setup">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>
+      {{ t.totp_setup_confirm }}
+      <input type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required autofocus dir="ltr">
+    </label>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{{ t.totp_verify }}</button>
+      <a class="btn" href="{{ base_path }}/settings?section=security">{{ t.back }}</a>
+    </div>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

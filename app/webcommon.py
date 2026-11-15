@@ -135,8 +135,17 @@ def _audit(db: Session, admin_id: Optional[int], action: str, detail: str = "") 
         db.rollback()
         logger.exception("audit log write failed for %s", action)
 
-def _usable_clients(db: Session, user: Any) -> list[tuple[Any, Any]]:
-    """``(client, inbound)`` pairs usable for ``user`` (inbound order)."""
+def _usable_clients(
+    db: Session, user: Any, exclude_client_ids: Optional[set] = None
+) -> list[tuple[Any, Any]]:
+    """``(client, inbound)`` pairs usable for ``user`` (inbound order).
+
+    ``exclude_client_ids`` (Phase B item 17) drops clients from the
+    result — used ONLY by the subscription feed, where a device
+    past its HWID limit loses that client's config. Renderers and
+    the ZedSecure bundle never pass it: HWID enforcement is a
+    subscription-time rule, not a config rule.
+    """
     out: list[tuple[Any, Any]] = []
     clients = (
         db.query(Client)
@@ -146,6 +155,8 @@ def _usable_clients(db: Session, user: Any) -> list[tuple[Any, Any]]:
         .all()
     )
     for client in clients:
+        if exclude_client_ids and client.id in exclude_client_ids:
+            continue
         inbound = db.query(Inbound).filter(Inbound.id == client.inbound_id).first()
         if inbound is not None and client_is_usable(client, user, inbound):
             out.append((client, inbound))
@@ -210,7 +221,11 @@ def _inbound_dict(inbound: Any) -> dict[str, Any]:
     }
 
 def _links_for_user(
-    db: Session, user: Any, host: str, settings: dict[str, Any] | None = None
+    db: Session,
+    user: Any,
+    host: str,
+    settings: dict[str, Any] | None = None,
+    exclude_client_ids: Optional[set] = None,
 ) -> list[dict[str, Any]]:
     """Share links for one user's usable clients.
 
@@ -220,14 +235,31 @@ def _links_for_user(
     is ``{USER}-{INBOUND}`` (the shape the sing-box feed tags
     already use — previously the v2rayNG remark was the bare user
     name, so all of a user's configs looked identical).
+
+    Phase B item 18: a managed host on the inbound overrides the
+    endpoint the link points at (address / port / SNI) — the links
+    shown in the panel match what the subscription feed serves.
+    ``exclude_client_ids`` (Phase B item 17) is the HWID
+    over-limit set — subscription feeds only.
     """
+    from app import hosts as hosts_mod
     from app import subscription as subscription_mod
 
     template = (settings or {}).get("sub_remark_template", "") or None
     links: list[dict[str, Any]] = []
-    for client, inbound in _usable_clients(db, user):
+    pairs = _usable_clients(db, user, exclude_client_ids=exclude_client_ids)
+    active_hosts = hosts_mod.active_hosts_for_inbounds(
+        db, [inbound.id for _client, inbound in pairs]
+    )
+    for client, inbound in pairs:
         try:
             inbound_dict = _inbound_dict(inbound)
+            link_host = host
+            active = active_hosts.get(inbound.id)
+            if active is not None:
+                link_host, inbound_dict = hosts_mod.apply_host_override(
+                    inbound_dict, active, host
+                )
             if inbound.protocol == "amneziawg":
                 # The vpn:// link needs the server public key, which
                 # lives in settings (like WireGuard's) — hand it to
@@ -246,7 +278,7 @@ def _links_for_user(
                 inbound.protocol,
                 _client_dict(client, user),
                 inbound_dict,
-                host,
+                link_host,
                 remark,
             )
         except Exception:  # noqa: BLE001

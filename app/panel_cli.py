@@ -4,6 +4,7 @@ Usable as ``python -m app.panel_cli <command>`` from the install dir,
 and installed as the ``sparky-manager`` wrapper by install.sh::
 
     sparky-manager info | status | restart | update-cores | backup <path>
+    sparky-manager totp-disable
 
 Every command is tolerant of a missing service / file: it prints what
 it knows and returns a non-zero exit code instead of crashing. The
@@ -236,6 +237,37 @@ def cmd_update_cores() -> int:
 # ---------------------------------------------------------------------------
 
 
+def cmd_totp_disable() -> int:
+    """Disable TOTP 2FA (Phase B item 13 lockout recovery).
+
+    The ONLY recovery when the admin loses both the authenticator
+    device and the recovery codes: it needs server SSH (root), so a
+    stolen panel session cannot use it. Prints whether 2FA was on.
+    """
+    from app import db as db_mod
+    from app import totp as totp_mod
+
+    try:
+        # Use the already-bound engine when one exists (tests bind
+        # SessionLocal to a tmp DB); a bare init_db() would create
+        # the default-path engine and rebind SessionLocal to it.
+        bound = db_mod.SessionLocal.kw.get("bind")
+        db_mod.init_db(bound) if bound is not None else db_mod.init_db()
+        db = db_mod.SessionLocal()
+        try:
+            was_enabled = totp_mod.disable_totp(db)
+        finally:
+            db.close()
+    except Exception as exc:  # noqa: BLE001 — CLI must not crash
+        print(f"totp-disable failed: {exc}", file=sys.stderr)
+        return 1
+    if was_enabled:
+        print("Two-factor authentication disabled.")
+    else:
+        print("Two-factor authentication was not enabled.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="sparky-manager",
@@ -243,6 +275,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
+    sub.add_parser(
+        "totp-disable",
+        help="disable TOTP 2FA (lockout recovery; needs server access)",
+    )
     sub.add_parser("info", help="print the panel URL and login info")
     sub.add_parser("status", help="show panel / core / WireGuard service states")
     sub.add_parser("restart", help="restart the panel, Xray and sing-box")
@@ -265,6 +301,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     """Run the CLI; returns the process exit code (0 on success)."""
     args = build_parser().parse_args(argv)
+    if args.command == "totp-disable":
+        return cmd_totp_disable()
     if args.command == "info":
         return cmd_info()
     if args.command == "status":

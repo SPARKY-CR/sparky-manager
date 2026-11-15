@@ -335,4 +335,69 @@
   {% endif %}
 </div>
 {% endif %}
+
+{# Phase B item 18: managed hosts. Outside the edit form (nested
+   forms are invalid HTML) — each action is its own POST. The first
+   enabled host is the one links and feeds use; the rest are spares
+   the admin can enable by disabling the ones above them. #}
+<div class="card form-section">
+  <h2>{{ t.managed_hosts }}</h2>
+  <p class="field-hint">{{ t.host_hint }}</p>
+  {% if managed_hosts %}
+  <div class="table-wrap">
+    <table class="table-cards">
+      <thead>
+        <tr><th>{{ t.host_address }}</th><th>{{ t.host_port }}</th><th>{{ t.host_sni }}</th><th>{{ t.host_remark }}</th><th>{{ t.status }}</th><th>{{ t.actions }}</th></tr>
+      </thead>
+      <tbody>
+        {% for host in managed_hosts %}
+        <tr>
+          <td data-label="{{ t.host_address }}" dir="ltr">{{ host.address }}</td>
+          <td data-label="{{ t.host_port }}" dir="ltr">{{ host.port or '—' }}</td>
+          <td data-label="{{ t.host_sni }}" dir="ltr">{{ host.sni or '—' }}</td>
+          <td data-label="{{ t.host_remark }}">{{ host.remark or '—' }}</td>
+          <td data-label="{{ t.status }}">{% if active_host_id == host.id %}<span class="badge badge-ok">{{ t.host_in_use }}</span>{% elif host.enabled %}<span class="badge">{{ t.enabled }}</span>{% else %}<span class="badge badge-off">{{ t.disabled }}</span>{% endif %}</td>
+          <td data-label="{{ t.actions }}" class="row-actions">
+            <form method="post" action="{{ base_path }}/inbounds/{{ inbound.id }}/hosts/{{ host.id }}/toggle" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="btn btn-small">{{ t.toggle }}</button>
+            </form>
+            <form method="post" action="{{ base_path }}/inbounds/{{ inbound.id }}/hosts/{{ host.id }}/delete" class="inline-form" data-confirm="{{ t.confirm_delete }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="btn btn-small btn-danger">{{ t.delete }}</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">{{ t.no_hosts }}</p>
+  {% endif %}
+  <form method="post" action="{{ base_path }}/inbounds/{{ inbound.id }}/hosts">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="field-grid">
+      <label>
+        {{ t.host_address }}
+        <input type="text" name="address" maxlength="255" required dir="ltr">
+      </label>
+      <label>
+        {{ t.host_port }}
+        <input type="number" name="port" min="1" max="65535" dir="ltr">
+      </label>
+      <label>
+        {{ t.host_sni }}
+        <input type="text" name="sni" maxlength="255" dir="ltr">
+      </label>
+      <label>
+        {{ t.host_remark }}
+        <input type="text" name="remark" maxlength="128">
+      </label>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{{ t.host_add }}</button>
+    </div>
+  </form>
+</div>
 {% endblock %}

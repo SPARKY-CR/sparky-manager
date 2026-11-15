@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %} — {{ t.totp_login_title }}{% endblock %}
+{% block content %}
+<div class="card auth-card">
+  <div class="auth-logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.5l7.5 2.8v5.4c0 5-3.2 8.6-7.5 10.8-4.3-2.2-7.5-5.8-7.5-10.8V5.3L12 2.5z"/><path d="M13 7.2l-3.6 5h2.5l-1.1 4.6 3.6-5h-2.5l1.1-4.6z" fill="currentColor" stroke="none"/></svg></div>
+  <h1>{{ t.totp_login_title }}</h1>
+  <p class="muted">{{ t.totp_login_hint }}</p>
+  {# Like /login, this step carries no CSRF token: the pending-login
+     cookie is itself a short-lived signed credential, and a forged
+     request still needs a valid 6-digit code (or a recovery code). #}
+  <form method="post" action="{{ base_path }}/login/totp">
+    <label>
+      {{ t.totp_code }}
+      <input type="text" name="code" inputmode="numeric" pattern="[0-9A-Za-z]{6,}" maxlength="12" autocomplete="one-time-code" required autofocus dir="ltr">
+    </label>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary btn-block">{{ t.totp_verify_login }}</button>
+    </div>
+  </form>
+  <div class="lang-switch auth-lang">
+    {% if lang == 'fa' %}
+      <a href="{{ request.url.include_query_params(lang="en") }}">English</a>
+    {% else %}
+      <a href="{{ request.url.include_query_params(lang="fa") }}">فارسی</a>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

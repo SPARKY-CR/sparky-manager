@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %} — {{ t.api_token_created }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ t.api_token_created }}</h1>
+</div>
+<div class="card">
+  {# The raw token is rendered here and nowhere else: the database
+     only stores its SHA-256 hash, so this page is the only chance
+     to copy it. It is a plain render, never a redirect URL, so the
+     token never lands in a log or in browser history. #}
+  <p class="field-hint">{{ t.api_token_created_hint }}</p>
+  <dl class="kv">
+    <dt>{{ t.name }}</dt><dd>{{ token.name }}</dd>
+    <dt>{{ t.api_token_scopes }}</dt><dd>{% if token.scopes %}{% for scope in token.scopes %}<span class="chip" dir="ltr">{{ scope }}</span> {% endfor %}{% else %}{{ t.api_token_no_scopes }}{% endif %}</dd>
+    <dt>{{ t.api_token_expires }}</dt><dd>{{ token.expires_at.strftime('%Y-%m-%d') if token.expires_at else t.api_token_never_expires }}</dd>
+  </dl>
+  <div class="copy-row">
+    <code dir="ltr" class="link-box">{{ raw_token }}</code>
+    <button type="button" class="btn btn-small" data-copy="{{ raw_token }}">{{ t["copy"] }}</button>
+  </div>
+  <p class="form-actions">
+    <a class="btn btn-primary" href="{{ base_path }}/api-tokens">{{ t.back }}</a>
+  </p>
+</div>
+{% endblock %}

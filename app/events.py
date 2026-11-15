@@ -147,6 +147,7 @@ def notify_event(
     dedup_key: Optional[str] = None,
     dedup_seconds: int = 0,
     now: Optional[datetime] = None,
+    payload: Optional[dict] = None,
 ) -> bool:
     """Send ``text`` as a Telegram notification for ``event``.
 
@@ -154,10 +155,31 @@ def notify_event(
     when the event is unknown, disabled, deduplicated, Telegram is
     unconfigured, or the send fails. Never raises. ``now`` is
     injectable for tests; it defaults to the current UTC time.
+
+    Phase B item 14 — webhooks fire from here too, INDEPENDENTLY
+    of the Telegram channel: an endpoint subscribed to ``event``
+    gets the JSON payload even when the Telegram event is disabled
+    or Telegram is unconfigured (the two channels have separate
+    subscriptions). ``payload`` (extra structured fields) merges
+    into the webhook body; the text is always included as
+    ``{"text": ...}``. The webhook dispatch runs before the
+    Telegram enabled-check on purpose, and never affects the
+    return value (a webhook failure must not look like a Telegram
+    failure). The import is lazy: ``app.webhooks`` imports this
+    module for the catalog.
     """
     if event not in EVENT_CATALOG:
         logger.warning("unknown telegram event %r refused", event)
         return False
+    try:
+        from app import webhooks as webhooks_mod
+
+        webhook_payload = {"text": text}
+        if payload:
+            webhook_payload.update(payload)
+        webhooks_mod.dispatch_event(db, event, webhook_payload)
+    except Exception:  # noqa: BLE001 — webhooks never break the bus
+        logger.warning("webhook dispatch failed for %r", event)
     if not text:
         return False
     try:

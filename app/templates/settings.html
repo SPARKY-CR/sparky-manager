@@ -233,6 +233,32 @@
           <button type="submit" class="btn btn-primary">{{ t.change_password }}</button>
         </div>
       </form>
+      {# Phase B item 13: TOTP two-factor authentication. Setup runs
+         on its own page (QR + secret + one-time recovery codes);
+         disabling needs a current code or a recovery code, so a
+         stolen session alone cannot turn 2FA off. #}
+      <h3>{{ t.totp }}</h3>
+      <p class="field-hint">{{ t.totp_desc }}</p>
+      {% if totp_enabled %}
+      <p><span class="badge badge-ok">{{ t.totp_status_enabled }}</span></p>
+      <p class="muted">{{ t.totp_recovery_remaining }}: <b dir="ltr">{{ totp_recovery_remaining }}</b></p>
+      <form method="post" action="{{ base_path }}/settings/totp/disable">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>
+          {{ t.totp_code }}
+          <input type="text" name="code" inputmode="numeric" maxlength="12" autocomplete="one-time-code" required dir="ltr">
+        </label>
+        <p class="field-hint">{{ t.totp_disable_hint }}</p>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-danger" data-confirm="{{ t.confirm_delete }}">{{ t.totp_disable }}</button>
+        </div>
+      </form>
+      {% else %}
+      <p><span class="badge badge-off">{{ t.totp_status_disabled }}</span></p>
+      <p class="form-actions">
+        <a class="btn btn-primary" href="{{ base_path }}/settings/totp/setup">{{ t.totp_setup }}</a>
+      </p>
+      {% endif %}
     </div>
   </section>
 
@@ -361,6 +387,11 @@
             {% endfor %}
           </select>
           <span class="muted">{{ t.log_level_hint }}</span>
+        </label>
+        <label>
+          {{ t.hwid_ttl_days }}
+          <input type="number" name="hwid_device_ttl_days" min="0" step="1" value="{{ settings.get('hwid_device_ttl_days', '90') }}" dir="ltr">
+          <span class="muted">{{ t.hwid_ttl_hint }}</span>
         </label>
         <div class="form-actions">
           <button type="submit" class="btn btn-primary">{{ t.save }}</button>

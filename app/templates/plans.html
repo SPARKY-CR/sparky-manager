@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %} — {{ t.plans }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ t.plans }}</h1>
+</div>
+<p class="field-hint">{{ t.plans_desc }}</p>
+<p class="field-hint">{{ t.plan_applies_note }}</p>
+
+{# A plan is only a preset: creating a user from it copies the
+   values onto the user, and the user never points back at the plan.
+   Deleting a plan therefore cannot touch any user. #}
+<div class="card">
+  <h2>{{ t.plan_create }}</h2>
+  <form method="post" action="{{ base_path }}/plans">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="field-grid">
+      <label>
+        {{ t.plan_name }}
+        <input type="text" name="name" maxlength="64" required>
+      </label>
+      <label>
+        {{ t.plan_traffic_gb }}
+        <input type="number" name="traffic_limit_gb" min="0" step="0.1" dir="ltr">
+      </label>
+      <label>
+        {{ t.plan_expiry_mode }}
+        <select name="expiry_mode" dir="ltr">
+          <option value="fixed">{{ t.expiry_fixed }}</option>
+          <option value="first_use">{{ t.expiry_first_use }}</option>
+        </select>
+      </label>
+      <label>
+        {{ t.plan_expiry_days }}
+        <input type="number" name="expiry_days" min="0" step="1" dir="ltr">
+      </label>
+      <label>
+        {{ t.plan_reset_cycle }}
+        <select name="reset_cycle" dir="ltr">
+          <option value="">{{ t.reset_cycle_none }}</option>
+          {% for cycle in reset_cycles %}
+          <option value="{{ cycle }}">{{ t["reset_" ~ cycle] }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+    {% if inbounds %}
+    <fieldset>
+      <legend>{{ t.plan_inbounds }}</legend>
+      <p class="field-hint">{{ t.plan_inbounds_hint }}</p>
+      <div class="checkbox-grid">
+        {% for inbound in inbounds %}
+        <label class="check-label">
+          <input type="checkbox" name="inbound_ids" value="{{ inbound.id }}">
+          <span dir="ltr">{{ inbound.tag }} — {{ inbound.protocol }} :{{ inbound.port }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    {% endif %}
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{{ t.create }}</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>{{ t.plans }}</h2>
+  {% if plans %}
+  <div class="table-wrap">
+    <table class="table-cards">
+      <thead>
+        <tr><th>{{ t.name }}</th><th>{{ t.limit }}</th><th>{{ t.expiry_strategy }}</th><th>{{ t.reset_cycle }}</th><th>{{ t.inbounds }}</th><th>{{ t.actions }}</th></tr>
+      </thead>
+      <tbody>
+        {% for plan in plans %}
+        <tr>
+          <td data-label="{{ t.name }}">{{ plan.name }}</td>
+          <td data-label="{{ t.limit }}">{{ ((plan.traffic_limit_bytes / 1073741824) | round(2)) ~ ' GB' if plan.traffic_limit_bytes else t.unlimited }}</td>
+          <td data-label="{{ t.expiry_strategy }}">{{ t.expiry_first_use if plan.expiry_mode == 'first_use' else t.expiry_fixed }}{% if plan.expiry_days %} ({{ plan.expiry_days }}){% endif %}</td>
+          <td data-label="{{ t.reset_cycle }}">{{ t["reset_" ~ plan.reset_cycle] if plan.reset_cycle else t.reset_cycle_none }}</td>
+          <td data-label="{{ t.inbounds }}">{{ plan.inbound_ids | length if plan.inbound_ids else t.all }}</td>
+          <td data-label="{{ t.actions }}">
+            <form method="post" action="{{ base_path }}/plans/{{ plan.id }}/delete" class="inline-form" data-confirm="{{ t.confirm_delete }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="btn btn-small btn-danger">{{ t.delete }}</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">{{ t.no_plans }}</p>
+  {% endif %}
+</div>
+{% endblock %}

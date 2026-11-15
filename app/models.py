@@ -297,6 +297,326 @@ class Session(Base):
 
 
 # ---------------------------------------------------------------------------
+# Best-panel program, Phase B (2026-11-16) — NEW TABLES ONLY.
+#
+# The panel has no migration system (``create_all()`` only), so new
+# COLUMNS on existing tables would silently not exist on the live
+# server. Phase B therefore stores all new state in NEW tables
+# (``create_all`` creates them on existing installs), in the
+# ``settings`` table, or in ``clients.extra_json``. Nothing below
+# touches an existing table.
+# ---------------------------------------------------------------------------
+
+
+class UserTemplate(Base):
+    """A reusable user plan (Phase B item 9, PasarGuard templates).
+
+    An admin defines a template once (quota, expiry, which inbounds
+    the user gets, reset cycle) and applies it when creating a user.
+    ``inbound_ids_json`` is a JSON list of inbound ids; an empty
+    list means "every enabled inbound" (the normal new-user
+    behaviour). ``expiry_mode`` is ``"fixed"`` (``expiry_days`` from
+    creation) or ``"first_use"`` (the clock starts at first use —
+    see :class:`UserLifecycle`).
+    """
+
+    __tablename__ = "user_templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    traffic_limit_bytes: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )  # NULL = unlimited
+    expiry_days: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )  # NULL = never expires
+    expiry_mode: Mapped[str] = mapped_column(
+        String(16), default="fixed", nullable=False
+    )
+    inbound_ids_json: Mapped[str] = mapped_column(
+        Text, default="[]", nullable=False
+    )
+    reset_cycle: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )  # NULL = no automatic reset (see app/lifecycle.py)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+
+    @property
+    def inbound_ids(self) -> list[int]:
+        """``inbound_ids_json`` parsed as a list of ints."""
+        try:
+            data = json.loads(self.inbound_ids_json or "[]")
+        except (ValueError, TypeError):
+            return []
+        if not isinstance(data, list):
+            return []
+        out: list[int] = []
+        for value in data:
+            try:
+                out.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    @inbound_ids.setter
+    def inbound_ids(self, value: list[int]) -> None:
+        self.inbound_ids_json = json.dumps([int(v) for v in value])
+
+
+class UserLifecycle(Base):
+    """Per-user lifecycle state (Phase B items 10–11).
+
+    One row per user that uses any lifecycle feature (users without
+    a row behave exactly as before: fixed expiry, no reset, no
+    renewal, no lifetime counter). ``expiry_strategy`` is ``"fixed"``
+    or ``"first_use"``; for ``"first_use"`` the expiry clock starts
+    when ``first_use_at`` is first set (first subscription fetch or
+    first recorded traffic) and ``expires_at`` on the user row is
+    then ``first_use_at + usage_duration_days``.
+
+    ``reset_cycle`` is one of ``"daily"`` / ``"weekly"`` / ``"monthly"`` /
+    ``"month_rolling"`` (see :mod:`app.lifecycle`); ``reset_day`` is
+    the day-of-month for ``"monthly"`` (1–28). ``renewal_mode`` is
+    ``"rolling"`` (extend by ``renewal_interval_days`` from expiry),
+    ``"calendar_day"`` (next occurrence of ``renewal_day``) or
+    ``"calendar_weekday"`` (next occurrence of ``renewal_weekday``,
+    0=Monday); ``renewal_max`` caps the number of automatic renewals
+    (NULL = unlimited), ``renewals_done`` counts them.
+    ``lifetime_bytes`` is the never-reset usage counter (Marzban's
+    ``lifetime_used_traffic``); resets only touch
+    ``users.traffic_used_bytes``.
+    """
+
+    __tablename__ = "user_lifecycle"
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    expiry_strategy: Mapped[str] = mapped_column(
+        String(16), default="fixed", nullable=False
+    )
+    usage_duration_days: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    first_use_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reset_cycle: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+    reset_day: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    last_reset_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    renewal_mode: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+    renewal_interval_days: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    renewal_day: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    renewal_weekday: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    renewal_max: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    renewals_done: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    lifetime_bytes: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+
+
+class ApiToken(Base):
+    """Scoped, expiring API token (Phase B item 12, 3x-ui/Remnawave).
+
+    Only the SHA-256 hash is stored — the raw token is shown to the
+    admin exactly once, at creation, and never again (like the login
+    session tokens in :class:`Session`). ``scopes_json`` is a JSON
+    list of scope names (``"admin"`` satisfies every scope);
+    ``expires_at`` NULL means the token never expires (Remnawave
+    mandates expiry; sparky warns instead — a never-expiring token
+    is the admin's explicit choice, shown as such in the UI).
+    """
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    token_hash: Mapped[str] = mapped_column(
+        String(64), unique=True, nullable=False
+    )
+    scopes_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+
+    @property
+    def scopes(self) -> list[str]:
+        """``scopes_json`` parsed as a list of scope names."""
+        try:
+            data = json.loads(self.scopes_json or "[]")
+        except (ValueError, TypeError):
+            return []
+        return [str(s) for s in data] if isinstance(data, list) else []
+
+    @scopes.setter
+    def scopes(self, value: list[str]) -> None:
+        self.scopes_json = json.dumps([str(s) for s in value])
+
+
+class WebhookEndpoint(Base):
+    """An outgoing webhook (Phase B item 14, Remnawave model).
+
+    Panel events (see :data:`app.events.EVENT_CATALOG`) are POSTed
+    as JSON to ``url``, signed HMAC-SHA256 with ``secret``
+    (``X-Sparky-Signature: sha256=<hex>``). ``events_json`` is the
+    subscribed event list; an empty list means "all catalog events".
+    The secret is stored in the clear — it must be usable to sign,
+    like the Telegram bot token in settings (a backup ZIP is a
+    credential bundle either way; DESIGN.md §7 says so).
+    ``last_status`` / ``last_error`` / ``last_delivered_at`` record
+    the most recent delivery attempt (or failure).
+    """
+
+    __tablename__ = "webhook_endpoints"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    secret: Mapped[str] = mapped_column(Text, nullable=False)
+    events_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_status: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_delivered_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+
+    @property
+    def events(self) -> list[str]:
+        """``events_json`` parsed as a list of event names."""
+        try:
+            data = json.loads(self.events_json or "[]")
+        except (ValueError, TypeError):
+            return []
+        return [str(s) for s in data] if isinstance(data, list) else []
+
+    @events.setter
+    def events(self, value: list[str]) -> None:
+        self.events_json = json.dumps([str(s) for s in value])
+
+
+class UserTag(Base):
+    """One tag on one user (Phase B item 16).
+
+    Notes already exist on the user row; tags are the filterable
+    half (no panel documents per-user tags — an easy differentiator).
+    Tags are single tokens (see :data:`app.tags.TAG_RE`); the
+    (user, tag) pair is unique.
+    """
+
+    __tablename__ = "user_tags"
+    __table_args__ = (UniqueConstraint("user_id", "tag"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    tag: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+
+
+class Device(Base):
+    """One HWID-identified device on one client (Phase B item 17).
+
+    Registered at subscription fetch time from the ``x-hwid``
+    (+ ``x-device-os`` / ``x-device-model``) headers cooperating
+    clients send (Happ, v2RayTun, …). The per-client device LIMIT
+    lives in ``clients.extra_json`` (``hwid_limit`` — NULL means no
+    limit, i.e. the feature is off for that client); this table only
+    records devices, so tracking works whether or not a limit is
+    set. Clients that send no HWID header are never registered and
+    never limited (the documented 404 trap: v2rayNG / Hiddify send
+    no HWID, so a limit must never lock them out).
+    """
+
+    __tablename__ = "devices"
+    __table_args__ = (UniqueConstraint("client_id", "hwid"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    client_id: Mapped[int] = mapped_column(
+        ForeignKey("clients.id", ondelete="CASCADE"), nullable=False
+    )
+    hwid: Mapped[str] = mapped_column(String(128), nullable=False)
+    os: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+
+    # The client this device belongs to (used by the user-detail
+    # devices table to show the inbound tag). A relationship adds no
+    # column — the schema is unchanged.
+    client: Mapped["Client"] = relationship("Client")
+
+
+class ManagedHost(Base):
+    """A per-inbound endpoint override (Phase B item 18, 3x-ui
+    managed hosts).
+
+    Decouples "what the core listens on" from "what clients are
+    told to connect to" (CDN fronting, several domains/regions for
+    one inbound). The first enabled host (lowest ``sort_order``,
+    then lowest id) wins for the inbound: its ``address`` replaces
+    the subscription host, its ``port`` (when set) replaces the
+    inbound port, and its ``sni`` (when set) replaces the TLS /
+    Reality SNI in generated share links and sing-box feeds. The
+    server-side configs are untouched — the core still listens on
+    the inbound's own port. File exports (.conf / .ovpn / …) use
+    the default host, not managed hosts (documented limitation).
+    """
+
+    __tablename__ = "managed_hosts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    inbound_id: Mapped[int] = mapped_column(
+        ForeignKey("inbounds.id", ondelete="CASCADE"), nullable=False
+    )
+    address: Mapped[str] = mapped_column(String(255), nullable=False)
+    port: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sni: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    remark: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+
+
+# ---------------------------------------------------------------------------
 # Usability rules (DESIGN.md §4)
 # ---------------------------------------------------------------------------
 
@@ -393,6 +713,14 @@ __all__ = [
     "TrafficDaily",
     "AuditLog",
     "Session",
+    # Phase B tables (new tables only — no existing-table change).
+    "UserTemplate",
+    "UserLifecycle",
+    "ApiToken",
+    "WebhookEndpoint",
+    "UserTag",
+    "Device",
+    "ManagedHost",
     "generate_sub_token",
     "user_is_usable",
     "user_unusable_reason",

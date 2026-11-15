@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %} — {{ t.webhooks }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ t.webhooks }}</h1>
+</div>
+<p class="field-hint">{{ t.webhooks_desc }}</p>
+
+{% if created_secret %}
+<div class="card">
+  <p class="flash flash-ok">{{ t.webhook_secret_generated }}</p>
+  <div class="copy-row">
+    <code dir="ltr" class="link-box">{{ created_secret }}</code>
+    <button type="button" class="btn btn-small" data-copy="{{ created_secret }}">{{ t["copy"] }}</button>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>{{ t.webhook_create }}</h2>
+  <form method="post" action="{{ base_path }}/webhooks">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="field-grid">
+      <label>
+        {{ t.webhook_name }}
+        <input type="text" name="name" maxlength="64" required>
+      </label>
+      <label>
+        {{ t.webhook_url }}
+        <input type="url" name="url" maxlength="512" placeholder="https://" required dir="ltr">
+      </label>
+      <label>
+        {{ t.webhook_secret }}
+        <input type="text" name="secret" maxlength="128" dir="ltr">
+      </label>
+    </div>
+    <p class="field-hint">{{ t.webhook_secret_hint }}</p>
+    <fieldset>
+      <legend>{{ t.webhook_events }}</legend>
+      <p class="field-hint">{{ t.webhook_events_all }}</p>
+      <div class="checkbox-grid">
+        {# events_catalog is (event name, i18n key) pairs from the
+           Phase A event bus — an unchecked box means "no
+           subscription for this event"; checking nothing at all
+           subscribes to every event. #}
+        {% for event, key in events_catalog %}
+        <label class="check-label">
+          <input type="checkbox" name="events" value="{{ event }}">
+          <span>{{ t[key] }}</span>
+          <code dir="ltr">{{ event }}</code>
+        </label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{{ t.create }}</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>{{ t.webhooks }}</h2>
+  {% if endpoints %}
+  <div class="table-wrap">
+    <table class="table-cards">
+      <thead>
+        <tr><th>{{ t.name }}</th><th>{{ t.webhook_url }}</th><th>{{ t.webhook_events }}</th><th>{{ t.webhook_last_status }}</th><th>{{ t.status }}</th><th>{{ t.actions }}</th></tr>
+      </thead>
+      <tbody>
+        {% for endpoint in endpoints %}
+        <tr>
+          <td data-label="{{ t.name }}">{{ endpoint.name }}</td>
+          <td data-label="{{ t.webhook_url }}"><code dir="ltr">{{ endpoint.url }}</code></td>
+          <td data-label="{{ t.webhook_events }}">{% if endpoint.events %}{% for event in endpoint.events %}<span class="chip" dir="ltr">{{ event }}</span> {% endfor %}{% else %}{{ t.webhook_events_all }}{% endif %}</td>
+          <td data-label="{{ t.webhook_last_status }}">{% if endpoint.last_status %}<span class="badge {{ 'badge-ok' if endpoint.last_status == 'delivered' else 'badge-err' }}">{{ t.webhook_delivered if endpoint.last_status == 'delivered' else t.webhook_failed }}</span>{% if endpoint.last_error %} <span class="muted">{{ endpoint.last_error }}</span>{% endif %}<br><span class="muted" dir="ltr">{{ endpoint.last_delivered_at.strftime('%Y-%m-%d %H:%M') if endpoint.last_delivered_at else '' }}</span>{% else %}—{% endif %}</td>
+          <td data-label="{{ t.status }}"><span class="badge {{ 'badge-ok' if endpoint.enabled else 'badge-off' }}">{{ t.enabled if endpoint.enabled else t.disabled }}</span></td>
+          <td data-label="{{ t.actions }}" class="row-actions">
+            <form method="post" action="{{ base_path }}/webhooks/{{ endpoint.id }}/test" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="btn btn-small">{{ t.webhook_test }}</button>
+            </form>
+            <form method="post" action="{{ base_path }}/webhooks/{{ endpoint.id }}/toggle" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="btn btn-small">{{ t.toggle }}</button>
+            </form>
+            <form method="post" action="{{ base_path }}/webhooks/{{ endpoint.id }}/delete" class="inline-form" data-confirm="{{ t.confirm_delete }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="btn btn-small btn-danger">{{ t.delete }}</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">{{ t.no_webhooks }}</p>
+  {% endif %}
+</div>
+{% endblock %}

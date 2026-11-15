@@ -140,9 +140,13 @@ from app import amneziawg as amneziawg_mod
 from app import backup as backup_mod
 from app import bot as bot_mod
 from app import config as panel_config
+from app import devices as devices_mod
 from app import events as events_mod
+from app import hosts as hosts_mod
 from app import ikev2 as ikev2_mod
+from app import lifecycle as lifecycle_mod
 from app import links as links_mod
+from app import totp as totp_mod
 from app import openconnect as openconnect_mod
 from app import openvpn as openvpn_mod
 from app import panel_log as panel_log_mod
@@ -178,7 +182,9 @@ from app.models import (
     Admin,
     AuditLog,
     Client,
+    Device,
     Inbound,
+    ManagedHost,
     Setting,
     TrafficDaily,
     User,
@@ -216,6 +222,9 @@ from app.routes.users import (  # noqa: E402
     _user_edit_values,
     router as users_router,
 )
+# Best-panel program, Phase B routes (plans / audit / API tokens /
+# webhooks / TOTP setup / tags / devices / managed hosts).
+from app.routes.phase_b import router as phase_b_router  # noqa: E402
 from app.webcommon import (  # noqa: E402
     NAME_RE,
     SESSION_COOKIE,
@@ -1180,12 +1189,23 @@ async def _traffic_sync_loop() -> None:
 
 
 async def _expiry_sweeper_loop() -> None:
-    """Every 5 min: re-render configs so expired/over-quota users drop
-    out (the renderers omit unusable clients — DESIGN §4/§6.4)."""
+    """Every 5 min: run the lifecycle pass (Phase B items 10–11:
+    due traffic resets + due auto-renewals) and prune stale HWID
+    devices (item 17), then re-render configs so expired/over-quota
+    users drop out — and reset/renewed users come back (the
+    renderers omit unusable clients — DESIGN §4/§6.4)."""
     while True:
         await asyncio.sleep(EXPIRY_SWEEPER_INTERVAL_SECONDS)
         db = SessionLocal()
         try:
+            try:
+                lifecycle_mod.run_lifecycle_once(db)
+            except Exception:  # noqa: BLE001 — lifecycle, not the sweep
+                logger.exception("lifecycle pass failed")
+            try:
+                devices_mod.prune_devices(db)
+            except Exception:  # noqa: BLE001 — pruning, not the sweep
+                logger.exception("device pruning failed")
             errors = rerender_configs(db)
             if errors:
                 logger.warning("expiry sweeper re-render errors: %s", errors)
@@ -1695,10 +1715,19 @@ async def _security_headers_middleware(request: Request, call_next):
 #   against. Login CSRF is a non-issue for this single-admin panel:
 #   an attacker would need the admin password to make it meaningful,
 #   and that password IS the secret being protected.
+# - POST /login/totp (Phase B item 13): same reasoning as /login —
+#   no session exists yet. The request is authenticated by the
+#   HMAC-signed pending cookie instead, and a forged submit would
+#   still need the TOTP (or recovery) code.
 # - POST /telegram/webhook/{secret}: an unauthenticated external POST
 #   from Telegram's servers. It is authenticated by its random path
 #   secret (constant-time compare) instead, and Telegram cannot
 #   present a session cookie.
+# - /api/v1/* (Phase B item 12): Bearer-token endpoints, no cookie
+#   involved — there is no ambient authority for a browser to
+#   abuse, so CSRF does not apply (same reasoning as the webhook).
+#   (They are GET-only today; a future state-changing v1 endpoint
+#   stays exempt for the same reason.)
 # - All GET routes: read-only by design (logout moved to POST).
 # ---------------------------------------------------------------------------
 
@@ -1744,6 +1773,36 @@ def _set_session_cookie(response: Response, request: Request, token: str) -> Non
         # or via a trusted TLS-terminating proxy (S4).
         secure=_is_secure_request(request),
         path=WEB_PATH or "/",
+    )
+
+
+# Phase B item 13 (TOTP): the half-authenticated state between the
+# password step and the code step lives in this short-lived,
+# HMAC-signed cookie (see app.totp.make_pending_token) — NOT in a
+# session row (a pending login must never pass require_admin).
+PENDING_COOKIE = "sparky_manager_pending"
+
+
+def _set_pending_cookie(response: Response, request: Request, token: str) -> None:
+    """Set the pending-2FA cookie (5 min, HttpOnly, same
+    Secure/path rules as the session cookie)."""
+    response.set_cookie(
+        PENDING_COOKIE,
+        token,
+        max_age=totp_mod.PENDING_TOKEN_TTL_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=_is_secure_request(request),
+        path=WEB_PATH or "/",
+    )
+
+
+def _clear_pending_cookie(response: Response, request: Request) -> None:
+    """Clear the pending-2FA cookie (mirror the set attributes)."""
+    response.delete_cookie(
+        PENDING_COOKIE,
+        path=WEB_PATH or "/",
+        secure=_is_secure_request(request),
     )
 
 
@@ -2484,6 +2543,10 @@ def _render_inbound_edit(
         server_public_key = str(settings.get("wireguard_public_key") or "")
     elif inbound.protocol == "amneziawg":
         server_public_key = str(settings.get("amneziawg_public_key") or "")
+    # Phase B item 18: managed hosts for this inbound + the active
+    # one (the first enabled host — the one links/feeds use).
+    managed_hosts = hosts_mod.hosts_for_inbound(db, inbound.id)
+    active_host = hosts_mod.active_host_for_inbound(db, inbound.id)
     session_token = request.cookies.get(SESSION_COOKIE)
     return templates.TemplateResponse(
         request,
@@ -2493,6 +2556,8 @@ def _render_inbound_edit(
             "inbound": inbound,
             "values": values,
             "server_public_key": server_public_key,
+            "managed_hosts": managed_hosts,
+            "active_host_id": active_host.id if active_host else None,
             "error": error,
             "msg": msg,
             "lang": get_lang(request),
@@ -2889,6 +2954,19 @@ def login_submit(
             _template_ctx(request, {"admin": None, "error": t["wrong_credentials"]}),
             status_code=401,
         )
+    # Phase B item 13 (TOTP): with 2FA on, the password step does
+    # NOT complete the login — it issues a short-lived pending
+    # token and the code step finishes it. The failure counter is
+    # cleared only after the code verifies: clearing it here would
+    # let a password-holding attacker brute-force the 6-digit code
+    # without ever tripping the lockout (each attempt would clear
+    # the counter the bad code just added).
+    if totp_mod.is_totp_enabled(db):
+        pending = totp_mod.make_pending_token(admin)
+        logger.info("login password ok for %r from %s, awaiting 2FA", username, ip)
+        response = _redirect("/login/totp", request)
+        _set_pending_cookie(response, request, pending)
+        return response
     admin.last_login_at = datetime.now(timezone.utc)
     db.commit()
     # Clear the failure counter (S2): without this, failed attempts
@@ -2897,6 +2975,71 @@ def login_submit(
     logger.info("login ok for %r from %s", username, ip)
     token = create_session(db, admin, ip)
     response = _redirect("/dashboard", request)
+    _set_session_cookie(response, request, token)
+    return response
+
+
+@app.get("/login/totp", response_class=HTMLResponse)
+def login_totp_page(request: Request, db: Session = Depends(db_session)):
+    """Second login step (TOTP): the code form. Without a valid
+    pending token this is just the login page again (no error is
+    shown — an expired pending login is not an attack)."""
+    pending = request.cookies.get(PENDING_COOKIE)
+    if totp_mod.verify_pending_token(db, pending or "") is None:
+        return _redirect("/login", request)
+    return templates.TemplateResponse(request, "totp_login.html",
+        _template_ctx(request, {"admin": None})
+    )
+
+
+@app.post("/login/totp")
+def login_totp_submit(
+    request: Request,
+    code: str = Form(...),
+    db: Session = Depends(db_session),
+):
+    """Second login step (TOTP): verify the code (or a one-time
+    recovery code) and create the session. CSRF-exempt like
+    /login — no session exists yet (see the CSRF note above
+    _csrf_error_handler); the pending token is itself an
+    HMAC-signed HttpOnly secret, and a forged submit would still
+    need the code. Bad codes count toward the login lockout."""
+    lang = get_lang(request)
+    t = t_for(lang)
+    ip = request.client.host if request.client else "unknown"
+    pending = request.cookies.get(PENDING_COOKIE)
+    admin = totp_mod.verify_pending_token(db, pending or "")
+    if admin is None:
+        return _redirect("/login", request)
+    if is_locked_out(ip):
+        return templates.TemplateResponse(request, "totp_login.html",
+            _template_ctx(request, {"admin": None, "error": t["locked_out"]}),
+            status_code=429,
+        )
+    secret = totp_mod.get_totp_secret(db)
+    code_ok = bool(secret) and totp_mod.verify_code(secret, code)
+    recovery_ok = False
+    if not code_ok:
+        # A recovery code is tried only after the TOTP code fails
+        # (and consumes itself on success — see verify_recovery_code).
+        recovery_ok = totp_mod.verify_recovery_code(db, code)
+    if not code_ok and not recovery_ok:
+        record_failed_login(ip)
+        logger.warning("login 2FA failed for %r from %s", admin.username, ip)
+        return templates.TemplateResponse(request, "totp_login.html",
+            _template_ctx(request, {"admin": None, "error": t["totp_wrong_code"]}),
+            status_code=401,
+        )
+    admin.last_login_at = datetime.now(timezone.utc)
+    db.commit()
+    record_successful_login(ip)
+    logger.info(
+        "login ok for %r from %s (2FA%s)",
+        admin.username, ip, " recovery code" if recovery_ok else "",
+    )
+    token = create_session(db, admin, ip)
+    response = _redirect("/dashboard", request)
+    _clear_pending_cookie(response, request)
     _set_session_cookie(response, request, token)
     return response
 
@@ -3047,6 +3190,7 @@ def dashboard(
 # Users (HTML) — routes live in app/routes/users.py (Phase 5 split).
 # Mounted here, in the same position, so route precedence is unchanged.
 app.include_router(users_router)
+app.include_router(phase_b_router)
 
 
 # ---------------------------------------------------------------------------
@@ -3258,6 +3402,22 @@ def delete_inbound(
     if inbound is None:
         raise HTTPException(status_code=404, detail="inbound not found")
     tag = inbound.tag
+    # Phase B cleanup: HWID devices of this inbound's clients and
+    # its managed hosts go with it (deleted before the clients —
+    # the devices reference them). One commit for the whole delete.
+    client_ids = [
+        row[0]
+        for row in db.query(Client.id)
+        .filter(Client.inbound_id == inbound.id)
+        .all()
+    ]
+    if client_ids:
+        db.query(Device).filter(
+            Device.client_id.in_(client_ids)
+        ).delete(synchronize_session=False)
+    db.query(ManagedHost).filter(
+        ManagedHost.inbound_id == inbound.id
+    ).delete(synchronize_session=False)
     db.query(Client).filter(Client.inbound_id == inbound.id).delete()
     db.delete(inbound)
     db.commit()
@@ -3733,6 +3893,12 @@ def settings_page(
             "auto_backup_last_run": settings.get(
                 "auto_backup_last_run", ""
             ),
+            # Phase B item 13 (TOTP): the Security tab shows the
+            # 2FA state (never the secret — it never reaches a
+            # template) and how many recovery codes are left.
+            "totp_enabled": totp_mod.is_totp_enabled(db),
+            "totp_recovery_remaining": totp_mod.recovery_codes_remaining(db),
+            "totp_pending": bool(totp_mod.get_pending_secret(db)),
         }),
     )
 
@@ -3755,6 +3921,7 @@ def save_settings(
     auto_backup_hours: Optional[str] = Form(None),
     auto_backup_keep: Optional[str] = Form(None),
     auto_backup_telegram: Optional[str] = Form(None),
+    hwid_device_ttl_days: Optional[str] = Form(None),
     section: str = Form(""),
     admin: Any = Depends(require_admin),
     csrf: None = Depends(require_csrf),
@@ -3886,6 +4053,22 @@ def save_settings(
         applied = panel_log_mod.apply_log_level(log_level.strip())
         set_setting(db, "log_level", applied)
         logger.info("log level set to %s by %s", applied, admin.username)
+    if hwid_device_ttl_days is not None:
+        # Phase B item 17: HWID device TTL (Advanced tab). A bad
+        # value keeps the previous one (never a 500); negatives
+        # clamp to 0 (never prune).
+        try:
+            ttl = max(
+                0,
+                int(
+                    hwid_device_ttl_days.strip()
+                    or devices_mod.HWID_TTL_DEFAULT_DAYS
+                ),
+            )
+        except ValueError:
+            ttl = None
+        if ttl is not None:
+            set_setting(db, devices_mod.HWID_TTL_SETTING_KEY, str(ttl))
     msg = ""
     polling_err = ""
     if transport == "polling":
@@ -4963,6 +5146,15 @@ def _singbox_outbounds_for(
     """
     try:
         inbound_dict = _inbound_dict(inbound)
+        # Phase B item 18: a managed host overrides the endpoint
+        # the outbound points at (address / port / SNI) — same rule
+        # as the v2rayNG links in _links_for_user.
+        link_host = host
+        active = hosts_mod.active_host_for_inbound(db, inbound.id)
+        if active is not None:
+            link_host, inbound_dict = hosts_mod.apply_host_override(
+                inbound_dict, active, host
+            )
         if inbound.protocol == "wireguard":
             stream = dict(inbound_dict.get("stream_json") or {})
             stream.setdefault(
@@ -4974,7 +5166,7 @@ def _singbox_outbounds_for(
             inbound.protocol,
             _client_dict(client, user),
             inbound_dict,
-            host,
+            link_host,
             # Phase A item 2: the sing-box tag expands the same
             # remark template as the v2rayNG links (default
             # {USER}-{INBOUND}, the shape these tags already had).
@@ -5193,7 +5385,11 @@ def _file_export_urls(db: Session, user: Any, base: str) -> dict[str, str]:
 
 
 def _build_zedsecure_bundle(
-    db: Session, user: Any, host: str, settings: dict[str, Any]
+    db: Session,
+    user: Any,
+    host: str,
+    settings: dict[str, Any],
+    exclude_client_ids: Optional[set] = None,
 ) -> dict[str, Any]:
     """ZedSecure bundle: everything the app needs, in one document.
 
@@ -5217,8 +5413,15 @@ def _build_zedsecure_bundle(
     configs: list[dict[str, Any]] = []
     links: list[str] = []
     singbox_outbounds: list[dict[str, Any]] = []
-    link_by_tag = {e["inbound"].tag: e["link"] for e in _links_for_user(db, user, host, settings)}
-    for client, inbound in _usable_clients(db, user):
+    link_by_tag = {
+        e["inbound"].tag: e["link"]
+        for e in _links_for_user(
+            db, user, host, settings, exclude_client_ids=exclude_client_ids
+        )
+    }
+    for client, inbound in _usable_clients(
+        db, user, exclude_client_ids=exclude_client_ids
+    ):
         entry: dict[str, Any] = {
             "tag": inbound.tag,
             "protocol": inbound.protocol,
@@ -5292,6 +5495,29 @@ def _build_zedsecure_bundle(
         "links": links,
         "singbox": feed,
     }
+
+
+def _stamp_last_fetch(
+    db: Session,
+    user: Any,
+    exclude_client_ids: Optional[set] = None,
+    now: Optional[datetime] = None,
+) -> None:
+    """Phase B item 19: stamp ``last_fetch_at`` (ISO UTC) in
+    ``extra_json`` on every usable client the feed actually served.
+    HWID-excluded clients are NOT stamped — they got nothing, so
+    their last fetch is honestly still the previous one. One commit.
+    Never raises (a stamp failure must not break the feed)."""
+    try:
+        stamp = (now or datetime.now(timezone.utc)).isoformat()
+        for client, _inbound in _usable_clients(
+            db, user, exclude_client_ids=exclude_client_ids
+        ):
+            _set_client_extra(client, "last_fetch_at", stamp)
+        db.commit()
+    except Exception:  # noqa: BLE001 — the feed matters, not the stamp
+        db.rollback()
+        logger.warning("last-fetch stamp failed for %s", user.name)
 
 
 def _subscription_response(request: Request, token: str, db: Session) -> Response:
@@ -5377,9 +5603,32 @@ def _subscription_response(request: Request, token: str, db: Session) -> Respons
         user.name, chosen, _token_fp(token),
     )
 
+    # Phase B item 10: a real feed fetch starts the clock for a
+    # start-on-first-use user. (The browser copy-only page above
+    # does NOT — the admin previewing the page must not start a
+    # customer's clock.)
+    lifecycle_mod.record_first_use(db, user)
+
+    # Phase B item 17 (HWID): register this device on the user's
+    # usable clients and drop the over-limit ones from THIS feed.
+    # No header means no enforcement (v2rayNG / Hiddify send none).
+    excluded: set[int] = set()
+    hwid = request.headers.get(devices_mod.HWID_HEADER)
+    if hwid:
+        usable_clients = [c for c, _i in _usable_clients(db, user)]
+        excluded = devices_mod.check_and_register(
+            db,
+            usable_clients,
+            hwid,
+            request.headers.get(devices_mod.HWID_OS_HEADER),
+            request.headers.get(devices_mod.HWID_MODEL_HEADER),
+        )
+
     if chosen == "singbox":
         outbounds: list[dict[str, Any]] = []
-        for client, inbound in _usable_clients(db, user):
+        for client, inbound in _usable_clients(
+            db, user, exclude_client_ids=excluded
+        ):
             outbounds.extend(
                 _singbox_outbounds_for(db, client, inbound, user, host, settings)
             )
@@ -5388,9 +5637,16 @@ def _subscription_response(request: Request, token: str, db: Session) -> Respons
         except Exception:  # noqa: BLE001
             logger.exception("build_singbox_feed failed")
             return Response(content=b"", status_code=500)
+        # Phase B item 19: last-fetch stamp (served clients only).
+        _stamp_last_fetch(db, user, exclude_client_ids=excluded)
         return JSONResponse(content=feed, headers=headers)
 
-    links = [entry["link"] for entry in _links_for_user(db, user, host, settings)]
+    links = [
+        entry["link"]
+        for entry in _links_for_user(
+            db, user, host, settings, exclude_client_ids=excluded
+        )
+    ]
     try:
         body = subscription_mod.build_v2rayng_feed(links)
     except Exception:  # noqa: BLE001
@@ -5399,6 +5655,8 @@ def _subscription_response(request: Request, token: str, db: Session) -> Respons
     if isinstance(body, str):
         body = body.encode()
     headers["Content-Type"] = "text/plain; charset=utf-8"
+    # Phase B item 19: last-fetch stamp (served clients only).
+    _stamp_last_fetch(db, user, exclude_client_ids=excluded)
     return Response(content=body, headers=headers, media_type="text/plain")
 
 
@@ -5422,7 +5680,25 @@ def zedsecure_bundle(request: Request, token: str, db: Session = Depends(db_sess
         return Response(content=b"", status_code=403)
     settings = get_settings(db)
     host = _sub_host(request, settings)
-    bundle = _build_zedsecure_bundle(db, user, host, settings)
+    # Phase B items 10/17/19, same rules as the subscription feed:
+    # a bundle fetch starts a first-use clock, enforces HWID limits,
+    # and stamps last-fetch (the bundle IS a subscription fetch).
+    lifecycle_mod.record_first_use(db, user)
+    excluded: set[int] = set()
+    hwid = request.headers.get(devices_mod.HWID_HEADER)
+    if hwid:
+        usable_clients = [c for c, _i in _usable_clients(db, user)]
+        excluded = devices_mod.check_and_register(
+            db,
+            usable_clients,
+            hwid,
+            request.headers.get(devices_mod.HWID_OS_HEADER),
+            request.headers.get(devices_mod.HWID_MODEL_HEADER),
+        )
+    bundle = _build_zedsecure_bundle(
+        db, user, host, settings, exclude_client_ids=excluded
+    )
+    _stamp_last_fetch(db, user, exclude_client_ids=excluded)
     logger.info(
         "zedsecure bundle served: user=%s configs=%d token=%s",
         user.name, len(bundle.get("configs", [])), _token_fp(token),

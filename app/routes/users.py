@@ -23,9 +23,21 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
+from app import devices as devices_mod
 from app import events as events_mod
+from app import lifecycle as lifecycle_mod
+from app import plans as plans_mod
+from app import tags as tags_mod
 from app.i18n import get_lang, t_for
-from app.models import Client, Inbound, User
+from app.models import (
+    Client,
+    Device,
+    Inbound,
+    User,
+    UserLifecycle,
+    UserTag,
+    UserTemplate,
+)
 from app.webcommon import (
     NAME_RE,
     WEB_PATH,
@@ -65,6 +77,32 @@ def _file_export_urls(db: Session, user: Any, base: str) -> dict[str, str]:
     from app.main import _file_export_urls as _main_file_export_urls
 
     return _main_file_export_urls(db, user, base)
+
+
+def _delete_user_rows(db: Session, user: Any) -> None:
+    """Delete a user and everything hanging off it: HWID devices
+    (they reference the clients — deleted first), the lifecycle
+    row, the tags, the clients, then the user row. Shared by the
+    single delete and the bulk delete. Does not commit — the
+    caller commits with the rest of its work."""
+    client_ids = [
+        row[0]
+        for row in db.query(Client.id)
+        .filter(Client.user_id == user.id)
+        .all()
+    ]
+    if client_ids:
+        db.query(Device).filter(
+            Device.client_id.in_(client_ids)
+        ).delete(synchronize_session=False)
+    db.query(UserLifecycle).filter(
+        UserLifecycle.user_id == user.id
+    ).delete(synchronize_session=False)
+    db.query(UserTag).filter(
+        UserTag.user_id == user.id
+    ).delete(synchronize_session=False)
+    db.query(Client).filter(Client.user_id == user.id).delete()
+    db.delete(user)
 
 
 USERS_PAGE_SIZE = 25
@@ -217,16 +255,24 @@ def _user_client_rows(
                 "ip_limit": extra.get("ip_limit")
                 if isinstance(extra, dict)
                 else None,
+                # Phase B item 17: per-client device limit (None =
+                # no limit, feature off) + item 19: last fetch.
+                "hwid_limit": devices_mod.get_hwid_limit(client),
+                "last_fetch_at": extra.get("last_fetch_at")
+                if isinstance(extra, dict)
+                else None,
             }
         )
     return rows
 
 def _user_edit_values(
-    user: Any, rows: list[dict[str, Any]]
+    user: Any, rows: list[dict[str, Any]], lifecycle: Any = None
 ) -> dict[str, Any]:
     """Pre-filled values for the user edit form (user fields + one
     set of per-client fields per row, keyed ``flow_<id>`` /
-    ``ip_limit_<id>`` / ``frozen_<id>`` / ``move_<id>``)."""
+    ``ip_limit_<id>`` / ``frozen_<id>`` / ``move_<id>`` /
+    ``hwid_limit_<id>`` — plus the Phase B lifecycle fields when a
+    lifecycle row exists)."""
     limit_gb = ""
     if user.traffic_limit_bytes:
         limit_gb = str(round(user.traffic_limit_bytes / 1024**3, 2))
@@ -236,6 +282,46 @@ def _user_edit_values(
         "traffic_limit_gb": limit_gb,
         "expires_date": (
             user.expires_at.strftime("%Y-%m-%d") if user.expires_at else ""
+        ),
+        # Phase B items 10–11 (lifecycle): blank/"" means "not set".
+        "expiry_strategy": (
+            lifecycle.expiry_strategy if lifecycle is not None else "fixed"
+        ),
+        "usage_days": (
+            str(lifecycle.usage_duration_days)
+            if lifecycle is not None and lifecycle.usage_duration_days
+            else ""
+        ),
+        "reset_cycle": (
+            lifecycle.reset_cycle if lifecycle is not None else ""
+        ) or "",
+        "reset_day": (
+            str(lifecycle.reset_day)
+            if lifecycle is not None and lifecycle.reset_day
+            else ""
+        ),
+        "renewal_mode": (
+            lifecycle.renewal_mode if lifecycle is not None else ""
+        ) or "",
+        "renewal_interval_days": (
+            str(lifecycle.renewal_interval_days)
+            if lifecycle is not None and lifecycle.renewal_interval_days
+            else ""
+        ),
+        "renewal_day": (
+            str(lifecycle.renewal_day)
+            if lifecycle is not None and lifecycle.renewal_day
+            else ""
+        ),
+        "renewal_weekday": (
+            str(lifecycle.renewal_weekday)
+            if lifecycle is not None and lifecycle.renewal_weekday is not None
+            else ""
+        ),
+        "renewal_max": (
+            str(lifecycle.renewal_max)
+            if lifecycle is not None and lifecycle.renewal_max is not None
+            else ""
         ),
     }
     for row in rows:
@@ -251,6 +337,9 @@ def _user_edit_values(
         values[f"ip_limit_{cid}"] = (
             "" if row["ip_limit"] is None else str(row["ip_limit"])
         )
+        values[f"hwid_limit_{cid}"] = (
+            "" if row.get("hwid_limit") is None else str(row["hwid_limit"])
+        )
         values[f"frozen_{cid}"] = bool(row["frozen"])
         values[f"move_{cid}"] = ""
     return values
@@ -264,7 +353,31 @@ def _render_user_edit(
     error: str | None = None,
     db: Session,
 ) -> HTMLResponse:
-    """Render the user edit page (GET and POST-error re-render)."""
+    """Render the user edit page (GET and POST-error re-render).
+
+    Phase B items 10–11: the lifecycle summary (on-hold state,
+    first use, lifetime usage, next reset) and the renewal
+    schedule preview (computed from the SAVED lifecycle row, not
+    from the submitted form — the preview answers "what happens
+    with the current settings", and a mid-edit preview would be a
+    guess about unsaved values).
+    """
+    lifecycle = lifecycle_mod.get_lifecycle(db, user.id)
+    renewal_preview: list[str] = []
+    next_reset: Optional[str] = None
+    if lifecycle is not None:
+        try:
+            renewal_preview = [
+                d.strftime("%Y-%m-%d")
+                for d in lifecycle_mod.preview_renewals(lifecycle, user)
+            ]
+        except Exception:  # noqa: BLE001 — a bad row, no preview
+            renewal_preview = []
+        try:
+            nxt = lifecycle_mod.next_reset_date(lifecycle, user)
+            next_reset = nxt.strftime("%Y-%m-%d") if nxt else None
+        except Exception:  # noqa: BLE001 — a bad row, no date
+            next_reset = None
     return templates.TemplateResponse(
         request,
         "user_edit.html",
@@ -275,6 +388,17 @@ def _render_user_edit(
                 "values": values,
                 "rows": rows,
                 "error": error or "",
+                "lifecycle": lifecycle,
+                "lifetime_bytes": (
+                    int(lifecycle.lifetime_bytes or 0)
+                    if lifecycle is not None
+                    else 0
+                ),
+                "on_hold": lifecycle_mod.is_on_hold(lifecycle),
+                "next_reset": next_reset,
+                "renewal_preview": renewal_preview,
+                "reset_cycles": lifecycle_mod.RESET_CYCLES,
+                "renewal_modes": lifecycle_mod.RENEWAL_MODES,
             },
         ),
     )
@@ -313,6 +437,7 @@ def users_page(
     status: str = Query("all"),
     sort: str = Query("created"),
     page: str = Query("1"),
+    tag: str = Query(""),
     admin: Any = Depends(require_admin),
     db: Session = Depends(db_session),
 ):
@@ -370,6 +495,13 @@ def users_page(
     elif status == "expired":
         users = [u for u in users if u.id in expired_ids]
 
+    # Phase B item 16: filter by tag (an unknown tag matches
+    # nothing — the filter options only ever list real tags).
+    tag = (tag or "").strip()
+    if tag:
+        tagged_ids = tags_mod.user_ids_with_tag(db, tag)
+        users = [u for u in users if u.id in tagged_ids]
+
     sort = (sort or "").strip().lower()
     if sort not in USER_SORTS:
         sort = "created"
@@ -417,6 +549,14 @@ def users_page(
                 "page": page_n,
                 "total_pages": total_pages,
                 "page_size": USERS_PAGE_SIZE,
+                # Phase B item 9: plan picker in the add-user form.
+                "templates": db.query(UserTemplate).order_by(
+                    UserTemplate.name
+                ).all(),
+                # Phase B item 16: tag filter options + chips.
+                "tags": tags_mod.all_tags(db),
+                "tag": tag,
+                "tags_by_user": tags_mod.tags_by_user(db),
             },
         ),
     )
@@ -429,10 +569,22 @@ def create_user(
     note: str = Form(""),
     traffic_limit_gb: str = Form(""),
     expires_days: str = Form(""),
+    template_id: str = Form(""),
+    expiry_mode: str = Form(""),
+    usage_days: str = Form(""),
     admin: Any = Depends(require_admin),
     csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
+    """Create a user, optionally from a plan (Phase B item 9).
+
+    Resolution order — explicit form values beat the plan: a typed
+    traffic limit overrides the plan's quota; a typed expiry-days
+    overrides the plan's expiry (as a fixed date); an explicit
+    first-use choice overrides the plan's expiry mode. Empty form
+    fields fall back to the plan; with no plan, empty means
+    unlimited / never expires (the old behaviour).
+    """
     lang = get_lang(request)
     t = t_for(lang)
     name = name.strip()
@@ -440,34 +592,88 @@ def create_user(
         return _redirect("/users", request, err=t["invalid_name"])
     if db.query(User).filter(User.name == name).first() is not None:
         return _redirect("/users", request, err=t["name_exists"])
-    limit_bytes: Optional[int] = None
-    if traffic_limit_gb.strip():
+    template: Optional[UserTemplate] = None
+    if (template_id or "").strip():
         try:
-            limit_bytes = int(float(traffic_limit_gb) * 1024**3)
-            if limit_bytes <= 0:
-                limit_bytes = None
+            template = db.get(UserTemplate, int(template_id.strip()))
+        except ValueError:
+            template = None
+        if template is None:
+            return _redirect("/users", request, err=t["invalid_plan"])
+    form_limit_bytes: Optional[int] = None
+    form_limit_given = bool(traffic_limit_gb.strip())
+    if form_limit_given:
+        try:
+            form_limit_bytes = int(float(traffic_limit_gb) * 1024**3)
+            if form_limit_bytes <= 0:
+                form_limit_bytes = None
         except ValueError:
             return _redirect("/users", request, err=t["traffic_limit_gb"])
-    expires_at: Optional[datetime] = None
+    form_expires_days: Optional[int] = None
     if expires_days.strip():
         try:
-            days = int(expires_days)
-            if days > 0:
-                expires_at = datetime.now(timezone.utc) + timedelta(days=days)
+            form_expires_days = int(expires_days)
+            if form_expires_days <= 0:
+                form_expires_days = None
         except ValueError:
             return _redirect("/users", request, err=t["expires_days"])
+    expiry_mode = (expiry_mode or "").strip()
+    if expiry_mode not in ("", "fixed", "first_use"):
+        expiry_mode = ""
+    usage_days_n: Optional[int] = None
+    if usage_days.strip():
+        try:
+            usage_days_n = int(usage_days)
+            if usage_days_n <= 0:
+                usage_days_n = None
+        except ValueError:
+            return _redirect("/users", request, err=t["expires_days"])
+    if expiry_mode == "first_use" and usage_days_n is None:
+        # Fall back to the plan's duration when the plan is
+        # first-use; otherwise first-use has no clock to start.
+        if template is not None and template.expiry_mode == "first_use":
+            usage_days_n = template.expiry_days
+        if usage_days_n is None or usage_days_n <= 0:
+            return _redirect("/users", request, err=t["first_use_needs_days"])
     user = User(
         name=name,
         note=note.strip() or None,
         enabled=True,
-        traffic_limit_bytes=limit_bytes,
+        traffic_limit_bytes=None,
         traffic_used_bytes=0,
-        expires_at=expires_at,
+        expires_at=None,
         sub_token=secrets.token_urlsafe(24),
     )
     db.add(user)
     db.commit()
-    _create_clients_for_user(db, user)
+    # The plan goes on first (quota / expiry / reset cycle /
+    # inbound set); the form overrides below win over it.
+    inbound_ids: Optional[set] = None
+    if template is not None:
+        inbound_ids = plans_mod.apply_template_to_user(db, user, template)
+    if form_limit_given:
+        user.traffic_limit_bytes = form_limit_bytes
+    if expiry_mode == "first_use":
+        assert usage_days_n is not None  # validated above
+        lifecycle = lifecycle_mod.get_or_create_lifecycle(db, user.id)
+        lifecycle.expiry_strategy = "first_use"
+        lifecycle.usage_duration_days = int(usage_days_n)
+        lifecycle.first_use_at = None
+        user.expires_at = None
+    elif form_expires_days is not None:
+        # A fixed expiry from the form clears any first-use plan
+        # (the plan's lifecycle row would otherwise re-arm the
+        # clock at first fetch).
+        lifecycle = lifecycle_mod.get_lifecycle(db, user.id)
+        if lifecycle is not None:
+            lifecycle.expiry_strategy = "fixed"
+            lifecycle.usage_duration_days = None
+            lifecycle.first_use_at = None
+        user.expires_at = datetime.now(timezone.utc) + timedelta(
+            days=form_expires_days
+        )
+    db.commit()
+    _create_clients_for_user(db, user, inbound_ids=inbound_ids)
     _audit(db, admin.id, "user.create", name)
     logger.info("user created: %s", name)
     # Phase A event bus: user creation is a selectable event
@@ -505,16 +711,36 @@ def user_detail(
     )
     inbounds = {i.id: i for i in db.query(Inbound).all()}
     # Phase 2: frozen / IP-limit state per client (from `extra`) and
-    # the user-level frozen flag (all clients frozen).
+    # the user-level frozen flag (all clients frozen). Phase B adds
+    # the device limit + last fetch per client (from `extra` too).
     rows = _user_client_rows(db, user, with_moves=False)
     client_extra = {
         row["client"].id: {
             "frozen": row["frozen"],
             "ip_limit": row["ip_limit"],
+            "hwid_limit": row["hwid_limit"],
+            "last_fetch_at": row["last_fetch_at"],
         }
         for row in rows
     }
     frozen = bool(rows) and all(row["frozen"] for row in rows)
+    # Phase B items 10–11/16/17: lifecycle summary, tags, devices.
+    lifecycle = lifecycle_mod.get_lifecycle(db, user.id)
+    next_reset: Optional[str] = None
+    renewal_preview: list[str] = []
+    if lifecycle is not None:
+        try:
+            nxt = lifecycle_mod.next_reset_date(lifecycle, user)
+            next_reset = nxt.strftime("%Y-%m-%d") if nxt else None
+        except Exception:  # noqa: BLE001 — a bad row, no date
+            next_reset = None
+        try:
+            renewal_preview = [
+                d.strftime("%Y-%m-%d")
+                for d in lifecycle_mod.preview_renewals(lifecycle, user)
+            ]
+        except Exception:  # noqa: BLE001 — a bad row, no preview
+            renewal_preview = []
     # Phase 3: this user's 14-day traffic chart (admin view only —
     # the public /u/<token> page does not pass this context).
     user_traffic_chart, user_traffic_14d = _traffic_chart(db, user_id=user.id)
@@ -538,6 +764,17 @@ def user_detail(
                 "host": host,
                 "user_traffic_chart": user_traffic_chart,
                 "user_traffic_14d": user_traffic_14d,
+                "lifecycle": lifecycle,
+                "lifetime_bytes": (
+                    int(lifecycle.lifetime_bytes or 0)
+                    if lifecycle is not None
+                    else 0
+                ),
+                "on_hold": lifecycle_mod.is_on_hold(lifecycle),
+                "next_reset": next_reset,
+                "renewal_preview": renewal_preview,
+                "tags": tags_mod.tags_for_user(db, user.id),
+                "devices": devices_mod.devices_for_user(db, user.id),
             },
         ),
     )
@@ -576,8 +813,7 @@ def delete_user(
     if user is None:
         raise HTTPException(status_code=404, detail="user not found")
     name = user.name
-    db.query(Client).filter(Client.user_id == user.id).delete()
-    db.delete(user)
+    _delete_user_rows(db, user)
     db.commit()
     _audit(db, admin.id, "user.delete", name)
     logger.info("user deleted: %s", name)
@@ -722,8 +958,9 @@ def edit_user_page(
     if user is None:
         raise HTTPException(status_code=404, detail="user not found")
     rows = _user_client_rows(db, user)
+    lifecycle = lifecycle_mod.get_lifecycle(db, user.id)
     return _render_user_edit(
-        request, user, _user_edit_values(user, rows), rows, db=db
+        request, user, _user_edit_values(user, rows, lifecycle), rows, db=db
     )
 
 
@@ -789,7 +1026,98 @@ async def edit_user_submit(
     except ValueError:
         return _error(t["invalid_expiry_date"])
 
-    planned: list[tuple[Any, str, Optional[int], bool, Any]] = []
+    # Phase B items 10–11 (lifecycle). A missing field keeps the
+    # stored value (the form always sends them, but a partial POST
+    # — e.g. an older bot flow — must not wipe the lifecycle).
+    lifecycle = lifecycle_mod.get_lifecycle(db, user.id)
+    strategy = (data.get("expiry_strategy") or "").strip()
+    if not strategy:
+        strategy = (
+            lifecycle.expiry_strategy if lifecycle is not None else "fixed"
+        )
+    if strategy not in lifecycle_mod.EXPIRY_STRATEGIES:
+        return _error(t["invalid_expiry_strategy"])
+    usage_days: Optional[int] = None
+    if (data.get("usage_days") or "").strip():
+        try:
+            usage_days = int(data["usage_days"])
+            if usage_days <= 0:
+                usage_days = None
+        except ValueError:
+            return _error(t["expires_days"])
+    elif lifecycle is not None:
+        usage_days = lifecycle.usage_duration_days
+    clock_started = lifecycle is not None and lifecycle.first_use_at is not None
+    if strategy == "first_use" and not clock_started and not usage_days:
+        return _error(t["first_use_needs_days"])
+    reset_cycle = (data.get("reset_cycle") or "").strip()
+    if not reset_cycle and "reset_cycle" not in data and lifecycle is not None:
+        reset_cycle = lifecycle.reset_cycle or ""
+    if reset_cycle and reset_cycle not in lifecycle_mod.RESET_CYCLES:
+        return _error(t["invalid_reset_cycle"])
+    reset_day: Optional[int] = None
+    if (data.get("reset_day") or "").strip():
+        try:
+            reset_day = int(data["reset_day"])
+            if not 1 <= reset_day <= lifecycle_mod.RESET_DAY_MAX:
+                raise ValueError
+        except ValueError:
+            return _error(t["invalid_reset_day"])
+    elif lifecycle is not None:
+        reset_day = lifecycle.reset_day
+    renewal_mode = (data.get("renewal_mode") or "").strip()
+    if not renewal_mode and "renewal_mode" not in data and lifecycle is not None:
+        renewal_mode = lifecycle.renewal_mode or ""
+    if renewal_mode and renewal_mode not in lifecycle_mod.RENEWAL_MODES:
+        return _error(t["invalid_renewal_mode"])
+    renewal_interval_days: Optional[int] = None
+    if (data.get("renewal_interval_days") or "").strip():
+        try:
+            renewal_interval_days = int(data["renewal_interval_days"])
+            if renewal_interval_days <= 0:
+                renewal_interval_days = None
+        except ValueError:
+            return _error(t["invalid_renewal_interval"])
+    elif lifecycle is not None:
+        renewal_interval_days = lifecycle.renewal_interval_days
+    renewal_day: Optional[int] = None
+    if (data.get("renewal_day") or "").strip():
+        try:
+            renewal_day = int(data["renewal_day"])
+            if not 1 <= renewal_day <= lifecycle_mod.RESET_DAY_MAX:
+                raise ValueError
+        except ValueError:
+            return _error(t["invalid_renewal_day"])
+    elif lifecycle is not None:
+        renewal_day = lifecycle.renewal_day
+    renewal_weekday: Optional[int] = None
+    if (data.get("renewal_weekday") or "").strip():
+        try:
+            renewal_weekday = int(data["renewal_weekday"])
+            if not 0 <= renewal_weekday <= 6:
+                raise ValueError
+        except ValueError:
+            return _error(t["invalid_renewal_weekday"])
+    elif lifecycle is not None:
+        renewal_weekday = lifecycle.renewal_weekday
+    renewal_max: Optional[int] = None
+    if (data.get("renewal_max") or "").strip():
+        try:
+            renewal_max = int(data["renewal_max"])
+            if renewal_max <= 0:
+                raise ValueError
+        except ValueError:
+            return _error(t["invalid_renewal_max"])
+    elif lifecycle is not None:
+        renewal_max = lifecycle.renewal_max
+    if renewal_mode == "rolling" and not renewal_interval_days:
+        return _error(t["invalid_renewal_interval"])
+    if renewal_mode == "calendar_day" and not renewal_day:
+        return _error(t["invalid_renewal_day"])
+    if renewal_mode == "calendar_weekday" and renewal_weekday is None:
+        return _error(t["invalid_renewal_weekday"])
+
+    planned: list[tuple[Any, str, Optional[int], Optional[int], bool, Any]] = []
     planned_targets: set[int] = set()
     for row in rows:
         client = row["client"]
@@ -809,6 +1137,13 @@ async def edit_user_submit(
                 ip_limit = _parse_ip_limit(data[f"ip_limit_{cid}"])
             except ValueError:
                 return _error(t["invalid_ip_limit"])
+        # Phase B item 17: device limit (same rule as the IP limit).
+        hwid_limit: Optional[int] = row.get("hwid_limit")
+        if f"hwid_limit_{cid}" in data:
+            try:
+                hwid_limit = devices_mod.parse_hwid_limit(data[f"hwid_limit_{cid}"])
+            except ValueError:
+                return _error(t["invalid_hwid_limit"])
         frozen = data.get(f"frozen_{cid}") in ("on", "true", "1")
         # Move to another compatible inbound.
         target = None
@@ -840,16 +1175,42 @@ async def edit_user_submit(
                         _next_awg_address(db, subnet, inbound_id=target.id)
                 except ValueError:
                     return _error(t["move_address_exhausted"])
-        planned.append((client, flow, ip_limit, frozen, target))
+        planned.append((client, flow, ip_limit, hwid_limit, frozen, target))
 
     # --- pass 2: apply ---
     user.name = name
     user.note = (data.get("note") or "").strip() or None
     user.traffic_limit_bytes = limit_bytes
+    # First-use wins over a typed expiry date while the clock has
+    # not started yet (the date field is meaningless until the
+    # clock runs — the clock sets the date at first use). Once the
+    # clock HAS started, the date stands (it is the clock's output).
+    if strategy == "first_use" and not clock_started:
+        expires_at = None
     user.expires_at = expires_at
-    for client, flow, ip_limit, frozen, target in planned:
+    # Phase B items 10–11: persist the lifecycle row. A row is
+    # created only when a feature is actually set (a plain user
+    # stays row-less); an existing row is updated in place (its
+    # lifetime counter and renewal count survive an edit).
+    any_lifecycle = (
+        strategy == "first_use" or bool(reset_cycle) or bool(renewal_mode)
+    )
+    if any_lifecycle and lifecycle is None:
+        lifecycle = lifecycle_mod.get_or_create_lifecycle(db, user.id)
+    if lifecycle is not None:
+        lifecycle.expiry_strategy = strategy
+        lifecycle.usage_duration_days = usage_days
+        lifecycle.reset_cycle = reset_cycle or None
+        lifecycle.reset_day = reset_day
+        lifecycle.renewal_mode = renewal_mode or None
+        lifecycle.renewal_interval_days = renewal_interval_days
+        lifecycle.renewal_day = renewal_day
+        lifecycle.renewal_weekday = renewal_weekday
+        lifecycle.renewal_max = renewal_max
+    for client, flow, ip_limit, hwid_limit, frozen, target in planned:
         client.flow = flow or None
         _set_client_extra(client, "ip_limit", ip_limit)
+        devices_mod.set_hwid_limit(client, hwid_limit)
         _set_client_frozen(client, frozen)
         if target is not None:
             move_err = _apply_client_move(db, client, target)
@@ -972,8 +1333,7 @@ async def bulk_users(
         elif action == "disable":
             user.enabled = False
         elif action == "delete":
-            db.query(Client).filter(Client.user_id == user.id).delete()
-            db.delete(user)
+            _delete_user_rows(db, user)
         elif action == "reset-traffic":
             user.traffic_used_bytes = 0
         elif action == "extend-expiry":

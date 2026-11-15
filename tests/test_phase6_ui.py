@@ -46,6 +46,13 @@ def _pages(seeded):
         "/cores?log=xray",
         "/tools",
         "/selfcheck",
+        # Phase B pages (the TOTP setup GET creates the pending
+        # setup, so its QR <img> resolves on the same page view).
+        "/plans",
+        "/audit",
+        "/api-tokens",
+        "/webhooks",
+        "/settings/totp/setup",
     ]
     for section in ("general", "telegram", "security", "backup",
                     "services", "advanced"):

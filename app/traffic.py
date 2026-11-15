@@ -195,6 +195,17 @@ def sync_traffic(
         if user is None or (up == 0 and down == 0):
             continue
         user.traffic_used_bytes = (user.traffic_used_bytes or 0) + up + down
+        # Phase B items 10–11: the same delta feeds the
+        # never-reset lifetime counter, and first traffic starts
+        # the clock for a start-on-first-use user (a user who
+        # connected has, by definition, used the service). Both
+        # helpers are no-ops for users without a lifecycle row.
+        # (Lazy import: app.lifecycle imports app.webcommon, and
+        # webcommon's import graph is heavier than this module's.)
+        from app import lifecycle as lifecycle_mod
+
+        lifecycle_mod.add_lifetime(db, user_id, up + down)
+        lifecycle_mod.record_first_use(db, user)
         row = (
             db.query(TrafficDaily)
             .filter(

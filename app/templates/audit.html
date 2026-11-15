@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %} — {{ t.audit }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ t.audit }}</h1>
+</div>
+<p class="field-hint">{{ t.audit_desc }}</p>
+
+<form method="get" action="{{ base_path }}/audit" class="card filter-strip">
+  <div class="filter-search">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+    <input type="text" name="q" value="{{ q }}" placeholder="{{ t.audit_search }}" autocomplete="off" aria-label="{{ t.audit_search }}">
+  </div>
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">{{ t.filter_apply }}</button>
+    {% if q %}
+    <a class="btn" href="{{ base_path }}/audit">{{ t.filter_clear }}</a>
+    {% endif %}
+  </div>
+</form>
+
+<div class="card">
+  {% if entries %}
+  <div class="table-wrap">
+    <table class="table-cards">
+      <thead>
+        <tr><th>{{ t.audit_time }}</th><th>{{ t.audit_actor }}</th><th>{{ t.audit_action }}</th><th>{{ t.audit_detail }}</th></tr>
+      </thead>
+      <tbody>
+        {# Each entry is {"entry": AuditLog, "username": str|None} —
+           a None username means the action came from the system
+           (the lifecycle sweeper), not from an admin. #}
+        {% for row in entries %}
+        <tr>
+          <td data-label="{{ t.audit_time }}" dir="ltr">{{ row.entry.created_at.strftime('%Y-%m-%d %H:%M') if row.entry.created_at else '—' }}</td>
+          <td data-label="{{ t.audit_actor }}">{{ row.username or t.audit_system }}</td>
+          <td data-label="{{ t.audit_action }}"><code dir="ltr">{{ row.entry.action }}</code></td>
+          <td data-label="{{ t.audit_detail }}">{{ row.entry.detail or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% set qs = '?q=' ~ (q | urlencode) %}
+  {% if total_pages > 1 %}
+  <nav class="pagination" aria-label="{{ t.page_of.format(page=page, pages=total_pages) }}">
+    {% if page > 1 %}
+    <a class="btn btn-small" href="{{ base_path }}/audit{{ qs }}&page={{ page - 1 }}">← {{ t.page_prev }}</a>
+    {% else %}
+    <span class="btn btn-small btn-disabled" aria-disabled="true">← {{ t.page_prev }}</span>
+    {% endif %}
+    <span class="page-indicator" dir="ltr">{{ t.page_of.format(page=page, pages=total_pages) }}</span>
+    {% if page < total_pages %}
+    <a class="btn btn-small" href="{{ base_path }}/audit{{ qs }}&page={{ page + 1 }}">{{ t.page_next }} →</a>
+    {% else %}
+    <span class="btn btn-small btn-disabled" aria-disabled="true">{{ t.page_next }} →</span>
+    {% endif %}
+  </nav>
+  {% endif %}
+  {% else %}
+  <p class="muted">{{ t.no_audit_entries }}</p>
+  {% endif %}
+</div>
+{% endblock %}
