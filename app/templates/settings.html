@@ -44,8 +44,8 @@
     <label>
       {{ t.telegram_transport }}
       <select name="telegram_transport" dir="ltr">
-        <option value="webhook"{% if settings.get('telegram_transport', 'webhook') == 'webhook' %} selected{% endif %}>{{ t.telegram_transport_webhook }}</option>
-        <option value="polling"{% if settings.get('telegram_transport', 'webhook') == 'polling' %} selected{% endif %}>{{ t.telegram_transport_polling }}</option>
+        <option value="webhook"{% if settings.get('telegram_transport', telegram_transport_default) == 'webhook' %} selected{% endif %}>{{ t.telegram_transport_webhook }}</option>
+        <option value="polling"{% if settings.get('telegram_transport', telegram_transport_default) == 'polling' %} selected{% endif %}>{{ t.telegram_transport_polling }}</option>
       </select>
       <span class="muted">{{ t.telegram_transport_hint }}</span>
     </label>
@@ -58,6 +58,39 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="form-actions">
       <button type="submit" class="btn">{{ t.telegram_test }}</button>
+    </div>
+  </form>
+  <h2>{{ t.telegram_diag }}</h2>
+  <dl class="kv">
+    <dt>{{ t.telegram_diag_mode }}</dt>
+    <dd dir="ltr">{% if settings.get('telegram_transport', telegram_transport_default) == 'polling' %}{{ t.telegram_transport_polling }}{% else %}{{ t.telegram_transport_webhook }}{% endif %}</dd>
+    <dt>{{ t.telegram_diag_bot }}</dt>
+    <dd dir="ltr">{% if telegram_bot_identity %}{% if telegram_bot_identity.get('username') %}@{{ telegram_bot_identity.get('username') }}{% endif %}{% if telegram_bot_identity.get('first_name') %} ({{ telegram_bot_identity.get('first_name') }}){% endif %}{% if telegram_bot_identity.get('id') is not none %} — {{ telegram_bot_identity.get('id') }}{% endif %}{% else %}{{ t.telegram_diag_identity_unknown }}{% endif %}</dd>
+    <dt>{{ t.telegram_diag_chat }}</dt>
+    <dd dir="ltr">{{ settings.get('telegram_chat_id', '') }}</dd>
+    <dt>{{ t.telegram_diag_commands_registered }}</dt>
+    <dd dir="ltr">{{ telegram_commands_registered_at or t.telegram_diag_never }}</dd>
+    {% if settings.get('telegram_transport', telegram_transport_default) == 'polling' %}
+    <dt>{{ t.telegram_diag_polling_last_poll }}</dt>
+    <dd dir="ltr">{{ telegram_polling_status.last_poll or t.telegram_diag_never }}</dd>
+    <dt>{{ t.telegram_diag_polling_last_update }}</dt>
+    <dd dir="ltr">{{ telegram_polling_status.last_update or t.telegram_diag_never }}</dd>
+    <dt>{{ t.telegram_diag_polling_last_error }}</dt>
+    <dd dir="ltr">{{ telegram_polling_status.last_error or '—' }}</dd>
+    <dt>{{ t.telegram_diag_polling_offset }}</dt>
+    <dd dir="ltr">{{ telegram_polling_status.offset or '—' }}</dd>
+    {% endif %}
+  </dl>
+  <form method="post" action="{{ base_path }}/settings/telegram-commands">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="form-actions">
+      <button type="submit" class="btn">{{ t.telegram_commands_register }}</button>
+    </div>
+  </form>
+  <form method="post" action="{{ base_path }}/settings/telegram-identity">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="form-actions">
+      <button type="submit" class="btn">{{ t.telegram_identity_refresh }}</button>
     </div>
   </form>
   <h2>{{ t.telegram_webhook }}</h2>

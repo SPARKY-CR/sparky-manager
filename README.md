@@ -139,23 +139,30 @@ the dashboard and each user page (server-rendered SVG, no external
 libraries; days without traffic show as zero).
 
 The panel is also manageable from Telegram: a full-management bot
-(`app/bot.py`) with the same capabilities as the web UI — list and
-create users (guided: name → inbounds → traffic limit → expiry),
-freeze/unfreeze, extend expiry, reset traffic, delete, enable/disable
-inbounds, get any user's share links and subscription link, and check
-server status and traffic. Setup: create a bot with @BotFather, paste
-its token and your numeric chat ID (from @userinfobot) into the
-settings page, then pick how the bot receives updates. Polling works
-out of the box on any panel port (recommended for a standard install
-— just save and the bot starts answering); webhook needs a domain and
-pressing "Register webhook". Only that chat ID can use the bot; anyone
-else gets no reply at all. The webhook URL carries a random secret
-(not the bot token) and lives under the panel's secret web path. One
-limitation: Telegram only delivers webhooks on ports 443, 80, 88 and
-8443, while the installer picks a random panel port — if webhook
-registration fails, switch to polling, or re-run the installer with
-`--port 8443` (when no inbound uses TCP 8443) or put a reverse proxy
-on 443 in front of the panel.
+(`app/bot.py`) with the same capabilities as the web UI — list,
+search and edit users, create users (guided: name → inbounds →
+traffic limit → expiry), freeze/unfreeze, extend expiry, reset
+traffic, delete, create/enable/disable/delete inbounds (guided:
+protocol → port → SNI), get any user's share links and subscription
+link, check server status and traffic, restart services (with
+confirmation), and receive a backup as a document. Commands
+(`/start /help /menu /status /users /inbounds /cancel`) are
+registered on Telegram automatically when you save the bot token.
+Setup: create a bot with @BotFather, paste its token and your numeric
+chat ID (from @userinfobot) into the settings page — polling is the
+default and works out of the box on any panel port (just save and the
+bot starts answering); webhook needs a domain and pressing "Register
+webhook". The settings page shows the Telegram connection status
+(mode, bot identity, last poll, last update, last error). Only that
+chat ID can use the bot; anyone else gets no reply at all. The webhook
+URL carries a random secret (not the bot token) and lives under the
+panel's secret web path. Two limitations: Telegram only delivers
+webhooks on ports 443, 80, 88 and 8443, while the installer picks a
+random panel port — if webhook registration fails, switch to polling,
+or re-run the installer with `--port 8443` (when no inbound uses TCP
+8443) or put a reverse proxy on 443 in front of the panel; and
+AmneziaWG cannot be restarted from the bot (the installer does not
+grant the needed sudo access).
 
 ## FAQ
 

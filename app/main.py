@@ -715,12 +715,30 @@ STRINGS: dict[str, dict[str, str]] = {
         "telegram_transport": "روش دریافت پیام‌های ربات",
         "telegram_transport_webhook": "وب‌هوک",
         "telegram_transport_polling": "پولینگ (دریافت دوره‌ای)",
-        "telegram_transport_hint": "وب‌هوک فقط روی پورت‌های ۴۴۳، ۸۰، ۸۸ و ۸۴۴۳ کار می‌کند؛ پولینگ روی هر پورتی کار می‌کند و برای نصب استاندارد (پورت تصادفی) گزینهٔ مناسب است. تغییر روش بلافاصله اعمال می‌شود و نیازی به ری‌استارت پنل نیست.",
+        "telegram_transport_hint": "پولینگ پیش‌فرض است و روی هر پورتی کار می‌کند؛ وب‌هوک فقط روی پورت‌های ۴۴۳، ۸۰، ۸۸ و ۸۴۴۳ کار می‌کند. تغییر روش بلافاصله اعمال می‌شود و نیازی به ری‌استارت پنل نیست.",
         "telegram_polling_active": "پولینگ فعال شد — ربات پیام‌ها را مستقیم از تلگرام می‌گیرد.",
         "telegram_polling_webhook_failed": "حذف وب‌هوک از تلگرام ناموفق بود — تا وب‌هوک حذف نشود پولینگ پیامی نمی‌گیرد؛ دوباره ذخیره کنید تا تلاش شود.",
+        # Telegram management bot — diagnostics + commands (upgrade Phase 3).
+        "telegram_diag": "وضعیت اتصال تلگرام",
+        "telegram_diag_mode": "روش اتصال",
+        "telegram_diag_bot": "ربات",
+        "telegram_diag_chat": "چت مجاز",
+        "telegram_diag_commands_registered": "دستورات ثبت‌شده در",
+        "telegram_diag_polling_last_poll": "آخرین پولینگ موفق",
+        "telegram_diag_polling_last_update": "آخرین پیام دریافتی",
+        "telegram_diag_polling_last_error": "آخرین خطای پولینگ",
+        "telegram_diag_polling_offset": "شمارهٔ آخرین به‌روزرسانی",
+        "telegram_diag_never": "هنوز نه",
+        "telegram_diag_identity_unknown": "نامشخص — «بررسی هویت ربات» را بزنید.",
+        "telegram_commands_register": "ثبت دستورات ربات",
+        "telegram_commands_registered": "دستورات ربات در تلگرام ثبت شد.",
+        "telegram_commands_failed": "ثبت دستورات ربات در تلگرام ناموفق بود:",
+        "telegram_identity_refresh": "بررسی هویت ربات",
+        "telegram_identity_ok": "هویت ربات به‌روز شد.",
+        "telegram_identity_failed": "دریافت هویت ربات ناموفق بود — توکن و اتصال را بررسی کنید.",
         # Telegram management bot — bot strings (Phase 4).
         "bot_welcome": "🤖 ربات مدیریت sparky-manager\n\nاز منو انتخاب کنید:",
-        "bot_help": "🤖 راهنمای ربات\n\n/start — منوی اصلی\n/help — همین راهنما\n/cancel — لغو عملیات در حال انجام\n\nاز منو می‌توانید کاربران را ببینید و بسازید، فریز/حذف/تمدید کنید، اینباندها را فعال/غیرفعال کنید، لینک هر کاربر را بگیرید و وضعیت سرور را ببینید.",
+        "bot_help": "🤖 راهنمای ربات\n\n/start — منوی اصلی\n/help — همین راهنما\n/menu — منوی اصلی\n/status — وضعیت سرور و ترافیک\n/users — فهرست کاربران\n/inbounds — فهرست اینباندها\n/cancel — لغو عملیات در حال انجام\n\nاز منو می‌توانید کاربران را ببینید، جستجو و ویرایش کنید و بسازید، فریز/حذف/تمدید کنید، اینباندها را بسازید و فعال/غیرفعال/حذف کنید، لینک هر کاربر را بگیرید، سرویس‌ها را ریستارت کنید، بکاپ بگیرید و وضعیت سرور را ببینید.",
         "bot_menu_users": "👥 کاربران",
         "bot_menu_inbounds": "📡 اینباندها",
         "bot_menu_status": "📊 وضعیت سرور",
@@ -798,6 +816,51 @@ STRINGS: dict[str, dict[str, str]] = {
         "bot_rerender_failed": "بازسازی کانفیگ‌ها ناموفق بود:",
         "bot_action_failed": "عملیات ناموفق بود.",
         "bot_view_user": "👤 مشاهدهٔ کاربر",
+        # Telegram management bot — upgrade Phase 3 (search, edit,
+        # inbound create/delete, services, backup, stale callbacks).
+        "bot_menu_services": "🛠️ سرویس‌ها",
+        "bot_menu_backup": "📦 بکاپ",
+        "bot_search": "🔍 جستجو",
+        "bot_search_prompt": "🔍 جستجوی کاربر\n\nنام یا یادداشت کاربر را بفرستید (بخشی از آن کافی است):",
+        "bot_search_title": "🔍 نتایج جستجو برای «{query}» (صفحه {page} از {pages})",
+        "bot_search_no_match": "کاربری با این مشخصات پیدا نشد.",
+        "bot_edit": "✏️ ویرایش",
+        "bot_edit_pick": "کدام را ویرایش کنیم؟",
+        "bot_edit_name": "نام",
+        "bot_edit_limit": "حجم",
+        "bot_edit_expiry": "انقضا",
+        "bot_edit_name_prompt": "نام جدید «{name}» را بفرستید (فقط حروف، عدد، ‎-‎ و ‎_‎):",
+        "bot_edit_limit_prompt": "حجم جدید (گیگابایت)؟ ۰ یا خالی یعنی نامحدود:",
+        "bot_edit_expiry_prompt": "انقضای جدید (روز از امروز)؟ ۰ یا خالی یعنی بدون انقضا:",
+        "bot_edited": "✅ ویرایش انجام شد.",
+        "bot_new_inbound": "➕ اینباند جدید",
+        "bot_create_inbound_protocol": "پروتکل اینباند جدید را انتخاب کنید:",
+        "bot_create_inbound_port": "پورت اینباند؟ خالی یعنی خودکار:",
+        "bot_create_inbound_port_invalid": "پورت معتبر نیست — عددی بین ۱ تا ۶۵۵۳۵ بفرستید یا خالی برای خودکار:",
+        "bot_create_inbound_port_in_use": "این پورت روی همین پروتکل استفاده شده است — پورت دیگری بفرستید یا خالی برای خودکار:",
+        "bot_create_inbound_port_reserved": "این پورت رزرو شده است (IKEv2) — پورت دیگری بفرستید:",
+        "bot_create_inbound_sni": "SNI برای {protocol}؟ خالی یعنی پیش‌فرض پنل ({sni}):",
+        "bot_create_inbound_done": "✅ اینباند «{tag}» ساخته شد ({protocol}:{port}).",
+        "bot_create_inbound_failed": "ساخت اینباند ناموفق بود.",
+        "bot_inbound_delete_confirm": "اینباند «{tag}» حذف شود؟ همهٔ کلاینت‌های آن هم حذف می‌شوند. این عمل قابل بازگشت نیست.",
+        "bot_inbound_deleted": "اینباند حذف شد.",
+        "bot_services_title": "🛠️ سرویس‌ها",
+        "bot_service_running": "در حال اجرا",
+        "bot_service_stopped": "متوقف",
+        "bot_service_unknown": "نامشخص",
+        "bot_service_restart": "🔄 ریستارت",
+        "bot_service_restart_confirm": "سرویس «{name}» ریستارت شود؟",
+        "bot_service_restarted": "✅ سرویس «{name}» ریستارت شد و در حال اجراست.",
+        "bot_service_restart_failed": "❌ ریستارت «{name}» ناموفق بود:",
+        "bot_service_restart_unverified": "🔄 ریستارت «{name}» انجام شد، ولی وضعیت سرویس قابل بررسی نیست.",
+        "bot_services_awg_note": "ریستارت AmneziaWG از ربات ممکن نیست (دسترسی لازم در نصب‌کننده تعریف نشده است).",
+        "bot_backup_title": "📦 بکاپ",
+        "bot_backup_hint": "بکاپ شامل کل دیتابیس و کلیدهاست — آن را مثل کلید خصوصی نگه دارید. فقط به همین چت فرستاده می‌شود.",
+        "bot_backup_send": "📦 دریافت بکاپ",
+        "bot_backup_sent": "✅ بکاپ فرستاده شد.",
+        "bot_backup_failed": "ساخت یا ارسال بکاپ ناموفق بود.",
+        "bot_backup_too_large": "بکاپ بزرگ‌تر از حد تلگرام (۵۰ مگابایت) است — از صفحهٔ تنظیمات پنل دانلود کنید.",
+        "bot_stale_callback": "این دکمه دیگر معتبر نیست — از منو ادامه بدهید.",
     },
     "en": {
         "app_name": "Sparky Manager",
@@ -1106,12 +1169,30 @@ STRINGS: dict[str, dict[str, str]] = {
         "telegram_transport": "How the bot receives updates",
         "telegram_transport_webhook": "Webhook",
         "telegram_transport_polling": "Polling",
-        "telegram_transport_hint": "Webhooks only work on ports 443, 80, 88 and 8443; polling works on any port and is the right choice for a standard install (random port). Switching takes effect immediately — no panel restart needed.",
+        "telegram_transport_hint": "Polling is the default and works on any port; webhooks only work on ports 443, 80, 88 and 8443. Switching takes effect immediately — no panel restart needed.",
         "telegram_polling_active": "Polling active — the bot now fetches updates directly from Telegram.",
         "telegram_polling_webhook_failed": "Could not remove the webhook from Telegram — polling receives nothing until the webhook is removed; save again to retry.",
+        # Telegram management bot — diagnostics + commands (upgrade Phase 3).
+        "telegram_diag": "Telegram connection",
+        "telegram_diag_mode": "Connection mode",
+        "telegram_diag_bot": "Bot",
+        "telegram_diag_chat": "Authorized chat",
+        "telegram_diag_commands_registered": "Commands registered at",
+        "telegram_diag_polling_last_poll": "Last successful poll",
+        "telegram_diag_polling_last_update": "Last update received",
+        "telegram_diag_polling_last_error": "Last polling error",
+        "telegram_diag_polling_offset": "Last update id",
+        "telegram_diag_never": "not yet",
+        "telegram_diag_identity_unknown": "Unknown — press “Check bot identity”.",
+        "telegram_commands_register": "Register bot commands",
+        "telegram_commands_registered": "Bot commands registered on Telegram.",
+        "telegram_commands_failed": "Registering the bot commands on Telegram failed:",
+        "telegram_identity_refresh": "Check bot identity",
+        "telegram_identity_ok": "Bot identity refreshed.",
+        "telegram_identity_failed": "Could not fetch the bot identity — check the token and the connection.",
         # Telegram management bot — bot strings (Phase 4).
         "bot_welcome": "🤖 sparky-manager management bot\n\nPick from the menu:",
-        "bot_help": "🤖 Bot help\n\n/start — main menu\n/help — this help\n/cancel — abort the current operation\n\nFrom the menu you can list and create users, freeze/delete/extend them, enable/disable inbounds, get any user's links, and check server status.",
+        "bot_help": "🤖 Bot help\n\n/start — main menu\n/help — this help\n/menu — main menu\n/status — server status and traffic\n/users — user list\n/inbounds — inbound list\n/cancel — abort the current operation\n\nFrom the menu you can list, search, edit and create users, freeze/delete/extend them, create, enable/disable and delete inbounds, get any user's links, restart services, get a backup, and check server status.",
         "bot_menu_users": "👥 Users",
         "bot_menu_inbounds": "📡 Inbounds",
         "bot_menu_status": "📊 Server status",
@@ -1189,6 +1270,51 @@ STRINGS: dict[str, dict[str, str]] = {
         "bot_rerender_failed": "Config re-render failed:",
         "bot_action_failed": "The action failed.",
         "bot_view_user": "👤 View user",
+        # Telegram management bot — upgrade Phase 3 (search, edit,
+        # inbound create/delete, services, backup, stale callbacks).
+        "bot_menu_services": "🛠️ Services",
+        "bot_menu_backup": "📦 Backup",
+        "bot_search": "🔍 Search",
+        "bot_search_prompt": "🔍 Search users\n\nSend the user's name or note (part of it is enough):",
+        "bot_search_title": "🔍 Results for “{query}” (page {page} of {pages})",
+        "bot_search_no_match": "No user matches that search.",
+        "bot_edit": "✏️ Edit",
+        "bot_edit_pick": "What should I edit?",
+        "bot_edit_name": "Name",
+        "bot_edit_limit": "Traffic limit",
+        "bot_edit_expiry": "Expiry",
+        "bot_edit_name_prompt": "Send the new name for “{name}” (letters, digits, - and _ only):",
+        "bot_edit_limit_prompt": "New limit in GB? 0 or empty means unlimited:",
+        "bot_edit_expiry_prompt": "New expiry in days from today? 0 or empty means never expires:",
+        "bot_edited": "✅ Edited.",
+        "bot_new_inbound": "➕ New inbound",
+        "bot_create_inbound_protocol": "Pick the protocol for the new inbound:",
+        "bot_create_inbound_port": "Port for the inbound? Empty means automatic:",
+        "bot_create_inbound_port_invalid": "Not a valid port — send a number between 1 and 65535, or empty for automatic:",
+        "bot_create_inbound_port_in_use": "That port is already used on the same transport — send another port, or empty for automatic:",
+        "bot_create_inbound_port_reserved": "That port is reserved (IKEv2) — send another port:",
+        "bot_create_inbound_sni": "SNI for {protocol}? Empty means the panel default ({sni}):",
+        "bot_create_inbound_done": "✅ Inbound “{tag}” created ({protocol}:{port}).",
+        "bot_create_inbound_failed": "Could not create the inbound.",
+        "bot_inbound_delete_confirm": "Delete inbound “{tag}”? All of its clients are deleted too. This cannot be undone.",
+        "bot_inbound_deleted": "Inbound deleted.",
+        "bot_services_title": "🛠️ Services",
+        "bot_service_running": "running",
+        "bot_service_stopped": "stopped",
+        "bot_service_unknown": "unknown",
+        "bot_service_restart": "🔄 Restart",
+        "bot_service_restart_confirm": "Restart service “{name}”?",
+        "bot_service_restarted": "✅ Service “{name}” restarted and is running.",
+        "bot_service_restart_failed": "❌ Restart of “{name}” failed:",
+        "bot_service_restart_unverified": "🔄 Service “{name}” was restarted, but its state could not be verified.",
+        "bot_services_awg_note": "AmneziaWG cannot be restarted from the bot (the installer does not grant the needed sudo access).",
+        "bot_backup_title": "📦 Backup",
+        "bot_backup_hint": "The backup contains the whole database and all keys — keep it like a private key. It is only sent to this chat.",
+        "bot_backup_send": "📦 Get backup",
+        "bot_backup_sent": "✅ Backup sent.",
+        "bot_backup_failed": "Creating or sending the backup failed.",
+        "bot_backup_too_large": "The backup is larger than Telegram's limit (50 MB) — download it from the panel settings page instead.",
+        "bot_stale_callback": "This button is no longer valid — continue from the menu.",
     },
 }
 
@@ -2270,6 +2396,10 @@ def _telegram_polling_token() -> Optional[str]:
     finally:
         db.close()
     transport = (settings.get("telegram_transport") or "").strip().lower()
+    if transport not in TELEGRAM_TRANSPORTS:
+        # Unset or invalid: the default applies (polling since the
+        # professional upgrade, Phase 3).
+        transport = TELEGRAM_TRANSPORT_DEFAULT
     if transport != "polling":
         return None
     token = (settings.get("telegram_bot_token") or "").strip()
@@ -2279,7 +2409,77 @@ def _telegram_polling_token() -> Optional[str]:
     return token
 
 
+def _load_polling_offset() -> Optional[int]:
+    """The persisted ``getUpdates`` offset (settings table), or None
+    when unset or unparseable — a bad stored value re-fetches from
+    scratch, and ``bot.py``'s dedup keeps that harmless. Never
+    raises."""
+    if SessionLocal is None:
+        return None
+    db = SessionLocal()
+    try:
+        raw = get_setting(db, TELEGRAM_POLLING_OFFSET_KEY, "")
+        return int(raw) if raw.strip() else None
+    except (ValueError, Exception):  # noqa: BLE001 — bad value: start over
+        return None
+    finally:
+        db.close()
+
+
+def _record_polling_status(
+    *, got_update: bool = False, error: Optional[str] = None
+) -> None:
+    """Persist one polling round's diagnostics (settings table).
+
+    A successful round stamps ``telegram_polling_last_poll`` (and
+    ``telegram_polling_last_update`` when at least one update
+    arrived); a failed round stamps ``telegram_polling_last_error``
+    with the time and a short reason. Never raises.
+    """
+    if SessionLocal is None:
+        return
+    db = SessionLocal()
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        if error is not None:
+            set_setting(
+                db, TELEGRAM_POLLING_LAST_ERROR_KEY, f"{now} — {error}"
+            )
+        else:
+            set_setting(db, TELEGRAM_POLLING_LAST_POLL_KEY, now)
+            if got_update:
+                set_setting(db, TELEGRAM_POLLING_LAST_UPDATE_KEY, now)
+    except Exception:  # noqa: BLE001 — diagnostics must never break the loop
+        logger.exception("telegram polling status persist failed")
+    finally:
+        db.close()
+
+
+# Single-worker guard for the polling loop: the lifespan creates
+# exactly one polling task, and this flag makes a second worker
+# impossible even if the loop is ever (re)started by another path —
+# two workers would race on the offset and double-deliver updates.
+_polling_loop_active = False
+
+
 async def _telegram_polling_loop() -> None:
+    """Polling-loop entry point: refuse a second worker, then run the
+    loop. The flag is cleared on exit (including cancellation at
+    shutdown) so a later restart of the task is allowed."""
+    global _polling_loop_active
+    if _polling_loop_active:
+        logger.warning(
+            "telegram polling loop already running; refusing a second worker"
+        )
+        return
+    _polling_loop_active = True
+    try:
+        await _telegram_polling_loop_inner()
+    finally:
+        _polling_loop_active = False
+
+
+async def _telegram_polling_loop_inner() -> None:
     """Long-poll Telegram for bot updates (polling transport).
 
     The task itself is always started by the lifespan (like the
@@ -2297,8 +2497,13 @@ async def _telegram_polling_loop() -> None:
     Each update is dispatched through the SAME ``bot.handle_update``
     + ``TelegramSender`` the webhook route uses, with its own DB
     session per update (mirroring one webhook request per update),
-    so polling and webhook behave identically. The offset lives in
-    memory; duplicates are ignored by ``bot.py``'s ``_seen_updates``.
+    so polling and webhook behave identically. The offset is
+    persisted in the settings table after every dispatched update
+    (professional upgrade, Phase 3), so a restart resumes where the
+    loop left off instead of re-fetching; duplicates are still
+    ignored by ``bot.py``'s ``_seen_updates`` for the in-flight
+    batch. Each round also records its diagnostics (last poll, last
+    update, last error) for the settings page.
 
     The loop never crashes the panel: every failure path is caught
     and logged (never the token), a fast empty ``getUpdates`` return
@@ -2309,7 +2514,7 @@ async def _telegram_polling_loop() -> None:
     (lifespan shutdown) is honoured: ``CancelledError`` is never
     swallowed.
     """
-    offset: Optional[int] = None
+    offset = _load_polling_offset()
     backoff = 0.0
     while True:
         try:
@@ -2354,7 +2559,20 @@ async def _telegram_polling_loop() -> None:
                 except Exception:  # noqa: BLE001 — one bad update must not stop the loop
                     logger.exception("telegram polling dispatch failed")
                 finally:
+                    # Persist the offset even when dispatch failed:
+                    # Telegram considers the update delivered, and
+                    # re-fetching it after a restart would re-run
+                    # the (failed) action. The offset write is in
+                    # the dispatch session so it costs no extra one.
+                    try:
+                        if offset is not None:
+                            set_setting(
+                                db, TELEGRAM_POLLING_OFFSET_KEY, str(offset)
+                            )
+                    except Exception:  # noqa: BLE001 — a missed write only re-fetches
+                        logger.exception("telegram polling offset persist failed")
                     db.close()
+            _record_polling_status(got_update=True)
         else:
             # No updates: a slow empty return is a normal long-poll
             # timeout (re-poll immediately); a fast one means the call
@@ -2366,9 +2584,11 @@ async def _telegram_polling_loop() -> None:
                     if backoff == 0.0
                     else min(backoff * 2, TELEGRAM_POLL_BACKOFF_MAX)
                 )
+                _record_polling_status(error="getUpdates failed")
                 await asyncio.sleep(backoff)
             else:
                 backoff = 0.0
+                _record_polling_status()
 
 
 @asynccontextmanager
@@ -4802,6 +5022,47 @@ def inbounds_page(
     )
 
 
+def _check_new_inbound(
+    db: Session, protocol: str, port: int, tag: str, transport: str
+) -> Optional[str]:
+    """Validate a new inbound's port + tag (shared by the web create
+    route and the Telegram bot's create flow, so the two paths can
+    never disagree).
+
+    Takes the FINAL port and tag (after auto-generation) and returns
+    an error code — ``"invalid_port"`` | ``"port_reserved"`` |
+    ``"invalid_name"`` | ``"tag_exists"`` | ``"port_in_use"`` — or
+    None when the inbound is acceptable. The caller maps the code to
+    its own message (web i18n key / bot string).
+    """
+    if not 1 <= port <= 65535:
+        return "invalid_port"
+    # UDP 500/4500 are reserved for IKEv2 by design — except port 500
+    # itself, which is exactly what an IKEv2 inbound uses.
+    if port in RESERVED_PORTS and not (protocol == "ikev2" and port == 500):
+        return "port_reserved"
+    if not NAME_RE.match(tag):
+        return "invalid_name"
+    if db.query(Inbound).filter(Inbound.tag == tag).first() is not None:
+        return "tag_exists"
+    # Port clash: models.Inbound enforces UNIQUE(port, protocol), so
+    # the same port on different transports may coexist (VLESS-Reality
+    # TCP 443 + Hysteria2 UDP 443, DESIGN §3). A clash is the same port
+    # on the SAME transport.
+    for existing in db.query(Inbound).all():
+        existing_stream: dict[str, Any] = {}
+        if existing.stream_json:
+            try:
+                existing_stream = json.loads(existing.stream_json)
+            except ValueError:
+                existing_stream = {}
+        if existing.port == port and transport in _inbound_transports(
+            existing_stream, existing.protocol
+        ):
+            return "port_in_use"
+    return None
+
+
 @app.post("/inbounds")
 def create_inbound(
     request: Request,
@@ -4841,18 +5102,11 @@ def create_inbound(
             port = suggest_protocol_port(db, protocol, transport)
         except ValueError:
             return _redirect("/inbounds", request, err=t["invalid_port"])
-    if not 1 <= port <= 65535:
-        return _redirect("/inbounds", request, err=t["invalid_port"])
-    # UDP 500/4500 are reserved for IKEv2 by design — except port 500
-    # itself, which is exactly what an IKEv2 inbound uses.
-    if port in RESERVED_PORTS and not (protocol == "ikev2" and port == 500):
-        return _redirect("/inbounds", request, err=t["port_reserved"])
     if not tag:
         tag = suggest_inbound_tag(db, protocol, port)
-    if not NAME_RE.match(tag):
-        return _redirect("/inbounds", request, err=t["invalid_name"])
-    if db.query(Inbound).filter(Inbound.tag == tag).first() is not None:
-        return _redirect("/inbounds", request, err=t["tag_exists"])
+    check = _check_new_inbound(db, protocol, port, tag, transport)
+    if check is not None:
+        return _redirect("/inbounds", request, err=t[check])
     stream: dict[str, Any] = {
         "network": network,
         "transport": transport,
@@ -4901,21 +5155,6 @@ def create_inbound(
         stream["security"] = "reality" if protocol == "vless" else "tls"
     if path.strip():
         stream["path"] = path.strip()
-    # Port clash: models.Inbound enforces UNIQUE(port, protocol), so
-    # the same port on different transports may coexist (VLESS-Reality
-    # TCP 443 + Hysteria2 UDP 443, DESIGN §3). A clash is the same port
-    # on the SAME transport.
-    for existing in db.query(Inbound).all():
-        existing_stream: dict[str, Any] = {}
-        if existing.stream_json:
-            try:
-                existing_stream = json.loads(existing.stream_json)
-            except ValueError:
-                existing_stream = {}
-        if existing.port == port and transport in _inbound_transports(
-            existing_stream, existing.protocol
-        ):
-            return _redirect("/inbounds", request, err=t["port_in_use"])
     inbound = Inbound(
         tag=tag,
         core=core,
@@ -4994,12 +5233,22 @@ CHAT_ID_RE = re.compile(r"^-?\d+$")
 # Ports Telegram delivers webhooks to (Bot API rule — a panel on any
 # other port cannot receive webhooks; see _public_panel_url).
 TELEGRAM_WEBHOOK_PORTS = (443, 80, 88, 8443)
-# Bot transports (Phase 4 follow-up): "webhook" is the default (Phase 4
-# behavior, byte-identical); "polling" long-polls getUpdates instead,
-# which works on any panel port. Stored in the settings table as
-# ``telegram_transport`` — no DB schema change.
+# Bot transports (Phase 4 follow-up): "polling" is the default
+# (professional upgrade, Phase 3 — polling works on any panel port,
+# while webhooks only work on 443/80/88/8443 and the installer picks
+# a random port). An install that explicitly chose "webhook" keeps
+# it — only the default for an unset value changed. Stored in the
+# settings table as ``telegram_transport`` — no DB schema change.
 TELEGRAM_TRANSPORTS = ("webhook", "polling")
-TELEGRAM_TRANSPORT_DEFAULT = "webhook"
+TELEGRAM_TRANSPORT_DEFAULT = "polling"
+# Polling diagnostics (professional upgrade, Phase 3) — all in the
+# settings table, no DB schema change. The offset survives restarts
+# (a restart no longer re-fetches already-processed updates); the
+# timestamps feed the settings page's Telegram diagnostics section.
+TELEGRAM_POLLING_OFFSET_KEY = "telegram_polling_offset"
+TELEGRAM_POLLING_LAST_POLL_KEY = "telegram_polling_last_poll"
+TELEGRAM_POLLING_LAST_UPDATE_KEY = "telegram_polling_last_update"
+TELEGRAM_POLLING_LAST_ERROR_KEY = "telegram_polling_last_error"
 # Polling loop tuning (see _telegram_polling_loop). The long-poll wait
 # is 30 s (Bot API max is 50); the idle re-check keeps transport
 # switches live without a restart; a fast empty getUpdates return is
@@ -5305,6 +5554,16 @@ def settings_page(
             webhook_info = parsed if isinstance(parsed, dict) else None
         except ValueError:
             webhook_info = None
+    # Bot identity (getMe, cached by the refresh action) — public
+    # info only (id, username, first name), never the token.
+    bot_identity = None
+    raw_identity = settings.get("telegram_bot_identity", "")
+    if raw_identity:
+        try:
+            parsed = json.loads(raw_identity)
+            bot_identity = parsed if isinstance(parsed, dict) else None
+        except ValueError:
+            bot_identity = None
     return templates.TemplateResponse(request, "settings.html",
         _template_ctx(request, {
             "admin": admin,
@@ -5312,6 +5571,7 @@ def settings_page(
             "server_status": server_status,
             "telegram_configured": _telegram_configured(db),
             "telegram_token_set": bool(settings.get("telegram_bot_token")),
+            "telegram_transport_default": TELEGRAM_TRANSPORT_DEFAULT,
             "telegram_webhook_url_display": _mask_webhook_url(
                 settings.get("telegram_webhook_url", "")
             ),
@@ -5319,6 +5579,18 @@ def settings_page(
                 "telegram_webhook_registered_at", ""
             ),
             "telegram_webhook_info": webhook_info,
+            "telegram_bot_identity": bot_identity,
+            "telegram_commands_registered_at": settings.get(
+                "telegram_commands_registered_at", ""
+            ),
+            "telegram_polling_status": {
+                "last_poll": settings.get(TELEGRAM_POLLING_LAST_POLL_KEY, ""),
+                "last_update": settings.get(
+                    TELEGRAM_POLLING_LAST_UPDATE_KEY, ""
+                ),
+                "last_error": settings.get(TELEGRAM_POLLING_LAST_ERROR_KEY, ""),
+                "offset": settings.get(TELEGRAM_POLLING_OFFSET_KEY, ""),
+            },
         }),
     )
 
@@ -5360,11 +5632,32 @@ def save_settings(
     set_setting(db, "domain", domain.strip())
     set_setting(db, "subscription_host", subscription_host.strip())
     set_setting(db, "reality_sni", reality_sni.strip() or "www.microsoft.com")
+    commands_err = ""
     if telegram_bot_token.strip():
         # A blank token field keeps the current token (the form never
         # shows it, so a submit without a new value must not clear it).
         # Clearing the chat ID disables notifications.
-        set_setting(db, "telegram_bot_token", telegram_bot_token.strip())
+        new_token = telegram_bot_token.strip()
+        set_setting(db, "telegram_bot_token", new_token)
+        # A new bot gets its command menu registered right away
+        # (setMyCommands) — best-effort: a failure is reported, not
+        # fatal (the settings still save; the admin can retry from
+        # the "Register commands" button). A failed registration on
+        # a fresh token is also the first sign the token is wrong.
+        if telegram_mod is not None and bot_mod is not None:
+            ok, error = telegram_mod.set_my_commands(
+                new_token, list(bot_mod.BOT_COMMANDS)
+            )
+            if ok:
+                set_setting(
+                    db,
+                    "telegram_commands_registered_at",
+                    datetime.now(timezone.utc).isoformat(),
+                )
+            else:
+                commands_err = t["telegram_commands_failed"] + (
+                    f" {error}" if error else ""
+                )
     set_setting(db, "telegram_chat_id", chat_id)
     set_setting(db, "telegram_transport", transport)
     if transport != previous_transport:
@@ -5415,6 +5708,8 @@ def save_settings(
     # reports (long) errors.
     if polling_err:
         err_parts.append(polling_err)
+    if commands_err:
+        err_parts.append(commands_err)
     if errors:
         err_parts.append(t["rerender_failed"] + "; ".join(errors))
     return _redirect(
@@ -5539,6 +5834,71 @@ def refresh_telegram_webhook_status(
     }
     set_setting(db, "telegram_webhook_info", json.dumps(kept))
     return _redirect("/settings", request, msg=t["telegram_webhook_status_ok"])
+
+
+@app.post("/settings/telegram-commands")
+def register_telegram_commands(
+    request: Request,
+    admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
+    db: Session = Depends(db_session),
+):
+    """Register the bot's command menu with Telegram (setMyCommands).
+
+    The command list comes from ``app.bot.BOT_COMMANDS`` (start /
+    help / menu / status / users / inbounds / cancel) — the same
+    list the bot actually handles, so Telegram's menu can never
+    offer a command the bot does not implement. The registration
+    time is stored for the diagnostics section.
+    """
+    t = t_for(get_lang(request))
+    if telegram_mod is None or bot_mod is None or not _telegram_configured(db):
+        return _redirect("/settings", request, err=t["telegram_not_configured"])
+    settings = get_settings(db)
+    ok, error = telegram_mod.set_my_commands(
+        settings.get("telegram_bot_token", ""), list(bot_mod.BOT_COMMANDS)
+    )
+    if not ok:
+        msg = t["telegram_commands_failed"] + (f" {error}" if error else "")
+        return _redirect("/settings", request, err=msg)
+    set_setting(
+        db,
+        "telegram_commands_registered_at",
+        datetime.now(timezone.utc).isoformat(),
+    )
+    _audit(db, admin.id, "telegram.commands_register", "")
+    return _redirect("/settings", request, msg=t["telegram_commands_registered"])
+
+
+@app.post("/settings/telegram-identity")
+def refresh_telegram_identity(
+    request: Request,
+    admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
+    db: Session = Depends(db_session),
+):
+    """Fetch the bot's identity (getMe) and cache it for diagnostics.
+
+    Fetched on demand (not on every settings-page render) so a slow
+    or dead Telegram never slows the page. Only the public identity
+    (id, username, first name) is stored — never the token.
+    """
+    t = t_for(get_lang(request))
+    if telegram_mod is None or not _telegram_configured(db):
+        return _redirect("/settings", request, err=t["telegram_not_configured"])
+    settings = get_settings(db)
+    info = telegram_mod.get_me(settings.get("telegram_bot_token", ""))
+    if info is None:
+        return _redirect("/settings", request, err=t["telegram_identity_failed"])
+    kept = {
+        key: info[key]
+        for key in ("id", "username", "first_name")
+        if key in info
+    }
+    kept["fetched_at"] = datetime.now(timezone.utc).isoformat()
+    set_setting(db, "telegram_bot_identity", json.dumps(kept))
+    _audit(db, admin.id, "telegram.identity_refresh", "")
+    return _redirect("/settings", request, msg=t["telegram_identity_ok"])
 
 
 @app.post("/telegram/webhook/{secret}")

@@ -76,13 +76,16 @@ def _callback(data, chat_id=ADMIN_CHAT, update_id=None, message_id=10,
 
 
 class FakeSender:
-    """Records bot replies (send / edit / answer) instead of calling Telegram."""
+    """Records bot replies (send / edit / answer / document) instead
+    of calling Telegram."""
 
-    def __init__(self, edit_ok=True):
+    def __init__(self, edit_ok=True, document_ok=True):
         self.sent: list = []  # (chat_id, text, reply_markup)
         self.edited: list = []  # (chat_id, message_id, text, reply_markup)
         self.answered: list = []  # (callback_query_id, text)
+        self.documents: list = []  # (chat_id, filename, data)
         self.edit_ok = edit_ok
+        self.document_ok = document_ok
 
     def send(self, chat_id, text, reply_markup=None):
         self.sent.append((chat_id, text, reply_markup))
@@ -95,6 +98,10 @@ class FakeSender:
     def answer(self, callback_query_id, text=None):
         self.answered.append((callback_query_id, text))
         return True
+
+    def document(self, chat_id, filename, data):
+        self.documents.append((chat_id, filename, data))
+        return self.document_ok
 
 
 def _button_data(reply_markup):
@@ -414,14 +421,14 @@ def test_start_shows_main_menu(db, sender):
     chat_id, text, markup = sender.sent[0]
     assert chat_id == ADMIN_CHAT
     assert "sparky-manager" in text
-    assert _button_data(markup) == ["m:users", "m:inb", "m:status", "m:help"]
+    assert _button_data(markup) == ["m:users", "m:inb", "m:status", "m:help", "m:svc", "m:bkp"]
 
 
 def test_start_with_bot_suffix(db, sender):
     _configure_bot(db)
     _dispatch(db, _message("/start@SparkyManagerBot"), sender)
     assert len(sender.sent) == 1
-    assert _button_data(sender.sent[0][2]) == ["m:users", "m:inb", "m:status", "m:help"]
+    assert _button_data(sender.sent[0][2]) == ["m:users", "m:inb", "m:status", "m:help", "m:svc", "m:bkp"]
 
 
 def test_help_and_unknown_command(db, sender):
@@ -431,7 +438,7 @@ def test_help_and_unknown_command(db, sender):
     _dispatch(db, _message("/bogus"), sender)
     assert len(sender.sent) == 2
     assert "ناشناخته" in sender.sent[1][1]
-    assert _button_data(sender.sent[1][2]) == ["m:users", "m:inb", "m:status", "m:help"]
+    assert _button_data(sender.sent[1][2]) == ["m:users", "m:inb", "m:status", "m:help", "m:svc", "m:bkp"]
 
 
 def test_plain_text_when_idle_shows_hint(db, sender):
@@ -471,14 +478,21 @@ def test_callback_answer_always_sent(db, sender):
     assert sender.answered == [("cb-99", None)]
 
 
-def test_malformed_callback_data_ignored(db, sender):
+def test_malformed_callback_data_answered_safely(db, sender):
+    """Malformed/unknown callbacks (upgrade Phase 3) are answered
+    with the friendly stale message + a way back to the menu — never
+    silence, never a crash, never a new message (the tapped message
+    is edited in place)."""
     _configure_bot(db)
     _dispatch(db, _callback("", callback_id="cb-1"), sender)
     _dispatch(db, _callback("zzz:1:2", callback_id="cb-2"), sender)
     _dispatch(db, _callback("u:v:not-a-number", callback_id="cb-3"), sender)
     _dispatch(db, _callback("u:v", callback_id="cb-4"), sender)
     assert sender.sent == []
-    assert sender.edited == []
+    assert len(sender.edited) == 4
+    for _chat_id, _msg_id, text, markup in sender.edited:
+        assert "دیگر معتبر نیست" in text
+        assert "m:users" in _button_data(markup)
     assert len(sender.answered) == 4
 
 

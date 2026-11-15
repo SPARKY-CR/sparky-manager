@@ -183,6 +183,9 @@ def test_save_transport_polling_calls_delete_webhook(
     authed_client, db, monkeypatch, rerender_ok
 ):
     _configure_bot(db)
+    # Start on an explicit webhook choice: the unset default is
+    # polling (upgrade Phase 3), so a switch needs a webhook start.
+    main_mod.set_setting(db, "telegram_transport", "webhook")
     called: list = []
     monkeypatch.setattr(
         telegram_mod, "delete_webhook",
@@ -237,6 +240,9 @@ def test_switch_to_polling_delete_webhook_failure_is_shown(
     authed_client, db, monkeypatch, rerender_ok
 ):
     _configure_bot(db)
+    # Start on an explicit webhook choice (the unset default is
+    # polling since upgrade Phase 3).
+    main_mod.set_setting(db, "telegram_transport", "webhook")
     monkeypatch.setattr(
         telegram_mod, "delete_webhook",
         lambda token, **kw: (False, "Bad Request: bad webhook"),
@@ -267,6 +273,9 @@ def test_polling_failure_survives_rerender_errors(
     still reaches the settings page: it is ordered first, before the
     500-char truncation in _redirect."""
     _configure_bot(db)
+    # Start on an explicit webhook choice (the unset default is
+    # polling since upgrade Phase 3).
+    main_mod.set_setting(db, "telegram_transport", "webhook")
     monkeypatch.setattr(
         telegram_mod, "delete_webhook",
         lambda token, **kw: (False, "Bad Request: bad webhook"),
@@ -369,12 +378,13 @@ def test_settings_page_shows_transport_select(authed_client, db):
     assert "روی هر پورتی کار می‌کند" in page.text
 
 
-def test_settings_page_defaults_to_webhook(authed_client, db):
+def test_settings_page_defaults_to_polling(authed_client, db):
+    # Polling is the default transport (upgrade Phase 3).
     _configure_bot(db)
     page = authed_client.get("/settings")
     assert page.status_code == 200
-    assert '<option value="webhook" selected>' in page.text
-    assert '<option value="polling" selected>' not in page.text
+    assert '<option value="polling" selected>' in page.text
+    assert '<option value="webhook" selected>' not in page.text
 
 
 # ---------------------------------------------------------------------------
@@ -386,10 +396,15 @@ def test_polling_token_gating(db, monkeypatch):
     # Unconfigured: no token.
     assert main_mod._telegram_polling_token() is None
     _configure_bot(db)
-    # Configured but transport unset (default webhook): no polling.
-    assert main_mod._telegram_polling_token() is None
+    # Configured but transport unset: the default is polling (upgrade
+    # Phase 3), so the loop polls.
+    assert main_mod._telegram_polling_token() == TOKEN
+    # An explicit webhook choice is honoured (no polling).
     main_mod.set_setting(db, "telegram_transport", "webhook")
     assert main_mod._telegram_polling_token() is None
+    # An invalid stored value falls back to the default (polling).
+    main_mod.set_setting(db, "telegram_transport", "carrier-pigeon")
+    assert main_mod._telegram_polling_token() == TOKEN
     # Polling + configured: the token.
     main_mod.set_setting(db, "telegram_transport", "polling")
     assert main_mod._telegram_polling_token() == TOKEN
@@ -514,6 +529,9 @@ def test_loop_starts_polling_after_transport_switch(
     """Switching to polling in the settings page takes effect live —
     the loop re-reads the transport every round, no restart needed."""
     _configure_bot(db)
+    # Start on an explicit webhook choice (the unset default is
+    # polling since upgrade Phase 3, so it must be set explicitly).
+    main_mod.set_setting(db, "telegram_transport", "webhook")
     polls: list = []
     monkeypatch.setattr(
         telegram_mod, "get_updates",
@@ -523,7 +541,7 @@ def test_loop_starts_polling_after_transport_switch(
     async def _run():
         task = asyncio.create_task(main_mod._telegram_polling_loop())
         await asyncio.sleep(0.2)
-        assert polls == []  # webhook (default): idle
+        assert polls == []  # webhook: idle
         main_mod.set_setting(db, "telegram_transport", "polling")
         await asyncio.sleep(0.3)
         task.cancel()

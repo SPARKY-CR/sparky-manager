@@ -6,8 +6,11 @@ inline keyboards (``reply_markup``), message edits, callback answers,
 and webhook registration / status. The polling transport (Phase 4
 follow-up) adds ``get_updates`` (long-poll) and ``delete_webhook``
 (switching to polling must remove the webhook first, or Telegram
-never delivers to ``getUpdates``). Everything still goes through one
-private ``_post`` helper, so the security rules hold everywhere.
+never delivers to ``getUpdates``). The professional upgrade (Phase 3)
+adds ``get_me`` (bot identity for diagnostics), ``set_my_commands``
+(the bot's command menu) and ``send_document`` (backup delivery).
+Everything still goes through the private ``_post`` / ``_post_files``
+helpers, so the security rules hold everywhere.
 
 Security rules (never relax these):
 - The bot token is NEVER logged, not even partially — not by this
@@ -32,6 +35,8 @@ TELEGRAM_API_BASE = "https://api.telegram.org/bot"
 DEFAULT_TIMEOUT = 10.0
 # Bot API limit for a single message.
 MAX_MESSAGE_LENGTH = 4096
+# Bot API limit for a document a bot may send (sendDocument).
+MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
 
 
 def mask_token(token: str) -> str:
@@ -87,6 +92,51 @@ def _post(
         logger.warning("telegram api call failed: bad JSON response")
         return None
     return data
+
+
+def _post_files(
+    token: str,
+    method: str,
+    data: Optional[dict[str, Any]] = None,
+    files: Optional[dict[str, Any]] = None,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> Optional[dict[str, Any]]:
+    """Like :func:`_post`, but multipart (file uploads).
+
+    Same contract: parsed JSON dict or None on any failure, never
+    raises, never logs the token. ``files`` is the httpx mapping
+    (``{"document": (filename, bytes, content_type)}``).
+    """
+    token = (token or "").strip()
+    if not token or not method:
+        return None
+    try:
+        import httpx
+    except ImportError:
+        logger.warning("telegram api call failed: httpx not installed")
+        return None
+
+    url = f"{TELEGRAM_API_BASE}{token}/{method}"
+    try:
+        response = httpx.post(
+            url, data=data or {}, files=files or {}, timeout=timeout
+        )
+    except Exception:  # noqa: BLE001 — timeout / DNS / connect errors
+        logger.warning("telegram api call failed: request error")
+        return None
+    if response.status_code != 200:
+        # Log only the status code — the body may echo the request.
+        logger.warning("telegram api call failed: HTTP %s", response.status_code)
+        return None
+    try:
+        parsed = response.json()
+    except ValueError:
+        logger.warning("telegram api call failed: bad JSON response")
+        return None
+    if not isinstance(parsed, dict):
+        logger.warning("telegram api call failed: bad JSON response")
+        return None
+    return parsed
 
 
 def _ok(data: Optional[dict[str, Any]]) -> bool:
@@ -287,10 +337,91 @@ def get_updates(
     return list(result) if isinstance(result, list) else []
 
 
+def get_me(
+    token: str,
+    *,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> Optional[dict[str, Any]]:
+    """The ``getMe`` result dict (bot id, username, first name), or
+    None on any failure. The bot's public identity — safe to show in
+    the settings diagnostics. Never raises, never logs the token."""
+    token = (token or "").strip()
+    if not token:
+        return None
+    data = _post(token, "getMe", {}, timeout=timeout)
+    if not _ok(data):
+        return None
+    result = data.get("result") if data else None
+    return result if isinstance(result, dict) else None
+
+
+def set_my_commands(
+    token: str,
+    commands: list[dict[str, str]],
+    *,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> tuple[bool, str]:
+    """Register the bot's command menu (``setMyCommands``).
+
+    ``commands`` is a list of ``{"command": ..., "description": ...}``
+    dicts (see ``app.bot.BOT_COMMANDS``). Same contract as
+    ``set_webhook``: returns ``(ok, error_description)`` ("" on
+    success or on a transport failure), never raises, never logs the
+    token. An empty command list is refused — clearing the menu is
+    never what a caller wants here.
+    """
+    token = (token or "").strip()
+    if not token or not commands:
+        return False, ""
+    data = _post(
+        token, "setMyCommands", {"commands": list(commands)}, timeout=timeout
+    )
+    if data is None:
+        return False, ""
+    if data.get("ok"):
+        return True, ""
+    description = data.get("description")
+    return False, str(description) if description else ""
+
+
+def send_document(
+    token: str,
+    chat_id: str,
+    filename: str,
+    data: bytes,
+    *,
+    timeout: float = 30.0,
+) -> bool:
+    """Send ``data`` as a document to ``chat_id`` (multipart upload).
+
+    True on success. Files over the Bot API 50 MB cap are refused
+    up front (False) instead of uploading a doomed request — the
+    caller reports that honestly (the web settings page can still
+    download the same file). Never raises, never logs the token.
+    The 30 s timeout covers a multi-MB upload on a slow link.
+    """
+    token = (token or "").strip()
+    chat_id = (chat_id or "").strip()
+    filename = (filename or "").strip()
+    if not token or not chat_id or not filename or not data:
+        return False
+    if len(data) > MAX_DOCUMENT_BYTES:
+        return False
+    result = _post_files(
+        token,
+        "sendDocument",
+        data={"chat_id": chat_id},
+        files={"document": (filename, data, "application/zip")},
+        timeout=timeout,
+    )
+    return _ok(result)
+
+
 __all__ = [
     "TELEGRAM_API_BASE",
     "DEFAULT_TIMEOUT",
     "MAX_MESSAGE_LENGTH",
+    "MAX_DOCUMENT_BYTES",
     "mask_token",
     "send_message",
     "edit_message_text",
@@ -299,4 +430,7 @@ __all__ = [
     "get_webhook_info",
     "delete_webhook",
     "get_updates",
+    "get_me",
+    "set_my_commands",
+    "send_document",
 ]

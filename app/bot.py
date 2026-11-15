@@ -39,12 +39,21 @@ State (in-memory only — no DB schema change)
 - ``_seen_updates``: processed update ids, pruned after an hour.
 
 Callback data is ``family:action:args`` (``m:`` menu, ``u:`` user,
-``i:`` inbound, ``c:`` create flow) — short on purpose, well under
-Telegram's 64-byte callback-data limit.
+``i:`` inbound, ``c:`` create flow, ``s:`` services, ``b:`` backup)
+— short on purpose, well under Telegram's 64-byte callback-data
+limit.
+
+Professional upgrade (Phase 3) adds: the ``/menu`` / ``/status`` /
+``/users`` / ``/inbounds`` commands (registered on Telegram via
+``setMyCommands`` — see :data:`BOT_COMMANDS`), user search + guided
+user edit, a guided inbound-create flow + inbound delete, service
+restart, backup delivery as a document, and a friendly answer for
+stale/invalid callbacks instead of silence.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import secrets
 import time
@@ -67,6 +76,54 @@ except ImportError:  # pragma: no cover - sibling module missing
 # follow (the panel language lives in a request cookie), and the
 # admin is Persian-speaking. EN keys exist for every bot string.
 BOT_LANGUAGE = "fa"
+
+# The command menu registered on Telegram via setMyCommands (see
+# app.main.register_telegram_commands + save_settings). Descriptions
+# are Persian — the bot is Persian-first. Every command here is
+# implemented in _on_command; never add one without implementing it.
+BOT_COMMANDS = (
+    {"command": "start", "description": "منوی اصلی"},
+    {"command": "help", "description": "راهنما"},
+    {"command": "menu", "description": "منوی اصلی"},
+    {"command": "status", "description": "وضعیت سرور و ترافیک"},
+    {"command": "users", "description": "فهرست کاربران"},
+    {"command": "inbounds", "description": "فهرست اینباندها"},
+    {"command": "cancel", "description": "لغو عملیات در حال انجام"},
+)
+
+# Protocols the bot's guided inbound-create flow offers (the ones a
+# chat flow can configure with sensible defaults — no TLS cert
+# uploads, no per-protocol option maze). Core is derived: wireguard
+# is native, the rest are Xray.
+BOT_CREATE_PROTOCOLS = ("vless", "vmess", "trojan", "shadowsocks", "wireguard")
+# Protocols where an SNI prompt is meaningful (TLS / Reality).
+BOT_SNI_PROTOCOLS = ("vless", "vmess", "trojan")
+
+# Service key -> display name (shared by the status view and the
+# services view) and key -> systemd unit the panel may restart.
+# AmneziaWG is deliberately absent from the restart map: the
+# installer's sudoers block grants no `systemctl restart
+# awg-quick@awg0` (only `start`), so offering the button would
+# always fail — the services view says so instead. The panel itself
+# (sparky-manager) is also absent: restarting the panel from inside
+# the bot would kill the process before it could report the result.
+_SERVICE_NAMES = {
+    "xray": "Xray",
+    "sing-box": "sing-box",
+    "wireguard": "WireGuard",
+    "amneziawg": "AmneziaWG",
+    "openvpn": "OpenVPN",
+    "openconnect": "OpenConnect",
+    "ikev2": "IKEv2",
+}
+_SERVICE_RESTART_UNITS = {
+    "xray": "xray",
+    "sing-box": "sing-box",
+    "wireguard": "wg-quick@wg0",
+    "openvpn": "openvpn-server@sparky-manager",
+    "openconnect": "ocserv",
+    "ikev2": "strongswan",
+}
 
 # Guided-flow state expires after 10 minutes of inactivity.
 CONVERSATION_TIMEOUT = 600.0
@@ -175,6 +232,51 @@ BOT_STRING_KEYS = (
     "bot_rerender_failed",
     "bot_action_failed",
     "bot_view_user",
+    # Upgrade Phase 3: search, edit, inbound create/delete,
+    # services, backup, stale callbacks.
+    "bot_menu_services",
+    "bot_menu_backup",
+    "bot_search",
+    "bot_search_prompt",
+    "bot_search_title",
+    "bot_search_no_match",
+    "bot_edit",
+    "bot_edit_pick",
+    "bot_edit_name",
+    "bot_edit_limit",
+    "bot_edit_expiry",
+    "bot_edit_name_prompt",
+    "bot_edit_limit_prompt",
+    "bot_edit_expiry_prompt",
+    "bot_edited",
+    "bot_new_inbound",
+    "bot_create_inbound_protocol",
+    "bot_create_inbound_port",
+    "bot_create_inbound_port_invalid",
+    "bot_create_inbound_port_in_use",
+    "bot_create_inbound_port_reserved",
+    "bot_create_inbound_sni",
+    "bot_create_inbound_done",
+    "bot_create_inbound_failed",
+    "bot_inbound_delete_confirm",
+    "bot_inbound_deleted",
+    "bot_services_title",
+    "bot_service_running",
+    "bot_service_stopped",
+    "bot_service_unknown",
+    "bot_service_restart",
+    "bot_service_restart_confirm",
+    "bot_service_restarted",
+    "bot_service_restart_failed",
+    "bot_service_restart_unverified",
+    "bot_services_awg_note",
+    "bot_backup_title",
+    "bot_backup_hint",
+    "bot_backup_send",
+    "bot_backup_sent",
+    "bot_backup_failed",
+    "bot_backup_too_large",
+    "bot_stale_callback",
 )
 
 # ---------------------------------------------------------------------------
@@ -268,6 +370,12 @@ class TelegramSender:
             self.token, callback_query_id, text=text
         )
 
+    def document(self, chat_id: int, filename: str, data: bytes) -> bool:
+        """Send a file as a document (backup delivery)."""
+        return telegram_mod.send_document(
+            self.token, str(chat_id), filename, data
+        )
+
 
 @dataclass
 class _Ctx:
@@ -301,6 +409,10 @@ def _main_menu_kb(t: dict[str, str]) -> dict[str, Any]:
         [
             [(t["bot_menu_users"], "m:users"), (t["bot_menu_inbounds"], "m:inb")],
             [(t["bot_menu_status"], "m:status"), (t["bot_menu_help"], "m:help")],
+            [
+                (t["bot_menu_services"], "m:svc"),
+                (t["bot_menu_backup"], "m:bkp"),
+            ],
         ]
     )
 
@@ -331,6 +443,39 @@ def _parse_int(raw: Any) -> Optional[int]:
         return int(str(raw))
     except (TypeError, ValueError):
         return None
+
+
+def _parse_limit_gb(raw: str) -> Optional[int]:
+    """GB text -> traffic-limit bytes, or None for unlimited.
+
+    Empty / 0 means unlimited (same as the web form's empty limit).
+    Raises ValueError for anything else that is not a positive
+    number. Shared by the create flow and the edit flow so the two
+    can never disagree.
+    """
+    raw = raw.strip().replace(",", ".")
+    if raw in ("", "0", "0.0"):
+        return None
+    gb = float(raw)
+    if gb <= 0:
+        raise ValueError
+    return int(gb * 1024**3)
+
+
+def _parse_expiry_days(raw: str, now: datetime) -> Optional[datetime]:
+    """Days text -> expiry datetime, or None for never.
+
+    Empty / 0 means no expiry (same as the web form's empty date).
+    Raises ValueError for anything else that is not a positive
+    integer. Shared by the create flow and the edit flow.
+    """
+    raw = raw.strip()
+    if raw in ("", "0"):
+        return None
+    days = int(raw)
+    if days <= 0:
+        raise ValueError
+    return now + timedelta(days=days)
 
 
 def _split_text(text: str, limit: Optional[int] = None) -> list[str]:
@@ -540,9 +685,12 @@ def _dispatch(db: Any, update: Any, sender: Any, *, now: Any = None) -> None:
 
 
 def _on_command(ctx: _Ctx, text: str) -> None:
-    """``/start`` / ``/help`` / ``/cancel`` (a ``@botname`` suffix is
-    stripped, so the commands work in groups too — though only the
-    admin chat ever reaches this code)."""
+    """``/start`` / ``/help`` / ``/menu`` / ``/status`` / ``/users`` /
+    ``/inbounds`` / ``/cancel`` (a ``@botname`` suffix is stripped,
+    so the commands work in groups too — though only the admin chat
+    ever reaches this code; the dispatcher checked the chat id).
+    Every command here is in BOT_COMMANDS (the setMyCommands menu).
+    """
     t = ctx.t
     command = text.split()[0].split("@")[0].lower()
     if command == "/cancel":
@@ -550,10 +698,16 @@ def _on_command(ctx: _Ctx, text: str) -> None:
         ctx.sender.send(ctx.chat_id, t["bot_cancelled"], reply_markup=_main_menu_kb(t))
         return
     _end_conversation(ctx.chat_id)  # any other command abandons the flow
-    if command == "/start":
+    if command in ("/start", "/menu"):
         ctx.sender.send(ctx.chat_id, t["bot_welcome"], reply_markup=_main_menu_kb(t))
     elif command == "/help":
         ctx.sender.send(ctx.chat_id, t["bot_help"], reply_markup=_main_menu_kb(t))
+    elif command == "/status":
+        _show_status(ctx, None)
+    elif command == "/users":
+        _show_users(ctx, None, page=0)
+    elif command == "/inbounds":
+        _show_inbounds(ctx, None)
     else:
         ctx.sender.send(
             ctx.chat_id, t["bot_unknown_command"], reply_markup=_main_menu_kb(t)
@@ -577,6 +731,21 @@ def _on_text(ctx: _Ctx, text: str) -> None:
         _flow_limit(ctx, conv, text)
     elif step == "expiry":
         _flow_expiry(ctx, conv, text)
+    elif step == "search":
+        _flow_search(ctx, conv, text)
+    elif step == "search_results":
+        # The results are on screen; new text starts a fresh search.
+        _flow_search(ctx, conv, text)
+    elif step == "edit_name":
+        _flow_edit_name(ctx, conv, text)
+    elif step == "edit_limit":
+        _flow_edit_limit(ctx, conv, text)
+    elif step == "edit_expiry":
+        _flow_edit_expiry(ctx, conv, text)
+    elif step == "inb_port":
+        _flow_inbound_port(ctx, conv, text)
+    elif step == "inb_sni":
+        _flow_inbound_sni(ctx, conv, text)
     else:  # unknown step — defensive; drop the flow
         _end_conversation(ctx.chat_id)
         ctx.sender.send(
@@ -661,18 +830,11 @@ def _flow_name(ctx: _Ctx, conv: dict, text: str) -> None:
 def _flow_limit(ctx: _Ctx, conv: dict, text: str) -> None:
     """Create step 3: traffic limit in GB (0 / empty = unlimited)."""
     t = ctx.t
-    raw = text.strip().replace(",", ".")
-    if raw in ("", "0", "0.0"):
-        conv["data"]["limit_bytes"] = None
-    else:
-        try:
-            gb = float(raw)
-            if gb <= 0:
-                raise ValueError
-            conv["data"]["limit_bytes"] = int(gb * 1024**3)
-        except ValueError:
-            ctx.sender.send(ctx.chat_id, t["bot_create_limit_invalid"])
-            return
+    try:
+        conv["data"]["limit_bytes"] = _parse_limit_gb(text)
+    except ValueError:
+        ctx.sender.send(ctx.chat_id, t["bot_create_limit_invalid"])
+        return
     conv["step"] = "expiry"
     conv["expires"] = time.monotonic() + CONVERSATION_TIMEOUT
     ctx.sender.send(ctx.chat_id, t["bot_create_expiry"])
@@ -681,18 +843,11 @@ def _flow_limit(ctx: _Ctx, conv: dict, text: str) -> None:
 def _flow_expiry(ctx: _Ctx, conv: dict, text: str) -> None:
     """Create step 4: expiry in days (0 / empty = never), then create."""
     t = ctx.t
-    raw = text.strip()
-    if raw in ("", "0"):
-        expires_at = None
-    else:
-        try:
-            days = int(raw)
-            if days <= 0:
-                raise ValueError
-            expires_at = ctx.now + timedelta(days=days)
-        except ValueError:
-            ctx.sender.send(ctx.chat_id, t["bot_create_expiry_invalid"])
-            return
+    try:
+        expires_at = _parse_expiry_days(text, ctx.now)
+    except ValueError:
+        ctx.sender.send(ctx.chat_id, t["bot_create_expiry_invalid"])
+        return
     name = conv["data"]["name"]
     selected = set(conv["data"].get("selected") or set())
     _end_conversation(ctx.chat_id)
@@ -782,6 +937,7 @@ def _on_create_callback(ctx: _Ctx, message_id: Optional[int], parts: list) -> Op
             _kb([[(t["bot_cancel"], "c:cancel")]]),
         )
         return None
+    _show_stale(ctx, message_id)
     return None
 
 
@@ -790,24 +946,53 @@ def _on_create_callback(ctx: _Ctx, message_id: Optional[int], parts: list) -> Op
 # ---------------------------------------------------------------------------
 
 
+def _show_stale(ctx: _Ctx, message_id: Optional[int]) -> None:
+    """A friendly answer for an expired/invalid button tap: the
+    message says the button is dead and the main menu is one tap
+    away. Never a crash, never a stack trace, never silence."""
+    _show(
+        ctx,
+        message_id,
+        ctx.t["bot_stale_callback"],
+        _main_menu_kb(ctx.t),
+    )
+
+
 def _on_callback(ctx: _Ctx, message_id: Optional[int], data: str) -> Optional[str]:
     """Route one button tap. Returns a toast string (or None) for the
     dispatcher to answer with."""
     parts = (data or "").split(":")
     if not parts or not parts[0]:
+        _show_stale(ctx, message_id)
         return None
     family = parts[0]
     if family == "c":
         return _on_create_callback(ctx, message_id, parts)
-    # Any other tap abandons an in-progress create flow — the admin
-    # clearly moved on to something else.
-    _end_conversation(ctx.chat_id)
+    # Any other tap abandons an in-progress flow — the admin clearly
+    # moved on to something else. Exception: paging through search
+    # results (u:list) continues the search flow, whose query lives
+    # in the conversation state — ending it would lose the query.
+    conv = _get_conversation(ctx.chat_id)
+    continues_search = (
+        conv is not None
+        and conv["step"] == "search_results"
+        and family == "u"
+        and len(parts) > 1
+        and parts[1] == "list"
+    )
+    if not continues_search:
+        _end_conversation(ctx.chat_id)
     if family == "m":
         return _on_menu_callback(ctx, message_id, parts)
     if family == "u":
         return _on_user_callback(ctx, message_id, parts)
     if family == "i":
         return _on_inbound_callback(ctx, message_id, parts)
+    if family == "s":
+        return _on_service_callback(ctx, message_id, parts)
+    if family == "b":
+        return _on_backup_callback(ctx, message_id, parts)
+    _show_stale(ctx, message_id)
     return None
 
 
@@ -829,6 +1014,12 @@ def _on_menu_callback(ctx: _Ctx, message_id: Optional[int], parts: list) -> None
         _show_inbounds(ctx, message_id)
     elif action == "status":
         _show_status(ctx, message_id)
+    elif action == "svc":
+        _show_services(ctx, message_id)
+    elif action == "bkp":
+        _show_backup(ctx, message_id)
+    else:
+        _show_stale(ctx, message_id)
     return None
 
 
@@ -838,16 +1029,41 @@ def _on_menu_callback(ctx: _Ctx, message_id: Optional[int], parts: list) -> None
 
 
 def _show_users(
-    ctx: _Ctx, message_id: Optional[int], page: int, note: Optional[str] = None
+    ctx: _Ctx,
+    message_id: Optional[int],
+    page: int,
+    note: Optional[str] = None,
+    query: Optional[str] = None,
 ) -> None:
+    """The user list, optionally filtered by a search query (name or
+    note, case-insensitive substring). The query lives in the
+    conversation state while paging (see _on_callback), never in the
+    callback data — a Persian query would not fit Telegram's 64-byte
+    callback-data limit."""
     t = ctx.t
     users = ctx.db.query(User).order_by(User.created_at.desc()).all()
+    if query:
+        needle = query.lower()
+        users = [
+            u
+            for u in users
+            if needle in (u.name or "").lower()
+            or needle in (u.note or "").lower()
+        ]
     pages = max(1, (len(users) + USERS_PAGE_SIZE - 1) // USERS_PAGE_SIZE)
     page = max(0, min(page, pages - 1))
     rows = users[page * USERS_PAGE_SIZE : (page + 1) * USERS_PAGE_SIZE]
-    lines = [t["bot_users_title"].format(page=page + 1, pages=pages), ""]
+    if query:
+        lines = [
+            t["bot_search_title"].format(
+                query=query, page=page + 1, pages=pages
+            ),
+            "",
+        ]
+    else:
+        lines = [t["bot_users_title"].format(page=page + 1, pages=pages), ""]
     if not users:
-        lines.append(t["bot_no_users"])
+        lines.append(t["bot_search_no_match"] if query else t["bot_no_users"])
     kb_rows: list[list[tuple[str, str]]] = []
     for user in rows:
         emoji, _label = _user_state(ctx, user)
@@ -873,12 +1089,38 @@ def _show_users(
         nav.append((t["bot_next"], f"u:list:{page + 1}"))
     if nav:
         kb_rows.append(nav)
-    kb_rows.append([(t["bot_new_user"], "u:new")])
+    kb_rows.append([(t["bot_search"], "u:search"), (t["bot_new_user"], "u:new")])
     kb_rows.append([(t["bot_back_main"], "m:main")])
     text = "\n".join(lines)
     if note:
         text += "\n\n" + note
     _show(ctx, message_id, text, _kb(kb_rows))
+
+
+def _start_search(ctx: _Ctx, message_id: Optional[int]) -> None:
+    """First step of the user search: ask for the query text."""
+    _start_conversation(ctx.chat_id, "search", {})
+    _show(
+        ctx,
+        message_id,
+        ctx.t["bot_search_prompt"],
+        _kb([[(ctx.t["bot_cancel"], "c:cancel")]]),
+    )
+
+
+def _flow_search(ctx: _Ctx, conv: dict, text: str) -> None:
+    """Search step: filter the user list by the query (an empty
+    query clears the filter). The step becomes ``search_results``
+    so paging keeps the query (see _on_callback)."""
+    query = text.strip()
+    if not query:
+        _end_conversation(ctx.chat_id)
+        _show_users(ctx, None, page=0)
+        return
+    conv["step"] = "search_results"
+    conv["data"]["query"] = query
+    conv["expires"] = time.monotonic() + CONVERSATION_TIMEOUT
+    _show_users(ctx, None, page=0, query=query)
 
 
 def _show_user(
@@ -933,10 +1175,164 @@ def _show_user(
             (t["bot_extend"], f"u:ext:{user.id}"),
             (t["bot_reset_traffic"], f"u:rst:{user.id}"),
         ],
+        [(t["bot_edit"], f"u:edit:{user.id}")],
         [(t["bot_delete"], f"u:del:{user.id}")],
         [(t["bot_back_users"], "u:list:0")],
     ]
     _show(ctx, message_id, text, _kb(kb_rows))
+
+
+# ---------------------------------------------------------------------------
+# User edit (guided: pick a field, then send the new value)
+# ---------------------------------------------------------------------------
+
+
+def _show_edit_menu(ctx: _Ctx, message_id: Optional[int], user_id: int) -> None:
+    """Pick which field to edit (name / traffic limit / expiry)."""
+    t = ctx.t
+    user = ctx.db.get(User, user_id)
+    if user is None:
+        _show(
+            ctx,
+            message_id,
+            t["bot_user_not_found"],
+            _kb([[(t["bot_back_users"], "u:list:0")]]),
+        )
+        return
+    _show(
+        ctx,
+        message_id,
+        t["bot_edit_pick"],
+        _kb(
+            [
+                [(t["bot_edit_name"], f"u:edit:{user_id}:name")],
+                [(t["bot_edit_limit"], f"u:edit:{user_id}:limit")],
+                [(t["bot_edit_expiry"], f"u:edit:{user_id}:expiry")],
+                [(t["bot_back"], f"u:v:{user_id}")],
+            ]
+        ),
+    )
+
+
+def _start_edit(
+    ctx: _Ctx, message_id: Optional[int], user_id: int, field: str
+) -> None:
+    """Start one edit step (the new value arrives as free text)."""
+    t = ctx.t
+    user = ctx.db.get(User, user_id)
+    if user is None:
+        _show(
+            ctx,
+            message_id,
+            t["bot_user_not_found"],
+            _kb([[(t["bot_back_users"], "u:list:0")]]),
+        )
+        return
+    prompts = {
+        "name": t["bot_edit_name_prompt"].format(name=user.name),
+        "limit": t["bot_edit_limit_prompt"],
+        "expiry": t["bot_edit_expiry_prompt"],
+    }
+    prompt = prompts.get(field)
+    if prompt is None:
+        _show_stale(ctx, message_id)
+        return
+    _start_conversation(ctx.chat_id, f"edit_{field}", {"user_id": user_id})
+    _show(
+        ctx,
+        message_id,
+        prompt,
+        _kb([[(t["bot_cancel"], "c:cancel")]]),
+    )
+
+
+def _apply_user_edit(ctx: _Ctx, conv: dict) -> Optional[Any]:
+    """The user being edited (None when it vanished mid-flow)."""
+    user_id = conv["data"].get("user_id")
+    if not isinstance(user_id, int):
+        return None
+    return ctx.db.get(User, user_id)
+
+
+def _finish_user_edit(ctx: _Ctx, user: Any) -> None:
+    """Commit an edit: audit + re-render + show the user again."""
+    t = ctx.t
+    ctx.db.commit()
+    _audit(ctx, "user.update", f"{user.name} [telegram]")
+    errors = _rerender(ctx)
+    note = _rerender_note(ctx, errors)
+    text = t["bot_edited"]
+    if note:
+        text += "\n\n" + note
+    _end_conversation(ctx.chat_id)
+    _show_user(ctx, None, user.id, note=text)
+
+
+def _flow_edit_name(ctx: _Ctx, conv: dict, text: str) -> None:
+    """Edit step: rename (same rules as the web edit route)."""
+    t = ctx.t
+    user = _apply_user_edit(ctx, conv)
+    if user is None:
+        _end_conversation(ctx.chat_id)
+        ctx.sender.send(
+            ctx.chat_id, t["bot_user_not_found"], reply_markup=_main_menu_kb(t)
+        )
+        return
+    name = text.strip()
+    if not ctx.panel.NAME_RE.match(name):
+        ctx.sender.send(ctx.chat_id, t["bot_create_name_invalid"])
+        return
+    clash = (
+        ctx.db.query(User)
+        .filter(User.name == name, User.id != user.id)
+        .first()
+    )
+    if clash is not None:
+        ctx.sender.send(ctx.chat_id, t["bot_create_name_exists"])
+        return
+    user.name = name
+    _finish_user_edit(ctx, user)
+
+
+def _flow_edit_limit(ctx: _Ctx, conv: dict, text: str) -> None:
+    """Edit step: traffic limit in GB (0 / empty = unlimited)."""
+    t = ctx.t
+    user = _apply_user_edit(ctx, conv)
+    if user is None:
+        _end_conversation(ctx.chat_id)
+        ctx.sender.send(
+            ctx.chat_id, t["bot_user_not_found"], reply_markup=_main_menu_kb(t)
+        )
+        return
+    try:
+        user.traffic_limit_bytes = _parse_limit_gb(text)
+    except ValueError:
+        ctx.sender.send(ctx.chat_id, t["bot_create_limit_invalid"])
+        return
+    _finish_user_edit(ctx, user)
+
+
+def _flow_edit_expiry(ctx: _Ctx, conv: dict, text: str) -> None:
+    """Edit step: expiry in days from today (0 / empty = never).
+
+    The web edit route takes a calendar date; the bot takes days,
+    like its create flow — the validation (a valid future expiry or
+    none) is the same, only the chat-friendly input differs.
+    """
+    t = ctx.t
+    user = _apply_user_edit(ctx, conv)
+    if user is None:
+        _end_conversation(ctx.chat_id)
+        ctx.sender.send(
+            ctx.chat_id, t["bot_user_not_found"], reply_markup=_main_menu_kb(t)
+        )
+        return
+    try:
+        user.expires_at = _parse_expiry_days(text, ctx.now)
+    except ValueError:
+        ctx.sender.send(ctx.chat_id, t["bot_create_expiry_invalid"])
+        return
+    _finish_user_edit(ctx, user)
 
 
 def _send_links(ctx: _Ctx, message_id: Optional[int], user_id: int) -> None:
@@ -1176,22 +1572,38 @@ def _delete_user(ctx: _Ctx, message_id: Optional[int], user_id: int) -> Optional
 
 def _on_user_callback(ctx: _Ctx, message_id: Optional[int], parts: list) -> Optional[str]:
     if len(parts) < 2:
+        _show_stale(ctx, message_id)
         return None
     action = parts[1]
     if action == "list":
         page = _parse_int(parts[2]) if len(parts) > 2 else 0
-        _show_users(ctx, message_id, page or 0)
+        # Paging through search results keeps the query (it lives in
+        # the conversation state — see _on_callback).
+        query = None
+        conv = _get_conversation(ctx.chat_id)
+        if conv is not None and conv["step"] == "search_results":
+            query = conv["data"].get("query")
+        _show_users(ctx, message_id, page or 0, query=query)
         return None
     if action == "new":
         _start_create(ctx, message_id)
         return None
+    if action == "search":
+        _start_search(ctx, message_id)
+        return None
     user_id = _parse_int(parts[2]) if len(parts) > 2 else None
     if user_id is None:
+        _show_stale(ctx, message_id)
         return None
     if action == "v":
         _show_user(ctx, message_id, user_id)
     elif action == "links":
         _send_links(ctx, message_id, user_id)
+    elif action == "edit":
+        if len(parts) > 3:
+            _start_edit(ctx, message_id, user_id, parts[3])
+        else:
+            _show_edit_menu(ctx, message_id, user_id)
     elif action == "frz":
         return _freeze_user(ctx, message_id, user_id, True)
     elif action == "unfrz":
@@ -1211,6 +1623,8 @@ def _on_user_callback(ctx: _Ctx, message_id: Optional[int], parts: list) -> Opti
         if len(parts) > 3 and parts[3] == "ok":
             return _delete_user(ctx, message_id, user_id)
         _show_delete_confirm(ctx, message_id, user_id)
+    else:
+        _show_stale(ctx, message_id)
     return None
 
 
@@ -1219,7 +1633,9 @@ def _on_user_callback(ctx: _Ctx, message_id: Optional[int], parts: list) -> Opti
 # ---------------------------------------------------------------------------
 
 
-def _show_inbounds(ctx: _Ctx, message_id: Optional[int]) -> None:
+def _show_inbounds(
+    ctx: _Ctx, message_id: Optional[int], note: Optional[str] = None
+) -> None:
     t = ctx.t
     inbounds = ctx.db.query(Inbound).order_by(Inbound.port, Inbound.tag).all()
     lines = [t["bot_inbounds_title"], ""]
@@ -1236,8 +1652,223 @@ def _show_inbounds(ctx: _Ctx, message_id: Optional[int]) -> None:
             f"({count} {t['clients']})"
         )
         kb_rows.append([(inbound.tag, f"i:v:{inbound.id}")])
+    kb_rows.append([(t["bot_new_inbound"], "i:new")])
     kb_rows.append([(t["bot_back_main"], "m:main")])
-    _show(ctx, message_id, "\n".join(lines), _kb(kb_rows))
+    text = "\n".join(lines)
+    if note:
+        text += "\n\n" + note
+    _show(ctx, message_id, text, _kb(kb_rows))
+
+
+# ---------------------------------------------------------------------------
+# Inbound create (guided: protocol -> port -> SNI) + delete
+# ---------------------------------------------------------------------------
+
+
+def _show_inbound_protocol_picker(ctx: _Ctx, message_id: Optional[int]) -> None:
+    """First step of the inbound-create flow: pick a protocol."""
+    t = ctx.t
+    rows = [[(protocol.upper(), f"i:new:{protocol}")] for protocol in BOT_CREATE_PROTOCOLS]
+    rows.append([(t["bot_cancel"], "c:cancel")])
+    _show(ctx, message_id, t["bot_create_inbound_protocol"], _kb(rows))
+
+
+def _start_inbound_create(ctx: _Ctx, message_id: Optional[int], protocol: str) -> None:
+    """Second step: ask for the port (empty = automatic)."""
+    if protocol not in BOT_CREATE_PROTOCOLS:
+        _show_stale(ctx, message_id)
+        return
+    _start_conversation(ctx.chat_id, "inb_port", {"protocol": protocol})
+    _show(
+        ctx,
+        message_id,
+        ctx.t["bot_create_inbound_port"],
+        _kb([[(ctx.t["bot_cancel"], "c:cancel")]]),
+    )
+
+
+def _flow_inbound_port(ctx: _Ctx, conv: dict, text: str) -> None:
+    """Inbound-create step 2: the port (empty = auto-suggested).
+
+    Validation is the shared ``_check_new_inbound`` helper (same
+    checks as the web create route: range, reserved ports, clash).
+    """
+    t = ctx.t
+    protocol = conv["data"]["protocol"]
+    transport = ctx.panel._stream_transport({"transport": "tcp"}, protocol)
+    raw = text.strip()
+    if not raw:
+        try:
+            port = ctx.panel.suggest_protocol_port(ctx.db, protocol, transport)
+        except ValueError:
+            ctx.sender.send(ctx.chat_id, t["bot_create_inbound_port_invalid"])
+            return
+    else:
+        port = _parse_int(raw)
+        if port is None:
+            ctx.sender.send(ctx.chat_id, t["bot_create_inbound_port_invalid"])
+            return
+    # The tag is auto-generated at create time (unique by
+    # construction), so the check runs against a placeholder tag —
+    # only the port errors can fire here.
+    check = ctx.panel._check_new_inbound(
+        ctx.db, protocol, port, f"__bot_check_{port}", transport
+    )
+    if check == "invalid_port":
+        ctx.sender.send(ctx.chat_id, t["bot_create_inbound_port_invalid"])
+        return
+    if check == "port_reserved":
+        ctx.sender.send(ctx.chat_id, t["bot_create_inbound_port_reserved"])
+        return
+    if check == "port_in_use":
+        ctx.sender.send(ctx.chat_id, t["bot_create_inbound_port_in_use"])
+        return
+    conv["data"]["port"] = port
+    conv["expires"] = time.monotonic() + CONVERSATION_TIMEOUT
+    if protocol in BOT_SNI_PROTOCOLS:
+        settings = ctx.panel.get_settings(ctx.db)
+        default_sni = (settings.get("reality_sni") or "").strip() or "www.microsoft.com"
+        conv["data"]["default_sni"] = default_sni
+        conv["step"] = "inb_sni"
+        ctx.sender.send(
+            ctx.chat_id,
+            t["bot_create_inbound_sni"].format(protocol=protocol.upper(), sni=default_sni),
+        )
+        return
+    _create_inbound_from_flow(ctx, conv)
+
+
+def _flow_inbound_sni(ctx: _Ctx, conv: dict, text: str) -> None:
+    """Inbound-create step 3: the SNI (empty = the panel default)."""
+    sni = text.strip() or conv["data"].get("default_sni") or "www.microsoft.com"
+    conv["data"]["sni"] = sni
+    _create_inbound_from_flow(ctx, conv)
+
+
+def _create_inbound_from_flow(ctx: _Ctx, conv: dict) -> None:
+    """Create the inbound (same stream shape as the web create
+    route: auto tag, fresh Reality keypair for VLESS, WG subnet)."""
+    t = ctx.t
+    protocol = conv["data"]["protocol"]
+    port = conv["data"]["port"]
+    core = "wireguard" if protocol == "wireguard" else "xray"
+    transport = ctx.panel._stream_transport({"transport": "tcp"}, protocol)
+    tag = ctx.panel.suggest_inbound_tag(ctx.db, protocol, port)
+    # Re-validate at create time: another admin may have taken the
+    # port while this flow was running.
+    check = ctx.panel._check_new_inbound(ctx.db, protocol, port, tag, transport)
+    if check is not None:
+        _end_conversation(ctx.chat_id)
+        ctx.sender.send(
+            ctx.chat_id, t["bot_create_inbound_failed"], reply_markup=_main_menu_kb(t)
+        )
+        return
+    stream: dict[str, Any] = {"network": "tcp", "transport": transport}
+    if protocol == "wireguard":
+        stream["subnet"] = "10.8.0.0/24"
+    sni = conv["data"].get("sni")
+    if sni and core == "xray":
+        reality_block: dict[str, Any] = {"sni": sni, "dest": f"{sni}:443"}
+        if protocol == "vless":
+            pair = ctx.panel._new_reality_keypair()
+            if pair:
+                reality_block["private_key"] = pair["private_key"]
+                reality_block["public_key"] = pair["public_key"]
+                reality_block["short_id"] = secrets.token_hex(4)
+        stream["reality"] = reality_block
+        stream["tls"] = {"sni": sni}
+        stream["security"] = "reality" if protocol == "vless" else "tls"
+    _end_conversation(ctx.chat_id)
+    try:
+        inbound = Inbound(
+            tag=tag,
+            core=core,
+            protocol=protocol,
+            port=port,
+            enabled=True,
+            remark=None,
+            stream_json=json.dumps(stream),
+        )
+        ctx.db.add(inbound)
+        ctx.db.commit()
+    except Exception:  # noqa: BLE001 — a failed create must say so
+        ctx.db.rollback()
+        logger.exception("telegram bot inbound creation failed")
+        ctx.sender.send(
+            ctx.chat_id, t["bot_create_inbound_failed"], reply_markup=_main_menu_kb(t)
+        )
+        return
+    _audit(ctx, "inbound.create", f"{tag} {protocol}:{port} [telegram]")
+    errors = _rerender(ctx)
+    text_out = t["bot_create_inbound_done"].format(
+        tag=tag, protocol=protocol, port=port
+    )
+    note = _rerender_note(ctx, errors)
+    if note:
+        text_out += "\n\n" + note
+    ctx.sender.send(
+        ctx.chat_id,
+        text_out,
+        reply_markup=_kb(
+            [
+                [(t["bot_back_inbounds"], "i:list")],
+            ]
+        ),
+    )
+
+
+def _show_inbound_delete_confirm(
+    ctx: _Ctx, message_id: Optional[int], inbound_id: int
+) -> None:
+    """Delete confirmation (deleting an inbound deletes its clients
+    too — same as the web delete route)."""
+    t = ctx.t
+    inbound = ctx.db.get(Inbound, inbound_id)
+    if inbound is None:
+        _show(
+            ctx,
+            message_id,
+            t["bot_inbound_not_found"],
+            _kb([[(t["bot_back_inbounds"], "i:list")]]),
+        )
+        return
+    _show(
+        ctx,
+        message_id,
+        t["bot_inbound_delete_confirm"].format(tag=inbound.tag),
+        _kb(
+            [
+                [
+                    (t["bot_confirm_yes"], f"i:del:{inbound_id}:ok"),
+                    (t["bot_confirm_no"], f"i:v:{inbound_id}"),
+                ]
+            ]
+        ),
+    )
+
+
+def _delete_inbound(
+    ctx: _Ctx, message_id: Optional[int], inbound_id: int
+) -> Optional[str]:
+    """Delete the inbound and its clients (same as the web route)."""
+    t = ctx.t
+    inbound = ctx.db.get(Inbound, inbound_id)
+    if inbound is None:
+        _show(
+            ctx,
+            message_id,
+            t["bot_inbound_not_found"],
+            _kb([[(t["bot_back_inbounds"], "i:list")]]),
+        )
+        return None
+    tag = inbound.tag
+    ctx.db.query(Client).filter(Client.inbound_id == inbound.id).delete()
+    ctx.db.delete(inbound)
+    ctx.db.commit()
+    _audit(ctx, "inbound.delete", f"{tag} [telegram]")
+    errors = _rerender(ctx)
+    _show_inbounds(ctx, message_id, note=_rerender_note(ctx, errors))
+    return t["bot_inbound_deleted"]
 
 
 def _show_inbound(
@@ -1275,6 +1906,7 @@ def _show_inbound(
         _kb(
             [
                 [(toggle_label, f"i:tg:{inbound.id}")],
+                [(t["bot_delete"], f"i:del:{inbound.id}")],
                 [(t["bot_back_inbounds"], "i:list")],
             ]
         ),
@@ -1311,13 +1943,26 @@ def _on_inbound_callback(ctx: _Ctx, message_id: Optional[int], parts: list) -> O
     if action == "list":
         _show_inbounds(ctx, message_id)
         return None
+    if action == "new":
+        if len(parts) > 2:
+            _start_inbound_create(ctx, message_id, parts[2])
+        else:
+            _show_inbound_protocol_picker(ctx, message_id)
+        return None
     inbound_id = _parse_int(parts[2]) if len(parts) > 2 else None
     if inbound_id is None:
+        _show_stale(ctx, message_id)
         return None
     if action == "v":
         _show_inbound(ctx, message_id, inbound_id)
     elif action == "tg":
         return _toggle_inbound(ctx, message_id, inbound_id)
+    elif action == "del":
+        if len(parts) > 3 and parts[3] == "ok":
+            return _delete_inbound(ctx, message_id, inbound_id)
+        _show_inbound_delete_confirm(ctx, message_id, inbound_id)
+    else:
+        _show_stale(ctx, message_id)
     return None
 
 
@@ -1360,19 +2005,10 @@ def _show_status(ctx: _Ctx, message_id: Optional[int]) -> None:
         lines.append(f"{t['uptime']}: {status.get('uptime') or '—'}")
         services = status.get("services") or {}
         if services:
-            names = {
-                "xray": "Xray",
-                "sing-box": "sing-box",
-                "wireguard": "WireGuard",
-                "amneziawg": "AmneziaWG",
-                "openvpn": "OpenVPN",
-                "openconnect": "OpenConnect",
-                "ikev2": "IKEv2",
-            }
             parts = []
             for key, state in services.items():
                 emoji = {"running": "✅", "stopped": "❌"}.get(state, "❓")
-                parts.append(f"{names.get(key, key)} {emoji}")
+                parts.append(f"{_SERVICE_NAMES.get(key, key)} {emoji}")
             lines.append("")
             lines.append(" | ".join(parts))
     users = ctx.db.query(User).all()
@@ -1394,8 +2030,240 @@ def _show_status(ctx: _Ctx, message_id: Optional[int]) -> None:
     _show(ctx, message_id, "\n".join(lines), _kb([[(t["bot_back_main"], "m:main")]]))
 
 
+# ---------------------------------------------------------------------------
+# Services (status + restart with confirmation)
+# ---------------------------------------------------------------------------
+
+
+def _service_states(ctx: _Ctx) -> dict[str, str]:
+    """Service states from ``app.system_status`` (the same source as
+    the web settings page) — ``{key: running|stopped|unknown}``.
+    An unavailable collector yields all-unknown, never a crash."""
+    if system_status_mod is None:
+        return {key: "unknown" for key in _SERVICE_NAMES}
+    try:
+        status = system_status_mod.collect_server_status(ctx.panel.DATA_DIR)
+        services = (status or {}).get("services") or {}
+        return {
+            key: services.get(key, "unknown") for key in _SERVICE_NAMES
+        }
+    except Exception:  # noqa: BLE001 — status must never break the bot
+        return {key: "unknown" for key in _SERVICE_NAMES}
+
+
+def _show_services(
+    ctx: _Ctx, message_id: Optional[int], note: Optional[str] = None
+) -> None:
+    """Every service with its state; a restart button for each
+    service the panel may actually restart (see
+    ``_SERVICE_RESTART_UNITS`` — AmneziaWG has no sudoers entry for
+    restart, so it gets no button and the note below says why)."""
+    t = ctx.t
+    states = _service_states(ctx)
+    state_labels = {
+        "running": t["bot_service_running"],
+        "stopped": t["bot_service_stopped"],
+        "unknown": t["bot_service_unknown"],
+    }
+    state_emoji = {"running": "✅", "stopped": "❌"}.get
+    lines = [t["bot_services_title"], ""]
+    kb_rows: list[list[tuple[str, str]]] = []
+    for key in _SERVICE_NAMES:
+        state = states.get(key, "unknown")
+        emoji = state_emoji(state, "❓")
+        lines.append(
+            f"{emoji} {_SERVICE_NAMES[key]} — "
+            f"{state_labels.get(state, t['bot_service_unknown'])}"
+        )
+        if key in _SERVICE_RESTART_UNITS:
+            kb_rows.append(
+                [(f"{t['bot_service_restart']} {_SERVICE_NAMES[key]}", f"s:rst:{key}")]
+            )
+    lines.append("")
+    lines.append(t["bot_services_awg_note"])
+    text = "\n".join(lines)
+    if note:
+        text += "\n\n" + note
+    kb_rows.append([(t["bot_back_main"], "m:main")])
+    _show(ctx, message_id, text, _kb(kb_rows))
+
+
+def _show_restart_confirm(ctx: _Ctx, message_id: Optional[int], key: str) -> None:
+    t = ctx.t
+    if key not in _SERVICE_RESTART_UNITS:
+        _show_stale(ctx, message_id)
+        return
+    _show(
+        ctx,
+        message_id,
+        t["bot_service_restart_confirm"].format(name=_SERVICE_NAMES[key]),
+        _kb(
+            [
+                [
+                    (t["bot_confirm_yes"], f"s:rst:{key}:ok"),
+                    (t["bot_confirm_no"], "s:list"),
+                ]
+            ]
+        ),
+    )
+
+
+def _restart_service_via_bot(
+    ctx: _Ctx, message_id: Optional[int], key: str
+) -> Optional[str]:
+    """Restart one service (``systemctl restart`` via the panel's
+    privileged runner — the same call the re-render path uses) and
+    report the honest result: success only when the service is
+    actually running afterwards, failure with the error text."""
+    t = ctx.t
+    unit = _SERVICE_RESTART_UNITS.get(key)
+    if unit is None:
+        _show_stale(ctx, message_id)
+        return None
+    name = _SERVICE_NAMES[key]
+    try:
+        error = ctx.panel._restart_service(unit)
+    except Exception:  # noqa: BLE001 — a restart failure must say so
+        logger.exception("telegram bot service restart failed")
+        error = t["bot_action_failed"]
+    if error is not None:
+        note = t["bot_service_restart_failed"] + " " + str(error)[:800]
+        _show_services(ctx, message_id, note=note)
+        return None
+    # A zero exit code is not proof the service is up — re-check.
+    # "unknown" is neither success nor failure: the restart ran, but
+    # the state could not be verified (no systemd answer).
+    state = _service_states(ctx).get(key, "unknown")
+    if state == "stopped":
+        note = t["bot_service_restart_failed"] + " " + t["bot_service_stopped"]
+        _show_services(ctx, message_id, note=note)
+        return None
+    _audit(ctx, "service.restart", f"{key} [telegram]")
+    if state == "running":
+        note = t["bot_service_restarted"].format(name=name)
+    else:
+        note = t["bot_service_restart_unverified"].format(name=name)
+    _show_services(ctx, message_id, note=note)
+    return note
+
+
+def _on_service_callback(ctx: _Ctx, message_id: Optional[int], parts: list) -> Optional[str]:
+    action = parts[1] if len(parts) > 1 else ""
+    if action == "list":
+        _show_services(ctx, message_id)
+        return None
+    if action == "rst":
+        key = parts[2] if len(parts) > 2 else ""
+        if not key:
+            _show_stale(ctx, message_id)
+            return None
+        if len(parts) > 3 and parts[3] == "ok":
+            return _restart_service_via_bot(ctx, message_id, key)
+        _show_restart_confirm(ctx, message_id, key)
+        return None
+    _show_stale(ctx, message_id)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Backup (create the ZIP and send it as a document to the admin chat)
+# ---------------------------------------------------------------------------
+
+
+def _show_backup(ctx: _Ctx, message_id: Optional[int]) -> None:
+    t = ctx.t
+    text = t["bot_backup_title"] + "\n\n" + t["bot_backup_hint"]
+    _show(
+        ctx,
+        message_id,
+        text,
+        _kb(
+            [
+                [(t["bot_backup_send"], "b:get")],
+                [(t["bot_back_main"], "m:main")],
+            ]
+        ),
+    )
+
+
+def _send_backup(ctx: _Ctx, message_id: Optional[int]) -> None:
+    """Create the backup ZIP (same builder as the settings-page
+    download) and send it to the admin chat — and ONLY there: the
+    dispatcher verified this chat is the configured admin chat, and
+    the ZIP is a full credential bundle. A ZIP over Telegram's 50 MB
+    bot-API cap is refused honestly (the web download still works).
+    """
+    t = ctx.t
+    if ctx.panel.backup_mod is None:
+        _show(
+            ctx,
+            message_id,
+            t["bot_backup_failed"],
+            _kb([[(t["bot_back_main"], "m:main")]]),
+        )
+        return
+    db_path = ctx.panel._db_file_path(ctx.db)
+    if db_path is None or not db_path.exists():
+        _show(
+            ctx,
+            message_id,
+            t["bot_backup_failed"],
+            _kb([[(t["bot_back_main"], "m:main")]]),
+        )
+        return
+    try:
+        data = ctx.panel.backup_mod.create_backup_zip(db_path)
+    except Exception:  # noqa: BLE001 — a failed backup must say so
+        logger.exception("telegram bot backup creation failed")
+        _show(
+            ctx,
+            message_id,
+            t["bot_backup_failed"],
+            _kb([[(t["bot_back_main"], "m:main")]]),
+        )
+        return
+    if len(data) > telegram_mod.MAX_DOCUMENT_BYTES:
+        _show(
+            ctx,
+            message_id,
+            t["bot_backup_too_large"],
+            _kb([[(t["bot_back_main"], "m:main")]]),
+        )
+        return
+    stamp = ctx.now.strftime("%Y%m%d-%H%M%S")
+    filename = f"sparky-manager-backup-{stamp}.zip"
+    if not ctx.sender.document(ctx.chat_id, filename, data):
+        _show(
+            ctx,
+            message_id,
+            t["bot_backup_failed"],
+            _kb([[(t["bot_back_main"], "m:main")]]),
+        )
+        return
+    _audit(ctx, "settings.backup", f"{len(data)} bytes [telegram]")
+    _show(
+        ctx,
+        message_id,
+        t["bot_backup_sent"],
+        _kb([[(t["bot_back_main"], "m:main")]]),
+    )
+
+
+def _on_backup_callback(ctx: _Ctx, message_id: Optional[int], parts: list) -> Optional[str]:
+    action = parts[1] if len(parts) > 1 else ""
+    if action == "menu":
+        _show_backup(ctx, message_id)
+        return None
+    if action == "get":
+        _send_backup(ctx, message_id)
+        return None
+    _show_stale(ctx, message_id)
+    return None
+
+
 __all__ = [
     "BOT_LANGUAGE",
+    "BOT_COMMANDS",
     "BOT_STRING_KEYS",
     "CONVERSATION_TIMEOUT",
     "TelegramSender",

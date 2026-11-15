@@ -237,8 +237,13 @@ def test_mask_token():
 
 
 def test_save_settings_stores_telegram_and_never_shows_token(
-    authed_client, db
+    authed_client, db, monkeypatch
 ):
+    # Saving a token registers the bot commands (upgrade Phase 3) —
+    # stub the Bot API call (no real network in tests).
+    monkeypatch.setattr(
+        telegram_mod, "set_my_commands", lambda token, cmds, **kw: (True, "")
+    )
     resp = authed_client.post(
         "/settings",
         data={"domain": "", "subscription_host": "", "reality_sni": "",
