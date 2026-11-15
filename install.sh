@@ -43,6 +43,7 @@ DOMAIN=""
 REALITY_SNI="www.microsoft.com"
 REALITY_SNI_GIVEN=0  # 1 when --reality-sni is passed
 ADMIN_PASSWORD=""
+ADMIN_PASSWORD_GIVEN=0  # 1 when --admin-password is passed
 YES=0
 UNINSTALL=0
 
@@ -78,8 +79,11 @@ Options:
   --domain DOMAIN           Domain for the panel (default: none — bare IP,
                             self-signed panel certificate).
   --reality-sni SNI         SNI for VLESS+Reality (default: www.microsoft.com).
-  --admin-password PASS     Admin password (default: generated once and
-                            printed in the login box).
+  --admin-password PASS     Admin password (fresh installs only;
+                            default: generated once and printed in
+                            the login box). On a re-install the
+                            password is unchanged — change it in the
+                            panel (Settings → Security).
   --uninstall               Stop services, back up data, remove sparky-manager.
   --help                    Show this help.
 EOF
@@ -175,8 +179,8 @@ while [ $# -gt 0 ]; do
         --domain=*)         DOMAIN="${1#--domain=}"; shift ;;
         --reality-sni)      REALITY_SNI="$2"; REALITY_SNI_GIVEN=1; shift 2 ;;
         --reality-sni=*)    REALITY_SNI="${1#--reality-sni=}"; REALITY_SNI_GIVEN=1; shift ;;
-        --admin-password)   ADMIN_PASSWORD="$2"; shift 2 ;;
-        --admin-password=*) ADMIN_PASSWORD="${1#--admin-password=}"; shift ;;
+        --admin-password)   ADMIN_PASSWORD="$2"; ADMIN_PASSWORD_GIVEN=1; shift 2 ;;
+        --admin-password=*) ADMIN_PASSWORD="${1#--admin-password=}"; ADMIN_PASSWORD_GIVEN=1; shift ;;
         *)                  die "Unknown option: $1 (see --help)" ;;
     esac
 done
@@ -188,6 +192,31 @@ uninstall_panel() {
     local stamp backup_file
     stamp="$(date +%F-%H%M%S)"
     backup_file="/root/sparky-manager-backup-${stamp}.tar.gz"
+    # Stop the panel BEFORE the backup tar: a tar of the live data dir
+    # can catch the SQLite WAL mid-write and lose the last seconds of
+    # transactions. Stopping first lets the panel checkpoint the WAL on
+    # shutdown, so the tarball holds a clean, quiesced database
+    # (debug pass, 2026-11-15).
+    info "Stopping services ..."
+    # Stop EVERYTHING the panel manages — not just the three core
+    # services. A stale ocserv (or openvpn/strongswan) left running
+    # survives the wipe and squats on ports: a fresh install failed
+    # verification because an ocserv from the old install still held
+    # TCP 443 while the new minimal Xray config binds 443 (live
+    # incident, 2026-11-15). The panel restarts these on demand with
+    # freshly rendered configs — and only when an enabled inbound of
+    # that type exists (main.py:587) — so stopping/disabling them
+    # here is safe; `systemctl restart` starts a stopped unit even
+    # when it is disabled.
+    systemctl stop sparky-manager xray sing-box ocserv openvpn-server@sparky-manager strongswan wg-quick@wg0 awg-quick@awg0 2>/dev/null || true
+    systemctl disable sparky-manager xray sing-box ocserv openvpn-server@sparky-manager strongswan wg-quick@wg0 awg-quick@awg0 2>/dev/null || true
+    if [ -f /etc/wireguard/wg0.conf ]; then
+        wg-quick down wg0 2>/dev/null || true
+    fi
+    if command -v awg-quick >/dev/null 2>&1 && [ -f /etc/amnezia/amneziawg/awg0.conf ]; then
+        awg-quick down awg0 2>/dev/null || true
+    fi
+
     info "Backing up data and configs to ${backup_file} ..."
     local -a paths=()
     [ -d /opt/sparky-manager/data ] && paths+=("/opt/sparky-manager/data")
@@ -201,13 +230,6 @@ uninstall_panel() {
         warn "Nothing to back up (no data or configs found)."
     fi
 
-    info "Stopping services ..."
-    systemctl stop sparky-manager xray sing-box 2>/dev/null || true
-    systemctl disable sparky-manager xray sing-box 2>/dev/null || true
-    if [ -f /etc/wireguard/wg0.conf ]; then
-        wg-quick down wg0 2>/dev/null || true
-    fi
-
     info "Removing files, units and binaries ..."
     rm -f /etc/systemd/system/sparky-manager.service \
           /etc/systemd/system/xray.service \
@@ -216,6 +238,18 @@ uninstall_panel() {
     systemctl daemon-reload || true
     rm -rf /opt/sparky-manager /usr/local/etc/xray /etc/sing-box
     rm -f /etc/wireguard/wg0.conf
+    # The panel-managed configs of the other services: the installer
+    # only writes minimal versions when the file does NOT exist, so a
+    # stale ocserv.conf (e.g. an old 443 default — the current default
+    # is 4433) would survive the wipe and be started again by the
+    # fresh install's `enable --now` loop. Removing them makes the
+    # wipe complete; a fresh install writes fresh minimal configs,
+    # and the panel re-renders them from the DB on demand. ocpasswd
+    # holds user password hashes — it goes with the users.
+    rm -f /etc/ocserv/ocserv.conf /etc/ocserv/ocpasswd \
+          /etc/openvpn/server/sparky-manager.conf \
+          /etc/swanctl/swanctl.conf \
+          /etc/amnezia/amneziawg/awg0.conf
     rm -f /usr/local/bin/xray /usr/local/bin/sing-box /usr/local/bin/sparky-manager
     if id sparky-manager >/dev/null 2>&1; then
         userdel sparky-manager 2>/dev/null || warn "Could not remove user sparky-manager."
@@ -374,6 +408,15 @@ if [ "$REALITY_SNI_GIVEN" -eq 0 ]; then
     fi
 fi
 
+# Re-install detection: install.env exists iff a previous install ran
+# the secrets section below. A re-install NEVER changes the admin
+# password — the installer cannot touch the DB, so a password typed
+# here would be printed in the login box without ever working, and
+# would overwrite the login file holding the working one (debug pass,
+# 2026-11-15). The password is changed in the panel instead.
+REINSTALL=0
+[ -f /opt/sparky-manager/data/install.env ] && REINSTALL=1
+
 # ---------------------------------------------------------------------------
 # Interactive prompts (all skippable with --yes / flags)
 # ---------------------------------------------------------------------------
@@ -390,7 +433,18 @@ ask DOMAIN "Domain (empty = no domain, bare IP)" "$DOMAIN"
 if [ "$SNI_SAVED" -eq 0 ]; then
     ask REALITY_SNI "Reality SNI" "$REALITY_SNI"
 fi
-ask_secret ADMIN_PASSWORD "Admin password"
+# No password prompt on a re-install (see REINSTALL above): the DB
+# password is untouched by this installer, so asking would only
+# produce a login box that lies. A --admin-password flag on a
+# re-install is ignored loudly, never silently.
+if [ "$REINSTALL" -eq 0 ]; then
+    ask_secret ADMIN_PASSWORD "Admin password"
+else
+    if [ "$ADMIN_PASSWORD_GIVEN" -eq 1 ]; then
+        warn "--admin-password is ignored on a re-install: the panel password can only be changed in the panel (Settings → Security)."
+    fi
+    ADMIN_PASSWORD=""
+fi
 
 case "$PANEL_PORT" in
     ''|*[!0-9]*)
@@ -590,6 +644,14 @@ if [ -f "${REPO_DIR}/app/__init__.py" ]; then
 fi
 
 info "Copying the panel app to /opt/sparky-manager ..."
+# Remove the deployed dirs first: cp -a never deletes files, so a
+# module removed from the repo would linger in /opt and keep being
+# imported (app/) or invoked (scripts/ovpn-auth.py, render_configs.py).
+# data/ and venv/ are separate dirs and are untouched; the running
+# panel already has its modules loaded, and the service restarts at
+# the end with the fresh code (debug pass, 2026-11-15).
+rm -rf /opt/sparky-manager/app /opt/sparky-manager/scripts /opt/sparky-manager/systemd
+mkdir -p /opt/sparky-manager/app
 cp -a "${REPO_DIR}/app/." /opt/sparky-manager/app/
 cp -a "${REPO_DIR}/requirements.txt" /opt/sparky-manager/requirements.txt
 if [ -d "${REPO_DIR}/scripts" ]; then
@@ -786,9 +848,18 @@ fi
 if [ -z "${HY2_PASSWORD:-}" ]; then
     HY2_PASSWORD="$(openssl rand -base64 24 | tr -d '\n')"
 fi
+# PASSWORD_KNOWN=1 means the login box may print ADMIN_PASSWORD: on a
+# fresh install it is the password the panel seeds from env; on a
+# re-install it is the stored password from the first install. When a
+# re-install finds no stored password (install.env hand-edited, or
+# pre-dating the stored password), the DB password is unknown to this
+# installer — a generated one must never be printed as if it worked.
+PASSWORD_KNOWN=1
 if [ -z "$ADMIN_PASSWORD" ]; then
     if [ -n "${ADMIN_PASSWORD_STORED:-}" ]; then
         ADMIN_PASSWORD="$ADMIN_PASSWORD_STORED"
+    elif [ "$REINSTALL" -eq 1 ]; then
+        PASSWORD_KNOWN=0
     else
         ADMIN_PASSWORD="$(openssl rand -hex 16)"
         info "Generated a new admin password (printed in the login box at the end)."
@@ -1619,7 +1690,14 @@ umask 077
     echo "============================================================"
     echo "  Panel:     ${PANEL_URL}"
     echo "  Username:  admin"
-    echo "  Password:  ${ADMIN_PASSWORD}"
+    if [ "${PASSWORD_KNOWN:-1}" -eq 1 ]; then
+        echo "  Password:  ${ADMIN_PASSWORD}"
+    else
+        echo "  Password:  (unchanged — the installer cannot show it; change it in the panel: Settings → Security)"
+    fi
+    if [ "${REINSTALL:-0}" -eq 1 ]; then
+        echo "  (unchanged by this install; if you changed it in the panel, the panel password is current)"
+    fi
     echo ""
     echo "  Panel cert fingerprint (SHA256):"
     echo "  ${CERT_FINGERPRINT}"
