@@ -87,6 +87,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hmac
 import ipaddress
 import json
 import logging
@@ -301,6 +302,12 @@ try:
 except ImportError:
     backup_mod = None
     logger.warning("app.backup not available yet; backup/restore disabled")
+
+try:
+    from app import bot as bot_mod
+except ImportError:
+    bot_mod = None
+    logger.warning("app.bot not available yet; Telegram bot disabled")
 
 if panel_log_mod is not None:
     # Rotating file log (data/logs/panel.log) + console (systemd
@@ -661,6 +668,102 @@ STRINGS: dict[str, dict[str, str]] = {
         "tg_user_created": "👤 کاربر جدید ساخته شد: {name}",
         "tg_user_expiring": "⏰ کاربر «{name}» تا {hours} ساعت دیگر منقضی می‌شود.",
         "tg_rerender_failed": "⚠️ بازسازی کانفیگ‌ها ناموفق بود: {errors}",
+        # Telegram management bot — webhook settings (Phase 4).
+        "telegram_webhook": "ربات تلگرام (مدیریت کامل)",
+        "telegram_webhook_hint": "با ثبت وب‌هوک، ربات از تلگرام به همهٔ کارهای پنل دسترسی دارد: کاربر، اینباند، لینک و وضعیت سرور. فقط آیدی چت مدیر بالا می‌تواند از ربات استفاده کند.",
+        "telegram_webhook_register": "ثبت / به‌روزرسانی وب‌هوک",
+        "telegram_webhook_refresh": "بررسی وضعیت وب‌هوک",
+        "telegram_webhook_url": "آدرس وب‌هوک",
+        "telegram_webhook_registered_at": "ثبت‌شده در",
+        "telegram_webhook_pending": "به‌روزرسانی‌های در انتظار",
+        "telegram_webhook_last_error": "آخرین خطا",
+        "telegram_webhook_not_registered": "وب‌هوک ثبت نشده است.",
+        "telegram_webhook_registered": "وب‌هوک ثبت شد — ربات در تلگرام فعال است.",
+        "telegram_webhook_failed": "ثبت وب‌هوک ناموفق بود:",
+        "telegram_webhook_status_ok": "وضعیت وب‌هوک به‌روز شد.",
+        "telegram_webhook_status_failed": "دریافت وضعیت وب‌هوک ناموفق بود — توکن و اتصال را بررسی کنید.",
+        "telegram_domain_required": "برای وب‌هوک اول باید دامنه را در تنظیمات وارد کنید.",
+        "telegram_webhook_port_warning": "تلگرام فقط روی پورت‌های ۴۴۳، ۸۰، ۸۸ و ۸۴۴۳ وب‌هوک می‌فرستد؛ پورت فعلی پنل در این لیست نیست (نصب‌کننده را با ‎--port 8443‎ دوباره اجرا کنید یا از ریورس‌پروکسی استفاده کنید).",
+        # Telegram management bot — bot strings (Phase 4).
+        "bot_welcome": "🤖 ربات مدیریت sparky-manager\n\nاز منو انتخاب کنید:",
+        "bot_help": "🤖 راهنمای ربات\n\n/start — منوی اصلی\n/help — همین راهنما\n/cancel — لغو عملیات در حال انجام\n\nاز منو می‌توانید کاربران را ببینید و بسازید، فریز/حذف/تمدید کنید، اینباندها را فعال/غیرفعال کنید، لینک هر کاربر را بگیرید و وضعیت سرور را ببینید.",
+        "bot_menu_users": "👥 کاربران",
+        "bot_menu_inbounds": "📡 اینباندها",
+        "bot_menu_status": "📊 وضعیت سرور",
+        "bot_menu_help": "❓ راهنما",
+        "bot_back_main": "🔙 منوی اصلی",
+        "bot_back_users": "🔙 کاربران",
+        "bot_back_inbounds": "🔙 اینباندها",
+        "bot_back": "🔙 بازگشت",
+        "bot_cancel": "❌ لغو",
+        "bot_cancelled": "لغو شد.",
+        "bot_users_title": "👥 کاربران (صفحه {page} از {pages})",
+        "bot_no_users": "هنوز کاربری ساخته نشده است.",
+        "bot_prev": "◀️ قبلی",
+        "bot_next": "بعدی ▶️",
+        "bot_new_user": "➕ کاربر جدید",
+        "bot_user_not_found": "کاربر پیدا نشد.",
+        "bot_inbound_not_found": "اینباند پیدا نشد.",
+        "bot_status_enabled": "فعال",
+        "bot_status_disabled": "غیرفعال",
+        "bot_status_expired": "منقضی‌شده",
+        "bot_status_over_quota": "تمام‌شده (حجم)",
+        "bot_status_frozen": "فریز شده",
+        "bot_traffic": "ترافیک",
+        "bot_expires": "انقضا",
+        "bot_never": "هرگز",
+        "bot_unlimited": "نامحدود",
+        "bot_inbounds": "اینباندها",
+        "bot_days_left": "{days} روز مانده",
+        "bot_links": "🔗 لینک‌ها",
+        "bot_links_title": "🔗 لینک‌های {name}",
+        "bot_sub_link": "سابسکریپشن",
+        "bot_no_links": "برای این کاربر لینکی نیست (کاربر غیرفعال یا منقضی است، یا کلاینتی ندارد).",
+        "bot_no_host": "برای ساخت لینک اول باید دامنه یا هاست سابسکریپشن را در تنظیمات پنل وارد کنید.",
+        "bot_freeze": "🧊 فریز",
+        "bot_unfreeze": "❄️ رفع فریز",
+        "bot_frozen": "کاربر فریز شد.",
+        "bot_unfrozen": "فریز کاربر برداشته شد.",
+        "bot_extend": "⏰ تمدید",
+        "bot_extend_prompt": "تمدید «{name}» — چند روز؟",
+        "bot_extend_days": "+{days} روز",
+        "bot_extended": "انقضای کاربر {days} روز تمدید شد.",
+        "bot_reset_traffic": "🔄 ریست ترافیک",
+        "bot_reset_confirm": "ترافیک «{name}» صفر شود؟ سابقهٔ روزانه حفظ می‌شود.",
+        "bot_traffic_reset": "ترافیک کاربر صفر شد.",
+        "bot_delete": "🗑️ حذف",
+        "bot_delete_confirm": "«{name}» حذف شود؟ این عمل قابل بازگشت نیست.",
+        "bot_deleted": "کاربر حذف شد.",
+        "bot_confirm_yes": "✅ بله",
+        "bot_confirm_no": "❌ خیر",
+        "bot_create_name": "➕ ساخت کاربر جدید\n\nنام کاربر را بفرستید (فقط حروف، عدد، ‎-‎ و ‎_‎):",
+        "bot_create_name_invalid": "نام معتبر نیست — فقط حروف انگلیسی، عدد، ‎-‎ و ‎_‎ مجاز است. دوباره بفرستید:",
+        "bot_create_name_exists": "کاربری با این نام هست. نام دیگری بفرستید:",
+        "bot_create_pick_inbounds": "اینباندهای این کاربر را انتخاب کنید (با ضربه زدن روشن/خاموش می‌شوند؛ پیش‌فرض همهٔ اینباندهای فعال):",
+        "bot_create_no_inbounds": "اینباند فعالی نیست — اول از پنل یک اینباند بسازید و فعال کنید.",
+        "bot_create_pick_one": "حداقل یک اینباند انتخاب کنید.",
+        "bot_create_limit": "حجم کاربر (گیگابایت)؟ ۰ یا خالی یعنی نامحدود:",
+        "bot_create_limit_invalid": "عدد معتبر نیست — حجم را به گیگابایت بفرستید (مثلاً ۱۰) یا ۰ برای نامحدود:",
+        "bot_create_expiry": "انقضا (روز)؟ ۰ یا خالی یعنی بدون انقضا:",
+        "bot_create_expiry_invalid": "عدد معتبر نیست — تعداد روز را بفرستید (مثلاً ۳۰) یا ۰ برای بدون انقضا:",
+        "bot_create_done": "✅ کاربر «{name}» ساخته شد.",
+        "bot_create_failed": "ساخت کاربر ناموفق بود.",
+        "bot_create_confirm": "✅ انجام شد",
+        "bot_use_buttons": "لطفاً از دکمه‌ها استفاده کنید (یا /cancel برای لغو).",
+        "bot_flow_expired": "این عملیات منقضی شده است — دوباره شروع کنید.",
+        "bot_inbounds_title": "📡 اینباندها",
+        "bot_no_inbounds": "هنوز اینباندی ساخته نشده است.",
+        "bot_enable": "✅ فعال کردن",
+        "bot_disable": "❌ غیرفعال کردن",
+        "bot_inbound_toggled": "اینباند {state} شد.",
+        "bot_status_title": "📊 وضعیت سرور",
+        "bot_status_users": "👥 کاربران: {total} ({enabled} فعال، {expired} منقضی)",
+        "bot_traffic_today": "📈 ترافیک امروز",
+        "bot_traffic_14d": "📈 ترافیک ۱۴ روز گذشته",
+        "bot_unknown_command": "دستور ناشناخته است — /help را بفرستید یا از منو استفاده کنید.",
+        "bot_rerender_failed": "بازسازی کانفیگ‌ها ناموفق بود:",
+        "bot_action_failed": "عملیات ناموفق بود.",
+        "bot_view_user": "👤 مشاهدهٔ کاربر",
     },
     "en": {
         "app_name": "Sparky Manager",
@@ -947,6 +1050,102 @@ STRINGS: dict[str, dict[str, str]] = {
         "tg_user_created": "👤 New user created: {name}",
         "tg_user_expiring": "⏰ User “{name}” expires in {hours} hours.",
         "tg_rerender_failed": "⚠️ Config re-render failed: {errors}",
+        # Telegram management bot — webhook settings (Phase 4).
+        "telegram_webhook": "Telegram bot (full management)",
+        "telegram_webhook_hint": "Registering the webhook lets the bot manage the whole panel from Telegram: users, inbounds, links and server status. Only the admin chat ID above can use the bot.",
+        "telegram_webhook_register": "Register / update webhook",
+        "telegram_webhook_refresh": "Check webhook status",
+        "telegram_webhook_url": "Webhook URL",
+        "telegram_webhook_registered_at": "Registered at",
+        "telegram_webhook_pending": "Pending updates",
+        "telegram_webhook_last_error": "Last error",
+        "telegram_webhook_not_registered": "Webhook not registered.",
+        "telegram_webhook_registered": "Webhook registered — the bot is live on Telegram.",
+        "telegram_webhook_failed": "Webhook registration failed:",
+        "telegram_webhook_status_ok": "Webhook status refreshed.",
+        "telegram_webhook_status_failed": "Could not fetch webhook status — check the token and connection.",
+        "telegram_domain_required": "Set a domain in settings first — the webhook needs a public HTTPS URL.",
+        "telegram_webhook_port_warning": "Telegram only delivers webhooks on ports 443, 80, 88 and 8443; the panel's current port is not in that list (re-run the installer with --port 8443 or use a reverse proxy).",
+        # Telegram management bot — bot strings (Phase 4).
+        "bot_welcome": "🤖 sparky-manager management bot\n\nPick from the menu:",
+        "bot_help": "🤖 Bot help\n\n/start — main menu\n/help — this help\n/cancel — abort the current operation\n\nFrom the menu you can list and create users, freeze/delete/extend them, enable/disable inbounds, get any user's links, and check server status.",
+        "bot_menu_users": "👥 Users",
+        "bot_menu_inbounds": "📡 Inbounds",
+        "bot_menu_status": "📊 Server status",
+        "bot_menu_help": "❓ Help",
+        "bot_back_main": "🔙 Main menu",
+        "bot_back_users": "🔙 Users",
+        "bot_back_inbounds": "🔙 Inbounds",
+        "bot_back": "🔙 Back",
+        "bot_cancel": "❌ Cancel",
+        "bot_cancelled": "Cancelled.",
+        "bot_users_title": "👥 Users (page {page} of {pages})",
+        "bot_no_users": "No users yet.",
+        "bot_prev": "◀️ Previous",
+        "bot_next": "Next ▶️",
+        "bot_new_user": "➕ New user",
+        "bot_user_not_found": "User not found.",
+        "bot_inbound_not_found": "Inbound not found.",
+        "bot_status_enabled": "enabled",
+        "bot_status_disabled": "disabled",
+        "bot_status_expired": "expired",
+        "bot_status_over_quota": "out of traffic",
+        "bot_status_frozen": "frozen",
+        "bot_traffic": "Traffic",
+        "bot_expires": "Expires",
+        "bot_never": "never",
+        "bot_unlimited": "unlimited",
+        "bot_inbounds": "Inbounds",
+        "bot_days_left": "{days} days left",
+        "bot_links": "🔗 Links",
+        "bot_links_title": "🔗 Links for {name}",
+        "bot_sub_link": "Subscription",
+        "bot_no_links": "No links for this user (disabled, expired, or no clients).",
+        "bot_no_host": "Set a domain or subscription host in the panel settings first — links need a server address.",
+        "bot_freeze": "🧊 Freeze",
+        "bot_unfreeze": "❄️ Unfreeze",
+        "bot_frozen": "User frozen.",
+        "bot_unfrozen": "User unfrozen.",
+        "bot_extend": "⏰ Extend",
+        "bot_extend_prompt": "Extend “{name}” — by how many days?",
+        "bot_extend_days": "+{days} days",
+        "bot_extended": "User expiry extended by {days} days.",
+        "bot_reset_traffic": "🔄 Reset traffic",
+        "bot_reset_confirm": "Reset “{name}”'s traffic counter to zero? Daily history is kept.",
+        "bot_traffic_reset": "User traffic reset.",
+        "bot_delete": "🗑️ Delete",
+        "bot_delete_confirm": "Delete “{name}”? This cannot be undone.",
+        "bot_deleted": "User deleted.",
+        "bot_confirm_yes": "✅ Yes",
+        "bot_confirm_no": "❌ No",
+        "bot_create_name": "➕ New user\n\nSend the user name (letters, digits, - and _ only):",
+        "bot_create_name_invalid": "Invalid name — only letters, digits, - and _ are allowed. Send it again:",
+        "bot_create_name_exists": "A user with this name already exists. Send another name:",
+        "bot_create_pick_inbounds": "Pick this user's inbounds (tap to toggle; all enabled inbounds are selected by default):",
+        "bot_create_no_inbounds": "No enabled inbounds — create and enable one in the panel first.",
+        "bot_create_pick_one": "Pick at least one inbound.",
+        "bot_create_limit": "Traffic limit in GB? 0 or empty means unlimited:",
+        "bot_create_limit_invalid": "Not a valid number — send the limit in GB (e.g. 10) or 0 for unlimited:",
+        "bot_create_expiry": "Expiry in days? 0 or empty means never expires:",
+        "bot_create_expiry_invalid": "Not a valid number — send the days (e.g. 30) or 0 for no expiry:",
+        "bot_create_done": "✅ User “{name}” created.",
+        "bot_create_failed": "Could not create the user.",
+        "bot_create_confirm": "✅ Done",
+        "bot_use_buttons": "Please use the buttons (or /cancel to abort).",
+        "bot_flow_expired": "This operation expired — please start again.",
+        "bot_inbounds_title": "📡 Inbounds",
+        "bot_no_inbounds": "No inbounds yet.",
+        "bot_enable": "✅ Enable",
+        "bot_disable": "❌ Disable",
+        "bot_inbound_toggled": "Inbound {state}.",
+        "bot_status_title": "📊 Server status",
+        "bot_status_users": "👥 Users: {total} ({enabled} enabled, {expired} expired)",
+        "bot_traffic_today": "📈 Traffic today",
+        "bot_traffic_14d": "📈 Traffic, last 14 days",
+        "bot_unknown_command": "Unknown command — send /help or use the menu.",
+        "bot_rerender_failed": "Config re-render failed:",
+        "bot_action_failed": "The action failed.",
+        "bot_view_user": "👤 View user",
     },
 }
 
@@ -2334,9 +2533,20 @@ def _wg_pubkey_map(db: Session) -> dict[str, int]:
     return mapping
 
 
-def _create_clients_for_user(db: Session, user: Any) -> None:
-    """One client row per enabled inbound for a new user."""
-    for inbound in db.query(Inbound).filter(Inbound.enabled.is_(True)).all():
+def _create_clients_for_user(
+    db: Session, user: Any, inbound_ids: Optional[set] = None
+) -> None:
+    """One client row per enabled inbound for a new user.
+
+    ``inbound_ids`` (Phase 4, Telegram bot) restricts the clients to
+    the given inbounds — ``None`` keeps the web behaviour (every
+    enabled inbound). A listed inbound that is disabled or missing
+    gets no client.
+    """
+    query = db.query(Inbound).filter(Inbound.enabled.is_(True))
+    if inbound_ids is not None:
+        query = query.filter(Inbound.id.in_(sorted(inbound_ids)))
+    for inbound in query.all():
         creds = _new_client_credentials(inbound)
         extra_json: Optional[str] = None
         if inbound.protocol == "wireguard":
@@ -4425,6 +4635,9 @@ PASSWORD_MIN_LENGTH = 8
 TELEGRAM_EXPIRY_HOURS = 24
 TELEGRAM_RERENDER_NOTIFY_MIN_GAP = timedelta(hours=1)
 CHAT_ID_RE = re.compile(r"^-?\d+$")
+# Ports Telegram delivers webhooks to (Bot API rule — a panel on any
+# other port cannot receive webhooks; see _public_panel_url).
+TELEGRAM_WEBHOOK_PORTS = (443, 80, 88, 8443)
 
 # BackupError.code -> STRINGS key for the restore error message.
 _RESTORE_ERROR_KEYS = {
@@ -4477,6 +4690,62 @@ def _telegram_configured(db: Session) -> bool:
     return bool(
         settings.get("telegram_bot_token") and settings.get("telegram_chat_id")
     )
+
+
+def _ensure_webhook_secret(db: Session) -> str:
+    """The random webhook path secret (generated once, stored in the
+    settings table).
+
+    The webhook URL carries this secret, NOT the bot token: the token
+    in the URL would land in uvicorn's access log on every delivery
+    (and it grants full Bot API access), while this single-purpose
+    secret only authenticates webhook posts and can be rotated by
+    deleting the ``telegram_webhook_secret`` setting row and
+    re-registering the webhook.
+    """
+    settings = get_settings(db)
+    secret = (settings.get("telegram_webhook_secret") or "").strip()
+    if not secret:
+        secret = secrets.token_urlsafe(32)
+        set_setting(db, "telegram_webhook_secret", secret)
+    return secret
+
+
+def _public_panel_url(settings: dict[str, str], path: str = "") -> Optional[str]:
+    """Public https URL for a panel path, or None when no domain is set.
+
+    The domain setting is a bare hostname (a scheme the admin typed
+    is stripped; a port the admin typed is respected). The panel port
+    is appended unless it is 443 or the domain already carries one.
+    The secret web prefix (WEB_PATH) is included, so the URL works
+    exactly as the panel is served.
+    """
+    domain = (settings.get("domain") or "").strip()
+    domain = re.sub(r"^https?://", "", domain, flags=re.IGNORECASE).strip().rstrip("/")
+    if not domain:
+        return None
+    if ":" in domain:
+        host = domain
+    elif PANEL_PORT == 443:
+        host = domain
+    else:
+        host = f"{domain}:{PANEL_PORT}"
+    return f"https://{host}{WEB_PATH}{path}"
+
+
+def _mask_webhook_url(url: str) -> str:
+    """A webhook URL with the secret segment masked (safe for the UI).
+
+    The secret is the last path segment (``.../webhook/<secret>``);
+    only its last 4 characters are shown, like ``mask_token``.
+    """
+    url = (url or "").strip()
+    if not url:
+        return ""
+    head, _, tail = url.rpartition("/")
+    if not tail or len(tail) <= 4:
+        return url
+    return f"{head}/••••{tail[-4:]}"
 
 
 def _notify_telegram(db: Session, text: str) -> bool:
@@ -4641,14 +4910,29 @@ def settings_page(
 ):
     settings = get_settings(db)
     # The bot token never reaches the template context: the form only
-    # ever shows a "configured" badge, never the value.
-    settings_view = {k: v for k, v in settings.items() if k != "telegram_bot_token"}
+    # ever shows a "configured" badge, never the value. Same for the
+    # webhook secret and the webhook URL that carries it — the template
+    # gets the masked URL only.
+    settings_view = {
+        k: v
+        for k, v in settings.items()
+        if k
+        not in ("telegram_bot_token", "telegram_webhook_secret", "telegram_webhook_url")
+    }
     server_status = None
     if system_status_mod is not None:
         try:
             server_status = system_status_mod.collect_server_status(DATA_DIR)
         except Exception:  # noqa: BLE001
             server_status = None
+    webhook_info = None
+    raw_info = settings.get("telegram_webhook_info", "")
+    if raw_info:
+        try:
+            parsed = json.loads(raw_info)
+            webhook_info = parsed if isinstance(parsed, dict) else None
+        except ValueError:
+            webhook_info = None
     return templates.TemplateResponse(request, "settings.html",
         _template_ctx(request, {
             "admin": admin,
@@ -4656,6 +4940,13 @@ def settings_page(
             "server_status": server_status,
             "telegram_configured": _telegram_configured(db),
             "telegram_token_set": bool(settings.get("telegram_bot_token")),
+            "telegram_webhook_url_display": _mask_webhook_url(
+                settings.get("telegram_webhook_url", "")
+            ),
+            "telegram_webhook_registered_at": settings.get(
+                "telegram_webhook_registered_at", ""
+            ),
+            "telegram_webhook_info": webhook_info,
         }),
     )
 
@@ -4732,6 +5023,120 @@ def telegram_test(
         _audit(db, admin.id, "telegram.test", "")
         return _redirect("/settings", request, msg=t["telegram_test_sent"])
     return _redirect("/settings", request, err=t["telegram_test_failed"])
+
+
+@app.post("/settings/telegram-webhook")
+def register_telegram_webhook(
+    request: Request,
+    admin: Any = Depends(require_admin),
+    db: Session = Depends(db_session),
+):
+    """(Re-)register the bot webhook with Telegram (Phase 4).
+
+    The webhook URL is the panel's public URL + WEB_PATH +
+    ``/telegram/webhook/<secret>``. A domain is required (Telegram
+    needs a public HTTPS URL); when the panel port is not one of the
+    ports Telegram delivers webhooks to, the registration is still
+    attempted and Telegram's own error is shown, with the port
+    warning appended so the admin knows why it failed.
+    """
+    t = t_for(get_lang(request))
+    if telegram_mod is None or not _telegram_configured(db):
+        return _redirect("/settings", request, err=t["telegram_not_configured"])
+    settings = get_settings(db)
+    secret = _ensure_webhook_secret(db)
+    url = _public_panel_url(settings, f"/telegram/webhook/{secret}")
+    if url is None:
+        return _redirect("/settings", request, err=t["telegram_domain_required"])
+    token = settings.get("telegram_bot_token", "")
+    ok, error = telegram_mod.set_webhook(token, url)
+    if not ok:
+        # Telegram's errors do not echo the URL, but the description
+        # is user-visible text — strip the secret defensively anyway.
+        detail = error.replace(secret, "••••") if error else ""
+        msg = t["telegram_webhook_failed"] + (f" {detail}" if detail else "")
+        if PANEL_PORT not in TELEGRAM_WEBHOOK_PORTS:
+            msg += " " + t["telegram_webhook_port_warning"]
+        return _redirect("/settings", request, err=msg)
+    set_setting(db, "telegram_webhook_url", url)
+    set_setting(
+        db,
+        "telegram_webhook_registered_at",
+        datetime.now(timezone.utc).isoformat(),
+    )
+    _audit(db, admin.id, "telegram.webhook_register", "")
+    logger.info("telegram webhook registered by %s", admin.username)
+    return _redirect("/settings", request, msg=t["telegram_webhook_registered"])
+
+
+@app.post("/settings/telegram-webhook-status")
+def refresh_telegram_webhook_status(
+    request: Request,
+    admin: Any = Depends(require_admin),
+    db: Session = Depends(db_session),
+):
+    """Refresh the stored webhook status from Telegram's getWebhookInfo.
+
+    The status is fetched on demand (not on every settings-page
+    render) so a slow or dead Telegram never slows the page. Only the
+    useful fields are stored; the URL is masked at render time.
+    """
+    t = t_for(get_lang(request))
+    if telegram_mod is None or not _telegram_configured(db):
+        return _redirect("/settings", request, err=t["telegram_not_configured"])
+    settings = get_settings(db)
+    info = telegram_mod.get_webhook_info(settings.get("telegram_bot_token", ""))
+    if info is None:
+        return _redirect("/settings", request, err=t["telegram_webhook_status_failed"])
+    kept = {
+        key: info[key]
+        for key in (
+            "url",
+            "pending_update_count",
+            "last_error_date",
+            "last_error_message",
+            "last_synchronization_error_date",
+        )
+        if key in info
+    }
+    set_setting(db, "telegram_webhook_info", json.dumps(kept))
+    return _redirect("/settings", request, msg=t["telegram_webhook_status_ok"])
+
+
+@app.post("/telegram/webhook/{secret}")
+async def telegram_webhook(
+    request: Request,
+    secret: str,
+    db: Session = Depends(db_session),
+):
+    """Telegram webhook (Phase 4). No login: Telegram cannot log in —
+    the path secret authenticates the post, and the bot module
+    authenticates the chat. Inert (404) when the bot is not
+    configured, no webhook was ever registered, or the secret does
+    not match — nothing about the bot is revealed to a wrong guess.
+    A malformed body still gets 200: Telegram retries non-2xx
+    responses, and retrying garbage helps nobody.
+    """
+    if bot_mod is None:
+        raise HTTPException(status_code=404, detail="not found")
+    settings = get_settings(db)
+    token = settings.get("telegram_bot_token", "")
+    stored = settings.get("telegram_webhook_secret", "")
+    if not token or not settings.get("telegram_chat_id") or not stored:
+        raise HTTPException(status_code=404, detail="not found")
+    if not hmac.compare_digest(secret, stored):
+        raise HTTPException(status_code=404, detail="not found")
+    try:
+        update = await request.json()
+    except Exception:  # noqa: BLE001 — malformed body: 200, no retry storm
+        return {"ok": True}
+    if not isinstance(update, dict):
+        return {"ok": True}
+    try:
+        bot_mod.handle_update(db, update, bot_mod.TelegramSender(token))
+    except Exception:  # noqa: BLE001 — dispatch never breaks the webhook
+        logger.exception("telegram webhook dispatch failed")
+    return {"ok": True}
 
 
 @app.get("/settings/backup")

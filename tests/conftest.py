@@ -77,6 +77,7 @@ os.environ["SPARKY_WG_PUBLIC_KEY"] = _WG_SERVER_PUBLIC
 # ---------------------------------------------------------------------------
 
 from app import auth as auth_mod  # noqa: E402
+from app import bot as bot_mod  # noqa: E402
 from app import main as main_mod  # noqa: E402
 from app import traffic as traffic_mod  # noqa: E402
 from app.db import SessionLocal, get_engine, init_db  # noqa: E402
@@ -475,12 +476,17 @@ def _isolate_process_globals():
 
     The login rate limiter (per-IP failure counters) and the traffic
     syncer's cumulative baselines are process-global; a test that
-    fills them must not leak into the next test.
+    fills them must not leak into the next test. Same for the
+    Telegram bot's in-memory conversations and seen update ids.
     """
     auth_mod._failed_logins.clear()
     traffic_mod._last_wg.clear()
     traffic_mod._last_nft.clear()
+    bot_mod._conversations.clear()
+    bot_mod._seen_updates.clear()
     yield
     auth_mod._failed_logins.clear()
     traffic_mod._last_wg.clear()
     traffic_mod._last_nft.clear()
+    bot_mod._conversations.clear()
+    bot_mod._seen_updates.clear()

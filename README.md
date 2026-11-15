@@ -137,6 +137,22 @@ and per-service state for every core), and 14-day traffic charts on
 the dashboard and each user page (server-rendered SVG, no external
 libraries; days without traffic show as zero).
 
+The panel is also manageable from Telegram: a full-management bot
+(`app/bot.py`) with the same capabilities as the web UI — list and
+create users (guided: name → inbounds → traffic limit → expiry),
+freeze/unfreeze, extend expiry, reset traffic, delete, enable/disable
+inbounds, get any user's share links and subscription link, and check
+server status and traffic. Setup: create a bot with @BotFather, paste
+its token and your numeric chat ID (from @userinfobot) into the
+settings page, then press "Register webhook". Only that chat ID can
+use the bot; anyone else gets no reply at all. The webhook URL carries
+a random secret (not the bot token) and lives under the panel's secret
+web path. One limitation: Telegram only delivers webhooks on ports
+443, 80, 88 and 8443, while the installer picks a random panel port —
+if registration fails, re-run the installer with `--port 8443` (when
+no inbound uses TCP 8443) or put a reverse proxy on 443 in front of
+the panel.
+
 ## FAQ
 
 **Do I need a domain?**

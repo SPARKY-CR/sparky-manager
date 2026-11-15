@@ -50,6 +50,38 @@
       <button type="submit" class="btn">{{ t.telegram_test }}</button>
     </div>
   </form>
+  <h2>{{ t.telegram_webhook }}</h2>
+  <p class="muted">{{ t.telegram_webhook_hint }}</p>
+  {% if telegram_webhook_url_display %}
+  <dl class="kv">
+    <dt>{{ t.telegram_webhook_url }}</dt>
+    <dd dir="ltr">{{ telegram_webhook_url_display }}</dd>
+    {% if telegram_webhook_registered_at %}
+    <dt>{{ t.telegram_webhook_registered_at }}</dt>
+    <dd dir="ltr">{{ telegram_webhook_registered_at }}</dd>
+    {% endif %}
+    {% if telegram_webhook_info %}
+    <dt>{{ t.telegram_webhook_pending }}</dt>
+    <dd dir="ltr">{{ telegram_webhook_info.get('pending_update_count', '—') }}</dd>
+    {% if telegram_webhook_info.get('last_error_message') %}
+    <dt>{{ t.telegram_webhook_last_error }}</dt>
+    <dd>{{ telegram_webhook_info.get('last_error_message') }}</dd>
+    {% endif %}
+    {% endif %}
+  </dl>
+  {% else %}
+  <p class="muted">{{ t.telegram_webhook_not_registered }}</p>
+  {% endif %}
+  <form method="post" action="{{ base_path }}/settings/telegram-webhook">
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{{ t.telegram_webhook_register }}</button>
+    </div>
+  </form>
+  <form method="post" action="{{ base_path }}/settings/telegram-webhook-status">
+    <div class="form-actions">
+      <button type="submit" class="btn">{{ t.telegram_webhook_refresh }}</button>
+    </div>
+  </form>
   {% endif %}
 </div>
 

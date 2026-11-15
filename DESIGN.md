@@ -482,6 +482,26 @@ The settings page (`/settings`) now covers the panel itself:
 No DB schema change: new state (Telegram config, notification dedup,
 schema version) lives in the existing `settings` table.
 
+### 5.9 Telegram management bot (Phase 4, 2026-11-15)
+
+The whole panel from Telegram — users, inbounds, links, server status —
+through a bot that lives inside the FastAPI app (no second service, no
+polling loop):
+
+| Piece | How it works |
+|---|---|
+| Transport | Webhook: Telegram POSTs updates to `POST /telegram/webhook/<secret>` on the panel itself (served under the secret WEB_PATH like every other route). The URL carries a random secret stored in the `telegram_webhook_secret` setting — NOT the bot token, which would land in uvicorn's access log on every delivery. The endpoint is inert (404) when the bot is unconfigured or the secret mismatches, so nothing about the bot is revealed to a wrong guess. A malformed body still gets 200 (Telegram retries non-2xx, and retrying garbage helps nobody). |
+| Setup | Settings page: bot token + admin chat ID (the same fields as notifications), then "register webhook" (`setWebhook` with the panel's public URL — domain setting + panel port + WEB_PATH + secret) and "check webhook status" (stores `getWebhookInfo`'s pending count / last error in `telegram_webhook_info`; fetched on demand, never on page render, so a dead Telegram never slows the page). **Port limitation (honest): Telegram only delivers webhooks on ports 443, 80, 88 and 8443, while the installer picks a random panel port (10000–60000). Registration on any other port fails with Telegram's own error plus a warning; the fix is re-running the installer with `--port 8443` (when no inbound uses TCP 8443) or a reverse proxy on 443.** |
+| Auth | Only the configured admin chat ID may use the bot; updates from any other chat are ignored silently — no reply, no error, nothing that confirms the bot exists. |
+| Dispatcher | `app/bot.py:handle_update` — never raises (a bad update is logged and dropped). Duplicate `update_id`s are ignored (Telegram redelivers). Commands: `/start` (main menu), `/help`, `/cancel`. Inline keyboards everywhere; views edit the menu message in place and fall back to sending a new message when the edit fails. |
+| What the bot does | Users: paginated list, view (traffic/expiry/frozen/inbounds), create (guided flow: name → pick inbounds → traffic limit → expiry), freeze/unfreeze, extend expiry (+7/+30/+90 days), reset traffic, delete (with confirmation). Inbounds: list with client counts, view, toggle. Links: a user's share links + subscription link (the same links the panel generates; a subscription host or domain is required for share links, and a domain for the subscription URL — without one the bot says so instead of sending a broken link). Status: server status (`app.system_status`) + traffic summary (today + 14 days from `traffic_daily`) + user counts. |
+| Semantics | Every state change reuses the web route's exact behavior: same validation (name format/uniqueness, limit/expiry parsing), same audit action names (detail marked `[telegram]`), same `rerender_configs` call — a re-render failure is reported in the reply, not hidden. The create flow's inbound picker defaults to all enabled inbounds (the web form's behavior) and lets the admin narrow the set; `_create_clients_for_user` takes an optional inbound filter for that. |
+| Conversation state | In-memory only (`_conversations`, per chat id, 10-minute timeout) — no DB schema change. `/cancel` aborts; any other command or menu tap abandons the flow. |
+| Language | The bot speaks Persian (no per-admin language setting exists to follow); every bot string still has an EN key (`BOT_STRING_KEYS` in `app/bot.py`; the test suite asserts fa/en parity). |
+
+No DB schema change: webhook state (secret, registered URL + time,
+status snapshot) lives in the existing `settings` table.
+
 ---
 
 ## 6. Subscriptions, links, QR — dual format (mandatory)
