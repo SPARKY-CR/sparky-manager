@@ -428,7 +428,9 @@ def test_every_nav_link_resolves(authed_client):
 def test_sidebar_cta_and_brand_resolve(authed_client):
     resp = authed_client.get("/dashboard")
     assert resp.status_code == 200
-    assert 'href="/inbounds#add-inbound"' in resp.text
+    # The CTA links to the form INSIDE the collapsed <details>:
+    # navigating to a fragment inside a closed details opens it.
+    assert 'href="/inbounds#add-inbound-form"' in resp.text
     page = authed_client.get("/inbounds")
     assert page.status_code == 200
     assert 'id="add-inbound"' in page.text

@@ -736,6 +736,14 @@ select option { background: var(--surface-solid-2); color: var(--ink); }
 .btn-ghost:hover { background: var(--surface-solid-2); color: var(--ink); }
 .btn-small { padding: 0.3rem 0.7rem; height: 30px; font-size: 0.85rem; }
 .btn-block { width: 100%; }
+
+/* ---- collapsible add-inbound form (live-feedback fix) ---- */
+/* The <details> toggle is JS-free, like the :target drawer. The
+   summary reuses .btn styling; hide the native disclosure marker
+   so it reads as a plain button. */
+details.add-form > summary { list-style: none; }
+details.add-form > summary::-webkit-details-marker { display: none; }
+details.add-form[open] > summary { margin-block-end: 0.85rem; }
 /* Disabled pagination step: looks like a button, does nothing. */
 .btn-disabled { opacity: 0.45; cursor: default; pointer-events: none; }
 /* Icon-only button (28px square, ghost). */

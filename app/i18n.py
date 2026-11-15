@@ -137,7 +137,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "logs_hint": "جدیدترین خط‌ها اول می‌آیند. خطاها و ری‌استارت‌ها با جزئیات کامل اینجا ثبت می‌شوند.",
         "confirm_clear_logs": "لاگ فعلی پاک شود؟",
         "size": "اندازه",
-        "footer_note": "پنل VPN — فاز ۱",
+        "footer_note": "پنل VPN",
         # Inbound editor (Phase 1 of the professional-panel expansion).
         "edit": "ویرایش",
         "edit_inbound": "ویرایش اینباند",
@@ -631,7 +631,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "logs_hint": "Newest lines first. Errors and restarts are recorded here with full detail.",
         "confirm_clear_logs": "Clear the current log?",
         "size": "Size",
-        "footer_note": "VPN Panel — Phase 1",
+        "footer_note": "VPN Panel",
         # Inbound editor (Phase 1 of the professional-panel expansion).
         "edit": "Edit",
         "edit_inbound": "Edit inbound",

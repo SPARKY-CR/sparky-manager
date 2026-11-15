@@ -357,10 +357,9 @@ def _redirect(url: str, request: Request, msg: str = "", err: str = "") -> Redir
         from urllib.parse import quote
 
         target += f"{sep}err={quote(err[:500])}"
-    response = RedirectResponse(url=target, status_code=303)
-    if request.query_params.get("lang") in ("fa", "en"):
-        response.set_cookie("lang", request.query_params["lang"], max_age=365 * 86400)
-    return response
+    # No lang cookie here: the HTTP middleware in app.main sets it on
+    # every response carrying a valid ?lang= (redirects included).
+    return RedirectResponse(url=target, status_code=303)
 
 def _ss2022_password() -> str:
     """A valid Shadowsocks-2022 key: base64 of 16 random bytes for

@@ -781,7 +781,6 @@ curl -Ls https://raw.githubusercontent.com/SPARKY-CR/sparky-manager/main/install
   Panel:    https://<IP>:<random-port>/<web-path>   (or https://<domain>:<same-port>/<web-path>)
   Username: admin
   Password: <generated-or-supplied>
-  Subscriptions, QR codes and users are inside the panel.
   Reprint this anytime:  sudo sparky-manager info
 ============================================================
 ```

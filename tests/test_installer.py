@@ -28,6 +28,12 @@ What is covered:
   (``cp -p``), every ``.bak`` restore re-applies the permissions,
   the reloadcmd restarts only units that exist yet, and a re-run
   heals a pair an older installer left unreadable.
+* Reality SNI reuse (live-feedback fix): a re-install re-reads the
+  saved SNI from panel.env (``SPARKY_REALITY_SNI``) and skips the
+  prompt; a fresh install still asks; ``--reality-sni`` always wins.
+* The login box is trimmed: no protocol lists, logs line or
+  subscriptions line — URL, credentials, cert info, reprint hint
+  and installed versions only.
 """
 
 import re
@@ -419,3 +425,101 @@ def test_le_rollback_restores_cert_permissions():
     )
     window = "\n".join(main_lines[call : call + 6])
     assert "fix_panel_cert_perms" in window
+
+
+def _extract_block(text: str, start_marker: str, end_line: str) -> str:
+    """Top-level lines from the line containing ``start_marker``
+    through the next line that is exactly ``end_line`` (at col 0)."""
+    lines = text.splitlines()
+    start = next(i for i, line in enumerate(lines) if start_marker in line)
+    end = next(
+        i for i in range(start + 1, len(lines)) if lines[i] == end_line
+    )
+    return "\n".join(lines[start : end + 1])
+
+
+def _run_sni_block(block: str, root: Path, given: int, preset: str) -> str:
+    """Run the extracted SNI-reuse block in bash with ``/opt`` faked
+    to ``root``; returns the ``SNI=... SAVED=...`` line it prints."""
+    block = block.replace("/opt/sparky-manager", str(root / "opt" / "sparky-manager"))
+    script = (
+        "set -euo pipefail\n"
+        "info() { :; }\n"
+        f"REALITY_SNI_GIVEN={given}\n"
+        f'REALITY_SNI="{preset}"\n'
+        + block
+        + "\n"
+        'echo "SNI=${REALITY_SNI} SAVED=${SNI_SAVED}"\n'
+    )
+    proc = _run_bash(script)
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    return proc.stdout.strip().splitlines()[-1]
+
+
+def test_reality_sni_reused_from_panel_env_on_reinstall(tmp_path):
+    """A re-install re-reads the saved SNI from panel.env and skips
+    the prompt (SNI_SAVED=1); a fresh install keeps the default and
+    still asks; --reality-sni always wins over the saved value."""
+    text = _install_text()
+    block = _extract_block(text, "# Reality SNI: re-used from panel.env", "fi")
+    # The block reads the panel.env key (SPARKY_REALITY_SNI), not the
+    # install.env key (REALITY_SNI) — they are different files.
+    assert "SPARKY_REALITY_SNI=" in block
+    assert "install.env" not in block
+
+    root = tmp_path / "root"
+    data = root / "opt" / "sparky-manager" / "data"
+    data.mkdir(parents=True)
+    (data / "panel.env").write_text(
+        "SPARKY_PORT='22140'\nSPARKY_REALITY_SNI='example.com'\n"
+    )
+    # Re-install with a saved value: reused, prompt skipped.
+    out = _run_sni_block(block, root, given=0, preset="www.microsoft.com")
+    assert out == "SNI=example.com SAVED=1", out
+    # --reality-sni wins over the saved value.
+    out = _run_sni_block(block, root, given=1, preset="flag.example")
+    assert out == "SNI=flag.example SAVED=0", out
+    # Fresh install (no panel.env): default kept, prompt still asked.
+    (data / "panel.env").unlink()
+    out = _run_sni_block(block, root, given=0, preset="www.microsoft.com")
+    assert out == "SNI=www.microsoft.com SAVED=0", out
+
+
+def test_reality_sni_prompt_guarded_by_saved_value():
+    """The SNI prompt runs only when no saved value was reused."""
+    text = _install_text()
+    lines = text.splitlines()
+    ask_i = next(
+        i
+        for i, line in enumerate(lines)
+        if line.strip() == 'ask REALITY_SNI "Reality SNI" "$REALITY_SNI"'
+    )
+    assert lines[ask_i - 1].strip() == 'if [ "$SNI_SAVED" -eq 0 ]; then'
+    assert lines[ask_i + 1].strip() == "fi"
+    # Both --reality-sni spellings mark the flag as given.
+    assert '--reality-sni)      REALITY_SNI="$2"; REALITY_SNI_GIVEN=1; shift 2 ;;' in text
+    assert '--reality-sni=*)    REALITY_SNI="${1#--reality-sni=}"; REALITY_SNI_GIVEN=1; shift ;;' in text
+
+
+def test_login_box_trimmed():
+    """The login box keeps URL, credentials, cert info, the reprint
+    hint and installed versions — the protocol lists, the logs line
+    and the subscriptions line are gone."""
+    text = _install_text()
+    box = _extract_block(text, "# Login box", '} > "$LOGIN_FILE"')
+    for removed in (
+        "Default VPN (no domain needed)",
+        "More protocols in the panel",
+        "Panel logs:",
+        "Subscriptions, QR codes",
+    ):
+        assert removed not in box, removed
+    for kept in (
+        "Panel:",
+        "Username:",
+        "Password:",
+        "Panel cert fingerprint",
+        "Reprint this anytime",
+        "Installed versions:",
+    ):
+        assert kept in box, kept

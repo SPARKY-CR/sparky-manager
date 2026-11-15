@@ -1459,6 +1459,15 @@ async def _security_headers_middleware(request: Request, call_next):
     response = await call_next(request)
     for name, value in _SECURITY_HEADERS.items():
         response.headers[name] = value
+    # Language persistence: the toggle links are plain GETs
+    # (?lang=en|fa), so the cookie must be set on EVERY response
+    # that carries a valid ?lang= — not only on redirects. Without
+    # this, a toggle renders one page in the new language and any
+    # navigation reverts to fa (get_lang falls back to the cookie).
+    # An invalid value sets nothing (get_lang ignores it too).
+    lang = request.query_params.get("lang")
+    if lang in ("fa", "en"):
+        response.set_cookie("lang", lang, max_age=365 * 86400)
     return response
 
 
