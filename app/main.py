@@ -192,12 +192,15 @@ try:
     from app import auth as auth_mod
     from app.auth import (
         create_session,
+        csrf_token_for_session,
         get_admin_from_token,
         hash_password,
         invalidate_other_sessions,
         invalidate_session,
         is_locked_out,
         record_failed_login,
+        record_successful_login,
+        verify_csrf_token,
         verify_password,
     )
 except ImportError:  # pragma: no cover
@@ -205,6 +208,8 @@ except ImportError:  # pragma: no cover
     create_session = get_admin_from_token = hash_password = None  # type: ignore[assignment]
     invalidate_session = invalidate_other_sessions = None  # type: ignore[assignment]
     is_locked_out = record_failed_login = None  # type: ignore[assignment]
+    record_successful_login = None  # type: ignore[assignment]
+    csrf_token_for_session = verify_csrf_token = None  # type: ignore[assignment]
     verify_password = None  # type: ignore[assignment]
     logger.warning("app.auth not available yet")
 
@@ -344,6 +349,25 @@ def _web_prefix() -> str:
 
 WEB_PATH = _web_prefix()
 
+# Honor X-Forwarded-Proto for the session cookie's Secure flag only
+# when the operator declared a trusted TLS-terminating proxy
+# (SPARKY_TRUST_FORWARDED_PROTO=1). Default False: the standard
+# install terminates TLS in uvicorn, and an untrusted client could
+# spoof the header (S4).
+TRUST_FORWARDED_PROTO = bool(_cfg_attr("TRUST_FORWARDED_PROTO", False))
+
+
+def _is_secure_request(request: Request) -> bool:
+    """True when this request arrived over HTTPS — directly, or via a
+    trusted TLS-terminating proxy (see TRUST_FORWARDED_PROTO)."""
+    if request.url.scheme == "https":
+        return True
+    if TRUST_FORWARDED_PROTO:
+        forwarded = request.headers.get("x-forwarded-proto", "")
+        # First value wins when proxies chain the header.
+        return forwarded.split(",")[0].strip().lower() == "https"
+    return False
+
 
 PANEL_PORT = _cfg_attr("PANEL_PORT", 2053)
 DATA_DIR = Path(_cfg_attr("DATA_DIR", "/opt/sparky-manager/data"))
@@ -398,6 +422,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "login_hint": "با حساب مدیر وارد شوید.",
         "wrong_credentials": "نام کاربری یا رمز عبور اشتباه است.",
         "locked_out": "به دلیل تلاش‌های ناموفق زیاد، ورود موقتاً قفل شده است. چند دقیقه دیگر تلاش کنید.",
+        "csrf_error_title": "درخواست نامعتبر است",
+        "csrf_error_message": "توکن امنیتی این فرم معتبر نیست یا منقضی شده است. لطفاً صفحه را تازه‌سازی کنید و دوباره تلاش کنید.",
         "total_users": "کل کاربران",
         "active_users": "کاربران فعال",
         "total_inbounds": "کل اینباندها",
@@ -640,7 +666,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "invalid_chat_id": "آیدی چت باید عدد باشد (مثلاً 123456789 یا برای گروه با - شروع می‌شود).",
         "backup_restore": "پشتیبان‌گیری و بازیابی",
         "backup_download": "دانلود پشتیبان",
-        "backup_hint": "فایل ZIP شامل دیتابیس پنل، خروجی تنظیمات و اطلاعات نسخه است.",
+        "backup_hint": "فایل ZIP شامل دیتابیس پنل و اطلاعات نسخه است. این فایل همهٔ رمزها، کلیدهای خصوصی و توکن ربات را دارد — مثل یک کلید خصوصی با آن رفتار کنید و هرگز آن را به اشتراک نگذارید.",
         "restore_backup": "بازیابی از پشتیبان",
         "restore_file": "فایل پشتیبان (ZIP یا .db)",
         "restore_confirm": "می‌دانم که وضعیت فعلی پنل جایگزین می‌شود (از وضعیت فعلی اول پشتیبان گرفته می‌شود).",
@@ -787,6 +813,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "login_hint": "Sign in with the admin account.",
         "wrong_credentials": "Wrong username or password.",
         "locked_out": "Too many failed attempts — login is temporarily locked. Try again in a few minutes.",
+        "csrf_error_title": "Invalid request",
+        "csrf_error_message": "This form's security token is missing or expired. Please reload the page and try again.",
         "total_users": "Total users",
         "active_users": "Active users",
         "total_inbounds": "Total inbounds",
@@ -1029,7 +1057,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "invalid_chat_id": "Chat ID must be a number (e.g. 123456789, or starting with - for a group).",
         "backup_restore": "Backup & restore",
         "backup_download": "Download backup",
-        "backup_hint": "A ZIP with the panel database, a settings export and version info.",
+        "backup_hint": "A ZIP with the panel database and version info. It contains every password, private key and the bot token — treat it like a private key and never share it.",
         "restore_backup": "Restore from backup",
         "restore_file": "Backup file (ZIP or .db)",
         "restore_confirm": "I understand the current panel state will be replaced (it is backed up first).",
@@ -2389,6 +2417,36 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+# Security headers (Phase 2, S3). The panel serves no external
+# resources (bundled font, local JS/CSS, same-origin QR images), so
+# a strict CSP is safe — except inline styles: the dashboard chart
+# and a few stat cards render widths/colors inline, so style-src
+# keeps 'unsafe-inline' (no inline *scripts* exist anywhere, and
+# script-src stays strict). Nothing embeds the panel, so framing is
+# denied outright. HSTS is sent unconditionally: browsers ignore it
+# over plain HTTP, and production always serves HTTPS (uvicorn TLS).
+_SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Content-Security-Policy": (
+        "default-src 'self'; script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self'; "
+        "font-src 'self'; object-src 'none'; base-uri 'self'; "
+        "frame-ancestors 'none'"
+    ),
+    "Strict-Transport-Security": "max-age=31536000",
+}
+
+
+@app.middleware("http")
+async def _security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    for name, value in _SECURITY_HEADERS.items():
+        response.headers[name] = value
+    return response
+
+
 def db_session():
     """FastAPI dependency yielding a DB session.
 
@@ -2437,8 +2495,121 @@ def require_admin_api(request: Request, db: Session = Depends(db_session)) -> An
     return admin
 
 
+# ---------------------------------------------------------------------------
+# CSRF protection (Phase 2, S1)
+#
+# Every state-changing POST (all HTML forms + the JSON API) requires a
+# per-session token: HMAC-SHA256 of the session token
+# (app.auth.csrf_token_for_session), rendered as a hidden field in
+# every form by _template_ctx and checked here with a constant-time
+# compare. The token is accepted from the ``csrf_token`` form field
+# or the ``X-CSRF-Token`` header (the JSON API has no form body).
+#
+# Exclusions (each deliberate, documented here):
+# - POST /login: no session exists yet, so there is no token to check
+#   against. Login CSRF is a non-issue for this single-admin panel:
+#   an attacker would need the admin password to make it meaningful,
+#   and that password IS the secret being protected.
+# - POST /telegram/webhook/{secret}: an unauthenticated external POST
+#   from Telegram's servers. It is authenticated by its random path
+#   secret (constant-time compare) instead, and Telegram cannot
+#   present a session cookie.
+# - All GET routes: read-only by design (logout moved to POST).
+# ---------------------------------------------------------------------------
+
+CSRF_FORM_FIELD = "csrf_token"
+CSRF_HEADER = "X-CSRF-Token"
+
+
+class CSRFError(Exception):
+    """Raised when CSRF validation fails (missing/wrong token)."""
+
+
+async def _check_csrf_token(request: Request) -> None:
+    """Validate the CSRF token for this request's session.
+
+    Fails closed: any missing piece (no session cookie, no submitted
+    token, unparseable form, unavailable auth helpers) raises
+    CSRFError. The session itself was already validated by the auth
+    dependency this runs under, so the cookie token here is a live
+    session's token.
+    """
+    session_token = request.cookies.get(SESSION_COOKIE)
+    submitted = request.headers.get(CSRF_HEADER)
+    if submitted is None:
+        try:
+            form = await request.form()
+        except Exception:  # noqa: BLE001 — malformed body: no token
+            form = None
+        if form is not None:
+            value = form.get(CSRF_FORM_FIELD)
+            submitted = value if isinstance(value, str) else None
+    if (
+        not session_token
+        or verify_csrf_token is None
+        or not submitted
+        or not verify_csrf_token(session_token, submitted)
+    ):
+        raise CSRFError()
+
+
+async def require_csrf(
+    request: Request, admin: Any = Depends(require_admin)
+) -> None:
+    """CSRF dependency for HTML form POSTs (auth: 303 redirect)."""
+    await _check_csrf_token(request)
+
+
+async def require_csrf_api(
+    request: Request, admin: Any = Depends(require_admin_api)
+) -> None:
+    """CSRF dependency for the JSON API (auth: 401, token via header)."""
+    await _check_csrf_token(request)
+
+
+@app.exception_handler(CSRFError)
+async def _csrf_error_handler(request: Request, exc: CSRFError):
+    """403 with a clear error page (JSON for the API)."""
+    if request.url.path.startswith(WEB_PATH + "/api/"):
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "CSRF token missing or invalid"},
+        )
+    admin = None
+    if get_session is not None:
+        try:
+            with get_session() as db:
+                admin = _admin_from_request(request, db)
+        except Exception:  # noqa: BLE001 — error page without sidebar
+            admin = None
+    t = t_for(get_lang(request))
+    return templates.TemplateResponse(
+        request,
+        "error.html",
+        _template_ctx(
+            request,
+            {
+                "admin": admin,
+                "error_title": t["csrf_error_title"],
+                "error_message": t["csrf_error_message"],
+            },
+        ),
+        status_code=403,
+    )
+
+
 def _template_ctx(request: Request, extra: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     lang = get_lang(request)
+    # CSRF token for the session cookie ("" when logged out — the
+    # login form carries no token; see the S1 note above require_csrf).
+    # Deriving from an arbitrary cookie value is harmless: the POST
+    # check requires a *valid* session anyway.
+    session_token = request.cookies.get(SESSION_COOKIE)
+    csrf_token = (
+        csrf_token_for_session(session_token)
+        if session_token and csrf_token_for_session is not None
+        else ""
+    )
     ctx: dict[str, Any] = {
         "request": request,
         "lang": lang,
@@ -2446,6 +2617,7 @@ def _template_ctx(request: Request, extra: Optional[dict[str, Any]] = None) -> d
         "base_path": WEB_PATH,
         "msg": request.query_params.get("msg", ""),
         "err": request.query_params.get("err", ""),
+        "csrf_token": csrf_token,
     }
     if extra:
         ctx.update(extra)
@@ -2481,7 +2653,9 @@ def _set_session_cookie(response: Response, request: Request, token: str) -> Non
         max_age=SESSION_MAX_AGE,
         httponly=True,
         samesite="lax",
-        secure=request.url.scheme == "https",
+        # Secure whenever the request arrived over HTTPS, directly
+        # or via a trusted TLS-terminating proxy (S4).
+        secure=_is_secure_request(request),
         path=WEB_PATH or "/",
     )
 
@@ -3449,6 +3623,7 @@ def _render_inbound_edit(
         server_public_key = str(settings.get("wireguard_public_key") or "")
     elif inbound.protocol == "amneziawg":
         server_public_key = str(settings.get("amneziawg_public_key") or "")
+    session_token = request.cookies.get(SESSION_COOKIE)
     return templates.TemplateResponse(
         request,
         "inbound_edit.html",
@@ -3466,6 +3641,13 @@ def _render_inbound_edit(
             # it via _template_ctx; this helper builds its context
             # by hand, so it must include it explicitly).
             "base_path": WEB_PATH,
+            # Same for the CSRF token (S1): this page's forms need
+            # it, and _template_ctx is not used here.
+            "csrf_token": (
+                csrf_token_for_session(session_token)
+                if session_token and csrf_token_for_session is not None
+                else ""
+            ),
         },
     )
 
@@ -3491,6 +3673,7 @@ async def edit_inbound_submit(
     request: Request,
     inbound_id: int,
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     """Validate, save, re-render — exactly like the create path.
@@ -3582,6 +3765,7 @@ def regenerate_reality(
     request: Request,
     inbound_id: int,
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     """Fresh Reality keypair + shortId for one inbound (Phase 1).
@@ -3632,6 +3816,7 @@ def regenerate_awg_params(
     request: Request,
     inbound_id: int,
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     """Fresh AmneziaWG obfuscation parameters for one inbound.
@@ -3674,6 +3859,7 @@ def regenerate_server_key(
     request: Request,
     inbound_id: int,
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     """Fresh WireGuard/AmneziaWG SERVER keypair for the panel.
@@ -3765,6 +3951,10 @@ def login_submit(
         )
     admin.last_login_at = datetime.now(timezone.utc)
     db.commit()
+    # Clear the failure counter (S2): without this, failed attempts
+    # kept accumulating across successful logins within the window.
+    if record_successful_login is not None:
+        record_successful_login(ip)
     logger.info("login ok for %r from %s", username, ip)
     token = create_session(db, admin, ip)
     response = _redirect("/dashboard", request)
@@ -3772,8 +3962,14 @@ def login_submit(
     return response
 
 
-@app.get("/logout")
-def logout(request: Request, db: Session = Depends(db_session)):
+@app.post("/logout")
+def logout(
+    request: Request,
+    db: Session = Depends(db_session),
+    csrf: None = Depends(require_csrf),
+):
+    # POST + CSRF token (S1): a GET logout is a logout-CSRF vector
+    # (any site could sign the admin out with an <img> tag).
     token = request.cookies.get(SESSION_COOKIE)
     if token and invalidate_session is not None:
         try:
@@ -3781,7 +3977,14 @@ def logout(request: Request, db: Session = Depends(db_session)):
         except Exception:  # noqa: BLE001
             logger.exception("invalidate_session failed")
     response = _redirect("/login", request)
-    response.delete_cookie(SESSION_COOKIE, path="/")
+    # The deletion must mirror the set attributes (path + Secure):
+    # a mismatched path or a non-Secure deletion cannot clear a
+    # Secure cookie set under the web path.
+    response.delete_cookie(
+        SESSION_COOKIE,
+        path=WEB_PATH or "/",
+        secure=_is_secure_request(request),
+    )
     return response
 
 
@@ -4114,6 +4317,7 @@ def create_user(
     traffic_limit_gb: str = Form(""),
     expires_days: str = Form(""),
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     lang = get_lang(request)
@@ -4225,6 +4429,7 @@ def toggle_user(
     request: Request,
     user_id: int,
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     user = db.query(User).filter(User.id == user_id).first()
@@ -4245,6 +4450,7 @@ def delete_user(
     request: Request,
     user_id: int,
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     user = db.query(User).filter(User.id == user_id).first()
@@ -4267,6 +4473,7 @@ def rotate_token(
     request: Request,
     user_id: int,
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     user = db.query(User).filter(User.id == user_id).first()
@@ -4302,6 +4509,7 @@ async def edit_user_submit(
     request: Request,
     user_id: int,
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     """Validate, save, re-render — two passes so a bad per-client
@@ -4443,6 +4651,7 @@ def freeze_user(
     request: Request,
     user_id: int,
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     """Freeze every client of the user: they drop out of configs,
@@ -4469,6 +4678,7 @@ def unfreeze_user(
     request: Request,
     user_id: int,
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     """Unfreeze every client of the user (restores the frozen state)."""
@@ -4498,6 +4708,7 @@ BULK_ACTIONS = ("enable", "disable", "delete", "reset-traffic", "extend-expiry")
 async def bulk_users(
     request: Request,
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     """Bulk ops on the selected users (Phase 2).
@@ -4603,6 +4814,7 @@ def create_inbound(
     path: str = Form(""),
     network: str = Form("tcp"),
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     t = t_for(get_lang(request))
@@ -4727,6 +4939,7 @@ def toggle_inbound(
     request: Request,
     inbound_id: int,
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     inbound = db.query(Inbound).filter(Inbound.id == inbound_id).first()
@@ -4747,6 +4960,7 @@ def delete_inbound(
     request: Request,
     inbound_id: int,
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     inbound = db.query(Inbound).filter(Inbound.id == inbound_id).first()
@@ -5120,6 +5334,7 @@ def save_settings(
     telegram_chat_id: str = Form(""),
     telegram_transport: str = Form(""),
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     t = t_for(get_lang(request))
@@ -5214,6 +5429,7 @@ def change_password(
     new_password: str = Form(""),
     confirm_password: str = Form(""),
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     t = t_for(get_lang(request))
@@ -5233,6 +5449,7 @@ def change_password(
 def telegram_test(
     request: Request,
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     t = t_for(get_lang(request))
@@ -5248,6 +5465,7 @@ def telegram_test(
 def register_telegram_webhook(
     request: Request,
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     """(Re-)register the bot webhook with Telegram (Phase 4).
@@ -5292,6 +5510,7 @@ def register_telegram_webhook(
 def refresh_telegram_webhook_status(
     request: Request,
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     """Refresh the stored webhook status from Telegram's getWebhookInfo.
@@ -5392,6 +5611,7 @@ async def restore_backup(
     backup_file: UploadFile = File(None),
     confirm_restore: str = Form(""),
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     t = t_for(get_lang(request))
@@ -5543,6 +5763,7 @@ def logs_download(
 def logs_clear(
     request: Request,
     admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     t = t_for(get_lang(request))
@@ -6192,6 +6413,7 @@ def api_create_user(
     payload: UserCreate,
     request: Request,
     admin: Any = Depends(require_admin_api),
+    csrf: None = Depends(require_csrf_api),
     db: Session = Depends(db_session),
 ):
     if db.query(User).filter(User.name == payload.name).first() is not None:

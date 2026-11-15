@@ -148,6 +148,49 @@ def invalidate_session(db: DbSession, token: str) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# CSRF tokens (Phase 2, S1)
+# ---------------------------------------------------------------------------
+
+# Label mixed into the CSRF derivation so the token is domain-separated
+# from anything else derived from the session token.
+_CSRF_LABEL = b"sparky-manager csrf v1"
+
+
+def csrf_token_for_session(session_token: str) -> str:
+    """Per-session CSRF token, derived from the session token.
+
+    The session token is a 256-bit secret known only to the server
+    and the admin's browser (HttpOnly cookie); HMAC-SHA256 over it is
+    unforgeable without it, and reveals nothing about the session
+    token itself (the HMAC is one-way). The token dies with the
+    session: logout / password-change invalidation kills it too.
+
+    Derivation (rather than a stored random token) needs no DB schema
+    change — the panel has no migration system and ``create_all()``
+    never adds columns, so a stored-token column would break login on
+    existing installs. The security properties are identical to a
+    stored synchronizer token: one unguessable value per session,
+    checked with a constant-time compare.
+    """
+    return hmac.new(
+        session_token.encode("utf-8"), _CSRF_LABEL, hashlib.sha256
+    ).hexdigest()
+
+
+def verify_csrf_token(session_token: str, submitted: Optional[str]) -> bool:
+    """Constant-time check of a submitted CSRF token for a session.
+
+    Returns False (never raises) for a missing session token, a
+    missing/empty submission, or a mismatch.
+    """
+    if not session_token or not submitted:
+        return False
+    return hmac.compare_digest(
+        csrf_token_for_session(session_token), submitted
+    )
+
+
 def invalidate_other_sessions(
     db: DbSession, admin_id: int, keep_token: Optional[str] = None
 ) -> int:
@@ -211,9 +254,11 @@ __all__ = [
     "hash_password",
     "verify_password",
     "create_session",
+    "csrf_token_for_session",
     "get_admin_from_token",
     "invalidate_session",
     "invalidate_other_sessions",
+    "verify_csrf_token",
     "record_failed_login",
     "record_successful_login",
     "is_locked_out",

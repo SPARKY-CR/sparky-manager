@@ -32,6 +32,7 @@
     </div>
   </form>
   <form method="post" action="{{ base_path }}/logs/clear" class="inline-form" data-confirm="{{ t.confirm_clear_logs }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button type="submit" class="btn btn-small btn-danger">{{ t.log_clear }}</button>
   </form>
 </div>

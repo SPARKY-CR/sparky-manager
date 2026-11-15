@@ -178,11 +178,34 @@ def test_login_happy_path_and_logout(test_client):
     assert resp.status_code == 200
     assert test_client.get("/dashboard").status_code == 200
     assert test_client.get("/api/users").status_code == 200
-    resp = test_client.get("/logout", follow_redirects=False)
+    # Logout is POST-only (Phase 2, S1): GET must not log out.
+    assert test_client.get("/logout").status_code == 405
+    assert test_client.get("/api/users").status_code == 200
+    resp = test_client.post("/logout", follow_redirects=False)
     assert resp.status_code == 303
     assert test_client.get("/dashboard",
                            follow_redirects=False).status_code == 303
     assert test_client.get("/api/users").status_code == 401
+
+
+def test_successful_login_resets_lockout_counter_http(test_client):
+    # S2: 4 failures, a successful login, then 1 more failure. Without
+    # the fix the counter would stand at 5 and the admin would be
+    # locked out (429); with the fix the success clears it, so the
+    # next correct login still works.
+    for _ in range(MAX_FAILED_LOGINS - 1):
+        resp = test_client.post("/login", data={
+            "username": ADMIN_USERNAME, "password": "wrong-password"})
+        assert resp.status_code == 401
+    resp = test_client.post("/login", data={
+        "username": ADMIN_USERNAME, "password": ADMIN_PASSWORD})
+    assert resp.status_code == 200
+    resp = test_client.post("/login", data={
+        "username": ADMIN_USERNAME, "password": "wrong-password"})
+    assert resp.status_code == 401
+    resp = test_client.post("/login", data={
+        "username": ADMIN_USERNAME, "password": ADMIN_PASSWORD})
+    assert resp.status_code == 200
 
 
 def test_login_wrong_password_401(test_client):

@@ -408,12 +408,14 @@ def test_create_backup_zip_contents(db_engine, db, seeded, tmp_path):
     main_mod.ensure_defaults(db)  # seeds the settings rows
     data = backup_mod.create_backup_zip(_db_path_for(db_engine))
     zf = zipfile.ZipFile(io.BytesIO(data))
-    assert set(zf.namelist()) == {"panel.db", "settings.json", "meta.json"}
+    # Phase 2, S5: no settings.json — the DB is authoritative, and a
+    # plaintext dump of every secret only widened the backup's
+    # exposure. (The settings rows are still inside panel.db.)
+    assert set(zf.namelist()) == {"panel.db", "meta.json"}
+    assert "settings.json" not in zf.namelist()
     meta = json.loads(zf.read("meta.json"))
     assert meta["schema_version"] == backup_mod.SCHEMA_VERSION
     assert meta["users"] == 5
-    settings = json.loads(zf.read("settings.json"))
-    assert "reality_sni" in settings
     # The embedded DB opens (as a file, like the restore path does)
     # and holds the seeded users.
     snap = tmp_path / "snap.db"
@@ -516,7 +518,7 @@ def test_download_backup(authed_client, db, seeded):
     assert "sparky-manager-backup-" in resp.headers["content-disposition"]
     zf = zipfile.ZipFile(io.BytesIO(resp.content))
     assert "panel.db" in zf.namelist()
-    assert "settings.json" in zf.namelist()
+    assert "settings.json" not in zf.namelist()  # Phase 2, S5
     assert "meta.json" in zf.namelist()
 
 

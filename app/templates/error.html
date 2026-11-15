@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %} — {{ error_title }}{% endblock %}
+{% block content %}
+<div class="card card-narrow">
+  <h1>{{ error_title }}</h1>
+  <p>{{ error_message }}</p>
+  <p class="form-actions">
+    <a class="btn" href="{{ base_path }}/dashboard">{{ t.back_to_dashboard }}</a>
+  </p>
+</div>
+{% endblock %}

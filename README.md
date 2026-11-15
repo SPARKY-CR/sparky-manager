@@ -130,9 +130,10 @@ in-panel (other sessions are signed out; the installer's login file
 still holds the old password), Telegram notifications (bot token +
 chat ID, with a test button — notified on user creation, users
 expiring within 24h, and config re-render failures), backup/restore
-(download a ZIP with the database + settings export; restore
-validates the upload, backs the current database up first, and
-re-renders configs), server status (CPU load, RAM, disk, uptime,
+(download a ZIP with the database; restore validates the upload,
+backs the current database up first, swaps it atomically, and
+re-renders configs — treat the ZIP like a private key: it contains
+every password, private key, and the bot token), server status (CPU load, RAM, disk, uptime,
 and per-service state for every core), and 14-day traffic charts on
 the dashboard and each user page (server-rendered SVG, no external
 libraries; days without traffic show as zero).

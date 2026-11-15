@@ -7,6 +7,7 @@
 
 <div class="card card-narrow">
   <form method="post" action="{{ base_path }}/settings">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label>
       {{ t.domain }}
       <input type="text" name="domain" value="{{ settings.get('domain', '') }}" dir="ltr">
@@ -54,6 +55,7 @@
   </form>
   {% if telegram_configured %}
   <form method="post" action="{{ base_path }}/settings/telegram-test">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="form-actions">
       <button type="submit" class="btn">{{ t.telegram_test }}</button>
     </div>
@@ -81,11 +83,13 @@
   <p class="muted">{{ t.telegram_webhook_not_registered }}</p>
   {% endif %}
   <form method="post" action="{{ base_path }}/settings/telegram-webhook">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="form-actions">
       <button type="submit" class="btn btn-primary">{{ t.telegram_webhook_register }}</button>
     </div>
   </form>
   <form method="post" action="{{ base_path }}/settings/telegram-webhook-status">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="form-actions">
       <button type="submit" class="btn">{{ t.telegram_webhook_refresh }}</button>
     </div>
@@ -96,6 +100,7 @@
 <div class="card card-narrow">
   <h2>{{ t.change_password }}</h2>
   <form method="post" action="{{ base_path }}/settings/password">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label>
       {{ t.current_password }}
       <input type="password" name="current_password" value="" dir="ltr" autocomplete="current-password">
@@ -122,6 +127,7 @@
     <a class="btn" href="{{ base_path }}/settings/backup">↓ {{ t.backup_download }}</a>
   </p>
   <form method="post" action="{{ base_path }}/settings/restore" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label>
       {{ t.restore_file }}
       <input type="file" name="backup_file" accept=".zip,.db" dir="ltr">

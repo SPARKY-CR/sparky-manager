@@ -475,7 +475,7 @@ The settings page (`/settings`) now covers the panel itself:
 |---|---|
 | Password change (`POST /settings/password`) | Current + new + confirm; the admin's stored PBKDF2 hash is replaced (`app.auth.hash_password`), so the new password survives restarts (`ensure_defaults` only seeds a password when no admin exists). All OTHER sessions are invalidated (`auth.invalidate_other_sessions`); the session that made the change stays alive. Audited as `admin.password_change`. The installer's login file (`/root/sparky-manager-login.txt`, root-only) still holds the OLD password — the panel cannot rewrite it. |
 | Telegram notifications | Bot token + admin chat ID in settings (`telegram_bot_token`, `telegram_chat_id`); the token is never rendered back into the page (a blank field keeps the current value; clearing the chat ID disables notifications) and never logged. `app/telegram.py` is a reusable sender (`send_message`, httpx, 10 s timeout, failure → `False`, never raises) built for the Phase 4 management bot to reuse. Hooks: user created, user expiring within 24 h (checked by the expiry sweeper, once per user per day — dedup in the `telegram_expiry_notified` setting), re-render failure in the sweeper (throttled to once per hour via `telegram_rerender_notified_at`), plus a "send test message" button. Background messages are Persian (no request to take a language from). |
-| Backup / restore | `GET /settings/backup` downloads a ZIP (`panel.db` snapshot via the SQLite backup API, `settings.json`, `meta.json` with schema version + counts). `POST /settings/restore` accepts the ZIP or a bare `.db` file; validation is integrity check + required tables + schema-version guard (a backup from a NEWER schema version is refused — the schema is versioned through the `schema_version` setting row, written by `ensure_defaults`; a backup without one is v1). A bare `.db` must come from a checkpointed database (a stopped panel): a raw copy of the live WAL file can be missing tables. Restore needs a confirmation checkbox, backs the current DB up first (`data/backups/panel.db.<timestamp>.bak`, last 5 kept), then disposes the engine, swaps the file, rebinds (`app.db.reset_engine`), audits, and re-renders configs. The admin may need to log in again afterwards (the restored DB has its own sessions). |
+| Backup / restore | `GET /settings/backup` downloads a ZIP (`panel.db` snapshot via the SQLite backup API + `meta.json` with schema version + counts). `POST /settings/restore` accepts the ZIP or a bare `.db` file; validation is integrity check + required tables + schema-version guard (a backup from a NEWER schema version is refused — the schema is versioned through the `schema_version` setting row, written by `ensure_defaults`; a backup without one is v1). A bare `.db` must come from a checkpointed database (a stopped panel): a raw copy of the live WAL file can be missing tables. Restore needs a confirmation checkbox, backs the current DB up first (`data/backups/panel.db.<timestamp>.bak`, last 5 kept), then disposes the engine, swaps the file atomically (temp file + `os.replace`), rebinds (`app.db.reset_engine`), audits, and re-renders configs. The admin may need to log in again afterwards (the restored DB has its own sessions). The ZIP is a full credential bundle (DB holds every password, private key, bot token) — treat it like a private key. Old-format ZIPs that still carry `settings.json` restore fine (restore never read that member; it was dropped in Phase 2). |
 | Server status | On the settings page: load averages, RAM, disk (data dir), uptime, and per-service state for xray, sing-box, WireGuard, AmneziaWG, OpenVPN, OpenConnect, IKEv2. All unprivileged: `/proc` + `shutil.disk_usage` + ONE unprivileged `systemctl is-active` call for all units (querying unit state needs no privilege; no new sudoers rule). Fallback when systemd is unavailable: a `/proc` process scan, or `/sys/class/net/<iface>` for wg/awg. A service whose state cannot be determined shows "unknown", never "stopped". |
 | Traffic charts | Dashboard: total traffic, last 14 days; user detail: that user's last 14 days — both from `traffic_daily`, zero-filled. Inline SVG generated server-side (`app/charts.py`); no CDN, no JS library. Days with no recorded traffic are zero bars, never invented values. |
 
@@ -628,11 +628,46 @@ not faked.
 
 ## 7. Security
 
-- **Admin auth:** one admin, Argon2id hash (never plaintext, never in
-  a file). Session = signed, HttpOnly, `Secure` (when TLS), `SameSite=Lax`
-  cookie, 12 h expiry, server-side session record so logout invalidates
-  it. Login rate-limit: 5 failed attempts → 15 min lockout for that IP.
+- **Admin auth:** one admin, PBKDF2-HMAC-SHA256 hash (600,000
+  iterations, per-user salt, versioned format — never plaintext,
+  never in a file). Session = signed, HttpOnly, `Secure` (when TLS),
+  `SameSite=Lax` cookie, 12 h expiry, server-side session record so
+  logout invalidates it. Login rate-limit: 5 failed attempts →
+  15 min lockout for that IP; a successful login clears the counter.
   No "remember me" in MVP.
+- **CSRF:** every state-changing POST requires a per-session token
+  (HMAC-SHA256 of the session token, rendered as a hidden field in
+  every form and checked with a constant-time compare; the JSON API
+  takes it as an `X-CSRF-Token` header). Missing/wrong token → 403,
+  no state change. Excluded, deliberately: `POST /login` (no session
+  exists yet) and the Telegram webhook (authenticated by its random
+  path secret instead). Logout is POST-only. The token is *derived*
+  from the session token rather than stored in a new column: the
+  panel has no migration system, so a stored-token column would break
+  login on existing installs; the security properties are identical
+  (the session token is a 256-bit secret, the HMAC reveals nothing
+  about it, and the token dies with the session).
+- **Security headers:** every response carries
+  `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`
+  (nothing embeds the panel), `Referrer-Policy: no-referrer`,
+  `Strict-Transport-Security: max-age=31536000`, and a CSP
+  (`default-src 'self'`, strict `script-src 'self'`; `style-src`
+  keeps `'unsafe-inline'` because the dashboard chart renders widths
+  inline — no inline scripts exist anywhere).
+- **Session cookie behind a proxy:** the `Secure` flag follows the
+  request scheme; behind a TLS-terminating reverse proxy set
+  `SPARKY_TRUST_FORWARDED_PROTO=1` and the panel also honors
+  `X-Forwarded-Proto: https`. Default off — an untrusted client
+  could spoof the header.
+- **Backups are credential bundles:** a backup ZIP contains the whole
+  panel DB (admin password hash, every VPN password and private key,
+  the bot token, the webhook secret). Treat backup files like
+  private keys — never share them, never store them unencrypted in
+  shared places. (Since Phase 2 the ZIP holds only `panel.db` +
+  `meta.json`; the old plaintext `settings.json` member was dropped
+  — restore never read it — but old-format backups still restore.)
+  Restore swaps the DB atomically (temp file + `os.replace`) after
+  backing the current DB up first.
 - **Panel port:** TCP, randomised on a fresh install (free port in
   10000–60000, like other panels), plus a random secret web path (like
   3X-UI's webBasePath): the panel only answers under `/<random-path>`

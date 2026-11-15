@@ -34,7 +34,10 @@
         <span class="admin-avatar">{{ admin.username[:1] | upper }}</span>
         <span class="admin-name">{{ admin.username }}<span class="admin-role">{{ 'مدیر' if lang == 'fa' else 'Admin' }}</span></span>
       </div>
-      <a class="btn btn-ghost btn-block" href="{{ base_path }}/logout">{{ t.logout }}</a>
+      <form method="post" action="{{ base_path }}/logout" class="logout-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-ghost btn-block">{{ t.logout }}</button>
+      </form>
       <div class="lang-switch">
         {% if lang == 'fa' %}
           <a href="{{ request.url.path }}?lang=en">English</a>
@@ -77,7 +80,10 @@
             <a href="{{ request.url.path }}?lang=fa">فا</a>
           {% endif %}
         </div>
-        <a class="btn btn-ghost btn-small" href="{{ base_path }}/logout">{{ t.logout }}</a>
+        <form method="post" action="{{ base_path }}/logout" class="logout-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="btn btn-ghost btn-small">{{ t.logout }}</button>
+        </form>
       </div>
     </header>
     {% endif %}

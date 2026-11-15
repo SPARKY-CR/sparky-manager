@@ -7,6 +7,7 @@
 </div>
 
 <form method="post" action="{{ base_path }}/users/{{ user.id }}/edit" id="edit-user-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <div class="card form-section">
     <h2>{{ t.basic_settings }}</h2>
     <div class="field-grid">

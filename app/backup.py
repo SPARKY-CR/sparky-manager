@@ -1,11 +1,22 @@
 """Backup / restore of the panel state (Phase 3).
 
-A backup is a ZIP with three members:
+A backup is a ZIP with two members:
 - ``panel.db`` — a consistent SQLite snapshot taken with the
   ``sqlite3`` backup API (safe to copy while the panel is running).
-- ``settings.json`` — a human-readable dump of the ``settings`` table
-  (the DB already holds the same rows; the JSON is for inspection).
 - ``meta.json`` — ``{schema_version, created_at, users, inbounds}``.
+
+(Before Phase 2 the ZIP also carried ``settings.json``, a
+human-readable dump of the whole settings table — including the bot
+token and every private key in plaintext. Restore never read it (the
+DB is authoritative), so it was dropped: it only widened the
+exposure of a backup that already contains every credential. Old
+backups that still carry the member restore fine — validation only
+ever reads ``panel.db`` and ``meta.json``.)
+
+A backup is a full credential bundle — the DB holds the admin
+password hash, every VPN password and private key, the Telegram bot
+token and the webhook secret. Treat backup files like private keys:
+never share them, never store them unencrypted in shared places.
 
 Restore accepts the ZIP or a bare ``.db`` file. Validation, in
 order: size cap, SQLite header / ZIP structure, ``PRAGMA
@@ -24,8 +35,10 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shutil
 import sqlite3
+import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -93,30 +106,30 @@ def _sqlite_backup(src_path: Path, dest_path: Path) -> None:
         src.close()
 
 
-def _read_settings_and_counts(db_path: Path) -> tuple[dict[str, str], int, int]:
-    """Settings dump + user/inbound counts from a DB file."""
+def _read_counts(db_path: Path) -> tuple[int, int]:
+    """User/inbound counts from a DB file (for ``meta.json``)."""
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
-        settings = {
-            str(k): ("" if v is None else str(v))
-            for k, v in conn.execute("SELECT key, value FROM settings")
-        }
         users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         inbounds = conn.execute("SELECT COUNT(*) FROM inbounds").fetchone()[0]
-        return settings, int(users), int(inbounds)
+        return int(users), int(inbounds)
     finally:
         conn.close()
 
 
 def create_backup_zip(db_path: str | Path) -> bytes:
-    """Build the backup ZIP for the DB at ``db_path`` (in memory)."""
-    db_path = Path(db_path)
-    import tempfile
+    """Build the backup ZIP for the DB at ``db_path`` (in memory).
 
+    Members: ``panel.db`` + ``meta.json`` only. No ``settings.json``:
+    the DB already holds the settings rows (restore reads nothing
+    else), and a plaintext dump of every secret only widened the
+    exposure of the backup (S5).
+    """
+    db_path = Path(db_path)
     with tempfile.TemporaryDirectory(prefix="sparky-backup-") as tmp:
         snapshot = Path(tmp) / "panel.db"
         _sqlite_backup(db_path, snapshot)
-        settings, users, inbounds = _read_settings_and_counts(snapshot)
+        users, inbounds = _read_counts(snapshot)
         meta = {
             "panel": "sparky-manager",
             "schema_version": SCHEMA_VERSION,
@@ -127,10 +140,6 @@ def create_backup_zip(db_path: str | Path) -> bytes:
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.write(snapshot, "panel.db")
-            zf.writestr(
-                "settings.json",
-                json.dumps(settings, indent=2, ensure_ascii=False),
-            )
             zf.writestr(
                 "meta.json", json.dumps(meta, indent=2, ensure_ascii=False)
             )
@@ -302,22 +311,48 @@ def backup_current_db(
 
 
 def swap_db_file(db_path: str | Path, new_file: str | Path) -> None:
-    """Replace the live DB file with ``new_file``.
+    """Replace the live DB file with ``new_file``, atomically (S6).
 
-    Removes the old ``-wal`` / ``-shm`` sidecars first — the new file
-    is a standalone snapshot and must not inherit a stale WAL. The
-    copy (not a rename) works when the validated file sits on another
-    filesystem (e.g. ``/tmp`` vs the data dir). The caller must have
-    disposed the engine before calling this.
+    The new file is copied to a temporary name in the SAME directory
+    (same filesystem — a rename across filesystems is not atomic,
+    which is why the validated file, which may live in ``/tmp``, is
+    copied rather than renamed), flushed to disk, and then moved into
+    place with ``os.replace``: at no point is the live path missing
+    or half-written. On any failure the temp file is removed and the
+    current DB is untouched.
+
+    The old ``-wal`` / ``-shm`` sidecars are removed first — the new
+    file is a standalone snapshot and must not inherit a stale WAL.
+    The caller must have disposed the engine before calling this (WAL
+    is checkpointed on close, so no committed data lives in the
+    sidecars).
     """
     db_path = Path(db_path)
     new_file = Path(new_file)
-    for suffix in ("", "-wal", "-shm"):
-        try:
-            Path(str(db_path) + suffix).unlink()
-        except FileNotFoundError:
-            pass
-    shutil.copyfile(new_file, db_path)
+    tmp_path = None
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            dir=db_path.parent, prefix=".panel.db.swap-"
+        )
+        tmp_path = Path(tmp_name)
+        with os.fdopen(fd, "wb") as out:
+            with open(new_file, "rb") as src:
+                shutil.copyfileobj(src, out)
+            out.flush()
+            os.fsync(out.fileno())
+        for suffix in ("-wal", "-shm"):
+            try:
+                Path(str(db_path) + suffix).unlink()
+            except FileNotFoundError:
+                pass
+        os.replace(tmp_path, db_path)
+        tmp_path = None
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 __all__ = [

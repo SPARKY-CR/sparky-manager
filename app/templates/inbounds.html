@@ -90,9 +90,11 @@
           <td class="row-actions">
             <a class="icon-btn" href="{{ base_path }}/inbounds/{{ i.id }}/edit" title="{{ t.edit }}" aria-label="{{ t.edit }} {{ i.tag }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg></a>
             <form method="post" action="{{ base_path }}/inbounds/{{ i.id }}/toggle" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button type="submit" class="icon-btn" title="{{ t.toggle }}" aria-label="{{ t.toggle }} {{ i.tag }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v8"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></svg></button>
             </form>
             <form method="post" action="{{ base_path }}/inbounds/{{ i.id }}/delete" class="inline-form" data-confirm="{{ t.confirm_delete }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button type="submit" class="icon-btn icon-danger" title="{{ t.delete }}" aria-label="{{ t.delete }} {{ i.tag }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>
             </form>
           </td>
@@ -116,6 +118,7 @@
   <h2>{{ t.add_inbound }}</h2>
   <p class="muted">{{ t.port_auto_hint }}</p>
   <form method="post" action="{{ base_path }}/inbounds" id="add-inbound-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="field-grid">
       <label>
         {{ t.tag }}

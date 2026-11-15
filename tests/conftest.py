@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import tempfile
 import uuid
@@ -31,6 +32,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 # ---------------------------------------------------------------------------
 # Test environment — set BEFORE any app.* import (app.config reads env
@@ -410,6 +412,93 @@ def no_cert_settings():
     }
 
 
+# ---------------------------------------------------------------------------
+# CSRF-aware test client (Phase 2, S1)
+# ---------------------------------------------------------------------------
+
+_CSRF_FIELD_RE = re.compile(r'name="csrf_token" value="([^"]+)"')
+
+
+class CSRFTestClient(TestClient):
+    """A TestClient that submits the CSRF token like a real browser.
+
+    The panel's POST routes require a per-session token (Phase 2,
+    S1). A real browser gets it from the page it loaded, so this
+    client does the same: on the first POST for a session it fetches
+    a page that carries a form (GET /users), extracts the hidden
+    ``csrf_token`` field, and submits it — as a form field for
+    ``data=`` posts (including multipart), as the ``X-CSRF-Token``
+    header for ``json=`` posts. The token is constant per session,
+    so it is cached until the session cookie changes.
+
+    A caller-supplied token is never overwritten, and injection is
+    skipped for the CSRF-exempt routes (``/login``, the Telegram
+    webhook). When no token can be found (logged out, or the page
+    has no form) the POST goes out bare — so unauthenticated tests
+    still see their 303s. ``post_raw()`` bypasses injection entirely,
+    for negative CSRF tests.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._csrf_token = ""
+        self._csrf_cookie = None
+
+    # -- token handling ------------------------------------------------
+    def _fetch_csrf_token(self) -> str:
+        cookie = self.cookies.get(main_mod.SESSION_COOKIE)
+        if cookie and cookie == self._csrf_cookie:
+            return self._csrf_token
+        self._csrf_cookie = cookie
+        self._csrf_token = ""
+        if not cookie:
+            return ""
+        try:
+            resp = self.get("/users")
+        except Exception:  # noqa: BLE001 — no token, post goes bare
+            return ""
+        match = _CSRF_FIELD_RE.search(resp.text)
+        if match:
+            self._csrf_token = match.group(1)
+        return self._csrf_token
+
+    def _should_inject(self, url, kwargs) -> bool:
+        path = str(url).split("?", 1)[0]
+        if path == "/login" or path.startswith("/telegram/webhook/"):
+            return False
+        if kwargs.get("json") is not None:
+            headers = kwargs.get("headers") or {}
+            return "X-CSRF-Token" not in headers
+        data = kwargs.get("data")
+        if isinstance(data, dict) and "csrf_token" in data:
+            return False
+        return True
+
+    def post(self, url, **kwargs):
+        if self._should_inject(url, kwargs):
+            token = self._fetch_csrf_token()
+            if token:
+                if kwargs.get("json") is not None:
+                    headers = dict(kwargs.get("headers") or {})
+                    headers.setdefault("X-CSRF-Token", token)
+                    kwargs["headers"] = headers
+                else:
+                    data = kwargs.get("data")
+                    if data is None:
+                        kwargs["data"] = {"csrf_token": token}
+                    elif isinstance(data, dict):
+                        data = dict(data)
+                        data.setdefault("csrf_token", token)
+                        kwargs["data"] = data
+                    # Non-dict data (raw body): left untouched — the
+                    # caller posts a raw body and must set the header.
+        return super().post(url, **kwargs)
+
+    def post_raw(self, url, **kwargs):
+        """POST with no CSRF injection (negative tests)."""
+        return super().post(url, **kwargs)
+
+
 @pytest.fixture()
 def test_client(db, tmp_path, monkeypatch):
     """A TestClient bound to the seeded test DB, logged-out.
@@ -418,7 +507,6 @@ def test_client(db, tmp_path, monkeypatch):
     files and ``systemctl restart`` is stubbed out (the panel is not
     installed on this machine).
     """
-    from fastapi.testclient import TestClient
 
     monkeypatch.setattr(main_mod, "XRAY_CONFIG_PATH",
                         str(tmp_path / "xray.json"))
@@ -453,7 +541,7 @@ def test_client(db, tmp_path, monkeypatch):
     # client would then talk to the wrong database. Without the
     # context manager, requests still work and SessionLocal stays
     # bound to this test's engine.
-    client = TestClient(main_mod.app)
+    client = CSRFTestClient(main_mod.app)
     yield client
     client.close()
 

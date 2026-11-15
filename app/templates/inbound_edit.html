@@ -11,6 +11,7 @@
 </div>
 
 <form method="post" action="{{ base_path }}/inbounds/{{ inbound.id }}/edit" id="edit-inbound-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <div class="card form-section">
     <h2>{{ t.basic_settings }}</h2>
     <div class="field-grid">
@@ -314,18 +315,21 @@
   {% if is_xray_stream %}
   <p class="field-hint">{{ t.regenerate_reality_hint }}</p>
   <form method="post" action="{{ base_path }}/inbounds/{{ inbound.id }}/regenerate-reality" data-confirm="{{ t.confirm_regenerate }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button type="submit" class="btn">{{ t.regenerate }} Reality</button>
   </form>
   {% endif %}
   {% if proto == 'amneziawg' %}
   <p class="field-hint">{{ t.awg_params_hint }}</p>
   <form method="post" action="{{ base_path }}/inbounds/{{ inbound.id }}/regenerate-awg-params" data-confirm="{{ t.confirm_regenerate }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button type="submit" class="btn">{{ t.regenerate }} {{ t.awg_params }}</button>
   </form>
   {% endif %}
   {% if is_wg %}
   <p class="field-hint">{{ t.regenerate_server_key_hint }}</p>
   <form method="post" action="{{ base_path }}/inbounds/{{ inbound.id }}/regenerate-server-key" data-confirm="{{ t.confirm_regenerate }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button type="submit" class="btn btn-danger">{{ t.regenerate_server_key }}</button>
   </form>
   {% endif %}

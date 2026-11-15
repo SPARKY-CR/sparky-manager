@@ -8,6 +8,7 @@
 <div class="card">
   <h2>{{ t.add_user }}</h2>
   <form method="post" action="{{ base_path }}/users">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="field-grid">
       <label>
         {{ t.name }}
@@ -57,9 +58,11 @@
           <td class="row-actions">
             <a class="btn btn-small" href="{{ base_path }}/users/{{ u.id }}">{{ t.details }}</a>
             <form method="post" action="{{ base_path }}/users/{{ u.id }}/toggle" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button type="submit" class="btn btn-small">{{ t.toggle }}</button>
             </form>
             <form method="post" action="{{ base_path }}/users/{{ u.id }}/delete" class="inline-form" data-confirm="{{ t.confirm_delete }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button type="submit" class="btn btn-small btn-danger">{{ t.delete }}</button>
             </form>
           </td>
@@ -80,6 +83,7 @@
 <div class="card">
   <h2>{{ t.bulk_actions }}</h2>
   <form method="post" action="{{ base_path }}/users/bulk" id="bulk-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="bulk-bar">
       <button type="submit" name="action" value="enable" class="btn">{{ t.bulk_enable }}</button>
       <button type="submit" name="action" value="disable" class="btn">{{ t.bulk_disable }}</button>

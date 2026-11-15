@@ -572,6 +572,9 @@ select option { background: var(--surface-solid-2); color: var(--ink); }
 .key-box .key-label { font-size: 0.85rem; font-weight: 600; color: var(--muted); white-space: nowrap; }
 .key-box code { font-size: 0.85rem; overflow-wrap: anywhere; flex: 1 1 200px; }
 .inline-form { display: inline; }
+/* Logout is a POST form (S1): no margin, so it sits where the old
+   link sat (sidebar block button / mobile topbar flex item). */
+.logout-form { margin: 0; }
 .row-actions { display: flex; gap: 0.45rem; flex-wrap: wrap; align-items: center; }
 
 /* ---- user editor (Phase 2): bulk bar + table checkboxes ---- */

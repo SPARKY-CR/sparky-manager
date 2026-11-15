@@ -62,6 +62,12 @@ class Settings:
     subscription_host: str = ""
     reality_sni: str = DEFAULT_REALITY_SNI
     web_path: str = ""
+    # True only when the operator runs the panel behind a trusted
+    # TLS-terminating reverse proxy: the panel then honors
+    # X-Forwarded-Proto for the session cookie's Secure flag (S4).
+    # Default False — an untrusted client could otherwise spoof the
+    # header, and the standard install terminates TLS in uvicorn.
+    trust_forwarded_proto: bool = False
 
     # -- derived paths ------------------------------------------------------
     @property
@@ -168,6 +174,9 @@ def get_settings() -> Settings:
             "REALITY_SNI", DEFAULT_REALITY_SNI
         ),
         web_path=normalize_web_path(_env("WEB_PATH", "")),
+        trust_forwarded_proto=_env(
+            "TRUST_FORWARDED_PROTO", ""
+        ).strip().lower() in ("1", "true", "yes", "on"),
     )
 
 
@@ -248,6 +257,7 @@ VPN_SERVER_KEY = SETTINGS.vpn_server_key
 OVPN_AUTH_SCRIPT = SETTINGS.ovpn_auth_script
 DEFAULT_REALITY_SNI = SETTINGS.reality_sni
 WEB_PATH = SETTINGS.web_path
+TRUST_FORWARDED_PROTO = SETTINGS.trust_forwarded_proto
 
 __all__ = [
     "DEFAULT_HOME",
@@ -258,6 +268,7 @@ __all__ = [
     "Settings",
     "normalize_web_path",
     "WEB_PATH",
+    "TRUST_FORWARDED_PROTO",
     "get_settings",
     "get_settings_dict",
     "read_versions",
