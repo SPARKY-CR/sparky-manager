@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %} — {{ user.name }}{% endblock %}
+{% block content %}
+{# Phase A item 2: the browser copy-only subscription page. A human
+   who opens their subscription URL in a browser gets this readable
+   page (links with copy buttons + QR codes) instead of a raw
+   base64 dump. The token is the only secret — this page shows
+   only THIS user's links, and the raw feed is one link away
+   (?view=raw). No login, no admin chrome. #}
+<div class="page-head">
+  <h1>{{ user.name }}</h1>
+</div>
+<p class="field-hint">{{ t.sub_copy_page_hint }}</p>
+
+<div class="card">
+  <h2>{{ t.subscription_link }}</h2>
+  <div class="copy-row">
+    <code dir="ltr" class="link-box">{{ sub_url }}</code>
+    <button type="button" class="btn btn-small" data-copy="{{ sub_url }}">{{ t["copy"] }}</button>
+  </div>
+  <p class="muted"><a href="{{ sub_url }}?view=raw">{{ t.sub_raw_feed }}</a></p>
+</div>
+
+<div class="card">
+  <h2>{{ t.share_links }}</h2>
+  {% if links %}
+    {% for entry in links %}
+    <div class="link-item">
+      <div class="link-head">
+        <h3>{{ entry.inbound.tag }}</h3>
+        <span class="chip" dir="ltr">{{ entry.inbound.protocol }}</span>
+      </div>
+      <div class="copy-row">
+        <code dir="ltr" class="link-box">{{ entry.link }}</code>
+        <button type="button" class="btn btn-small" data-copy="{{ entry.link }}">{{ t["copy"] }}</button>
+      </div>
+      <img class="qr" src="{{ base_path }}/sub/{{ user.sub_token }}/qr?link={{ entry.link | urlencode }}" alt="{{ t.qr_code }} — {{ entry.inbound.tag }}" loading="lazy">
+    </div>
+    {% endfor %}
+  {% else %}
+    <p class="muted">{{ t.user_unusable }}</p>
+  {% endif %}
+</div>
+{% endblock %}

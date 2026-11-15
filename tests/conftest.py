@@ -571,6 +571,7 @@ def _isolate_process_globals():
     next file's first tick).
     """
     auth_mod._failed_logins.clear()
+    auth_mod._blocked_until.clear()
     traffic_mod._last_wg.clear()
     traffic_mod._last_nft.clear()
     xray_stats_mod.reset_snapshots()
@@ -578,6 +579,7 @@ def _isolate_process_globals():
     bot_mod._seen_updates.clear()
     yield
     auth_mod._failed_logins.clear()
+    auth_mod._blocked_until.clear()
     traffic_mod._last_wg.clear()
     traffic_mod._last_nft.clear()
     xray_stats_mod.reset_snapshots()

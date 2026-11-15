@@ -9,8 +9,12 @@
   the SHA-256 hash of a random token; the raw token is handed to the
   browser once (HttpOnly cookie) and never stored. Logout deletes the
   row. 12-hour expiry.
-- Rate limiting: in-memory per-IP counter — 5 failed logins lock the
-  IP out for 15 minutes (DESIGN.md §7).
+- Rate limiting: in-memory per-IP counter — 5 failed logins inside
+  5 minutes lock the IP out for 15 minutes (DESIGN.md §7; the
+  3x-ui shape). The block is fixed-length and expires on its own.
+  Deliberately per-IP only: blocking by *username* would let an
+  unauthenticated attacker lock the admin out by failing logins
+  under their name from anywhere.
 """
 
 from __future__ import annotations
@@ -215,14 +219,25 @@ def invalidate_other_sessions(
 # ---------------------------------------------------------------------------
 
 MAX_FAILED_LOGINS = 5
+#: Counting window: the 5 failures must fall inside 5 minutes.
+FAILED_LOGIN_WINDOW_SECONDS = 5 * 60
+#: Block length once the 5th failure lands inside the window.
 LOCKOUT_SECONDS = 15 * 60  # 15 minutes
 
 # ip -> list of epoch timestamps of failed attempts (pruned on read).
 _failed_logins: dict[str, list[float]] = {}
+# ip -> epoch timestamp until which the IP is blocked (set when the
+# 5th failure lands inside the window; the block expires on its own —
+# there is no permanent lockout and no manual unblock step).
+_blocked_until: dict[str, float] = {}
 
 
 def _prune(ip: str, now: float) -> list[float]:
-    attempts = [t for t in _failed_logins.get(ip, []) if now - t < LOCKOUT_SECONDS]
+    attempts = [
+        t
+        for t in _failed_logins.get(ip, [])
+        if now - t < FAILED_LOGIN_WINDOW_SECONDS
+    ]
     if attempts:
         _failed_logins[ip] = attempts
     else:
@@ -231,25 +246,50 @@ def _prune(ip: str, now: float) -> list[float]:
 
 
 def record_failed_login(ip: str) -> None:
-    """Record one failed login from ``ip`` (call on every bad attempt)."""
+    """Record one failed login from ``ip`` (call on every bad attempt).
+
+    When the 5th failure inside the 5-minute window lands, the IP is
+    blocked for 15 minutes from that moment (a fixed block, not a
+    sliding window: further failures during the block do not extend
+    it, so the admin is never locked out longer than 15 minutes by
+    an attacker hammering the login page).
+    """
     now = time.time()
-    _failed_logins[ip] = _prune(ip, now) + [now]
+    attempts = _prune(ip, now) + [now]
+    _failed_logins[ip] = attempts
+    if len(attempts) >= MAX_FAILED_LOGINS and ip not in _blocked_until:
+        _blocked_until[ip] = now + LOCKOUT_SECONDS
 
 
 def record_successful_login(ip: str) -> None:
-    """Clear the failure counter for ``ip`` after a successful login."""
+    """Clear the failure counter (and any block) for ``ip`` after a
+    successful login."""
     _failed_logins.pop(ip, None)
+    _blocked_until.pop(ip, None)
 
 
 def is_locked_out(ip: str) -> bool:
-    """True once ``ip`` has had 5 failed logins inside 15 minutes."""
-    return len(_prune(ip, time.time())) >= MAX_FAILED_LOGINS
+    """True while ``ip`` is inside its 15-minute block.
+
+    A block is set only by 5 failures inside 5 minutes
+    (:func:`record_failed_login`); it expires on its own 15 minutes
+    after the 5th failure. Expired entries are cleaned up on read.
+    """
+    until = _blocked_until.get(ip)
+    if until is None:
+        return False
+    if time.time() >= until:
+        _blocked_until.pop(ip, None)
+        _failed_logins.pop(ip, None)
+        return False
+    return True
 
 
 __all__ = [
     "DEFAULT_ITERATIONS",
     "SESSION_TTL",
     "MAX_FAILED_LOGINS",
+    "FAILED_LOGIN_WINDOW_SECONDS",
     "LOCKOUT_SECONDS",
     "hash_password",
     "verify_password",

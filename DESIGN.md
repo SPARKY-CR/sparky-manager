@@ -900,7 +900,7 @@ sparky-manager/
 │   ├── sparky-manager.service
 │   ├── xray.service           # or use the cores' shipped units
 │   └── sing-box.service
-├── tests/                     # 1152 tests (conftest.py: seeded DB + CSRF client)
+├── tests/                     # 1269 tests (conftest.py: seeded DB + CSRF client)
 │   ├── test_links.py          # link round-trips for all 9 schemes
 │   ├── test_render.py         # golden configs → xray -test / sing-box check
 │   ├── test_subscription.py   # v2rayNG + sing-box feeds parse cleanly
@@ -1178,7 +1178,7 @@ found live issues and asked for a complete check of the project.
 `main.py` is 4,922 lines at this point (4,546 at the end of Phase 7;
 the post-upgrade batches added routes, diagnostics, the webhook
 set-on-save path, the Cores page and the bot UX work). The full suite
-is 1152 tests; i18n parity is 526 keys each.
+is 1269 tests; i18n parity is 590 keys each.
 
 - **Fix batch (evening, after the server upgrade).** The language
   toggle reverted on navigation (the `lang` cookie was only set on
@@ -1414,6 +1414,120 @@ gets the same assertions. Immediate relief on the live server was
 `systemctl stop openvpn-server@sparky-manager` (ends the loop);
 the fix reaches the server with the next installer re-run, which
 re-renders the config.
+
+### 15.5 Best-panel program, Phase A — quick wins (2026-11-15)
+
+The first tier of the 26-idea adoption program (see the research
+report at `~/workspace/research_notes/
+vpn-panel-best-ideas-20261115-1835/report.md`): eight items, no
+schema change, no new dependency, all state in the settings
+table. The deliberate decisions, per item:
+
+1. **Telegram event bus** (`app/events.py`). Six events
+   (`user.created`, `user.expiring`, `rerender.failed`,
+   `login.locked`, `selfcheck.failed`, `backup.failed`); the
+   admin picks which notify from a settings checklist
+   (`telegram_events` setting). An absent/unparseable setting
+   means "all" (pre-bus behavior); an explicitly saved empty list
+   means "none" — the form carries a hidden `telegram_events_present`
+   marker so "all off" is saveable. Dedup lives in
+   `telegram_event_dedup` (`{key: ISO timestamp}`, pruned to 7
+   days); a failed send does not stamp the dedup window. Forum
+   topics: `telegram_topic_id` routes notifications via
+   `message_thread_id`; a wrong-but-numeric topic makes Telegram
+   refuse the message (visible failure, no silent fallback). The
+   old bespoke rows (`telegram_expiry_notified`,
+   `telegram_rerender_notified_at`) are orphaned, not migrated —
+   harmless one-row leftovers. `backup.done` is deliberately NOT
+   an event: the Telegram file delivery itself is the
+   notification.
+2. **Subscriptions.** Remark template setting
+   `sub_remark_template` (default `{USER}-{INBOUND}` — the shape
+   sing-box tags already had; v2rayNG remarks used to be the bare
+   username, so all of a user's configs looked identical).
+   Variables `{USER}` `{INBOUND}` `{DATA_LEFT}` `{DAYS_LEFT}`;
+   unknown `{...}` spellings are left untouched so a typo is
+   visible. A KNOWN token whose user is unusable gets a 200 with
+   one placeholder entry ("expired / limit reached / disabled",
+   pointing at 127.0.0.1:1, never connectable) instead of a
+   silent 403 — this is an intentional behavior change; an
+   UNKNOWN token still 403s empty. A browser opening a
+   subscription URL gets a copy-only HTML page (links + copy
+   buttons + QR); `?view=html` forces it, `?view=raw` forces the
+   raw feed, a VPN client UA or an empty UA gets the feed.
+   Revocable tokens already existed (`rotate-token`); the /u/
+   page now shows data-left/days-left chips and a rotated token
+   404s there.
+3. **Login rate limiting.** The 5-failures lockout already
+   existed; Phase A fixed the window semantics: a 5-minute
+   counting window + a fixed 15-minute block (failures during
+   the block do NOT extend it — a hammering attacker cannot
+   extend the lockout forever). Per-IP ONLY, deliberately never
+   per-username: an unauthenticated attacker could otherwise lock
+   out the admin from anywhere by failing logins under their
+   name. A lockout emits the `login.locked` event (deduped per
+   IP for the block length).
+4. **Auto-backup.** `auto_backup_hours` (default 6, 0 = off),
+   `auto_backup_keep` (default 7 files, 0 = keep all),
+   `auto_backup_telegram` (default OFF — backups are credential
+   bundles; the admin must opt in explicitly). ZIPs land in
+   `DATA_DIR/backups` as `auto-<UTC stamp>.zip` (SQLite backup
+   API, never a file copy of a live WAL DB); pruning touches
+   only `auto-*.zip`. Telegram delivery splits at 49 MB
+   (Marzban's rule, 1 MB under the 50 MB cap), parts named
+   `<stem>.part<n>of<m><suffix>`; delivery counts only when
+   EVERY part is accepted. Safe import: the restore form's
+   `preserve_identity` box (checked by default) keeps this
+   machine's domain, subscription host, Telegram bot/chat/
+   transport/topic, and webhook secret — keys absent from the
+   snapshot are DELETED from the restored DB, so another
+   install's bot token cannot resurrect by omission. Panel port
+   and web path are not in the list: they live in panel.env, not
+   the DB.
+5. **PWA + clickable cards + tools.** The manifest and service
+   worker are served from ROUTES (`/manifest.webmanifest`,
+   `/sw.js`), not static files: start_url/scope must include
+   the per-install web path, and a worker's scope is its own
+   URL's directory. The worker precaches the panel's own static
+   assets and serves them cache-first; pages are network-first
+   and there is NO fake offline page. Bump `CACHE_NAME` in
+   `app/static/sw.js` whenever a cached static file changes.
+   Dashboard counter cards link to their pages. The Tools page
+   (`/tools`) has a config tester (share link or Xray/sing-box
+   JSON — credentials REDACTED before display), a QR display,
+   and base64/vmess decoders (a decoder shows what the admin
+   pasted — decoding is its purpose).
+6. **Per-user public page.** Already existed (`/u/{token}`);
+   Phase A added the data-left/days-left chips (the same values
+   the remark variables expand to). The page shows only that
+   user's data; the token is the 128-bit `sub_token`, revocable
+   via rotate-token.
+7. **Client-eye self-check** (`app/selfcheck.py`). TCP probes
+   (ok / down on refused / unknown on timeout-or-other), UDP
+   inbounds always "unknown" ("UDP cannot be probed by
+   connect"), and a real fetch of the panel's own
+   `/sub/<token>` (v2rayNG UA, `verify=False` — the check
+   validates the FEED, not the TLS chain, because the panel's
+   own cert would fail normal verification from inside).
+   Overall: down if any check is down, unknown if any is
+   unknown, else ok. Results persist in `selfcheck_last`;
+   `selfcheck_interval_minutes` (default 60, 0 = off) drives
+   the scheduled loop; failures notify via `selfcheck.failed`
+   (deduped 1h). The dashboard shows a summary card.
+8. **Config validation before apply.** Mostly already existed
+   (`app/config_io.py`: structural validation + the core
+   binary's own test mode + atomic rename). The binary check
+   runs UNPRIVILEGED (the binaries are world-executable) — no
+   sudo needed. Phase A closed the honest gap: the re-render
+   used to drop the "binary not present — JSON validated only"
+   note on success; it now LOGS it as a warning, so the panel
+   never silently claims a validation that did not run.
+
+Honest limitations (no live server/Telegram verification in this
+pass): the PWA install flow, the copy-only subscription page in a
+real browser, and the Telegram topic routing were verified by
+tests only — the first real install / /start after deploy is the
+true check.
 
 ---
 

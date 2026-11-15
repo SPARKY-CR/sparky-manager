@@ -176,6 +176,7 @@ def send_message(
     *,
     reply_markup: Optional[dict[str, Any]] = None,
     parse_mode: Optional[str] = None,
+    message_thread_id: Optional[int] = None,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> bool:
     """Send ``text`` to ``chat_id`` via the Bot API. True on success.
@@ -187,7 +188,11 @@ def send_message(
     sent when given, so notification calls keep the exact Phase 3
     payload. ``parse_mode`` (bot polish) is likewise only sent when
     given — the management bot passes ``"HTML"``; notifications stay
-    plain text.
+    plain text. ``message_thread_id`` (Phase A event bus) routes the
+    message into a forum topic of a supergroup; it is only sent when
+    given, and Telegram refuses the message when the chat is not a
+    forum or the topic does not exist (no silent fallback — a wrong
+    topic id must be visible, not quietly ignored).
     """
     token = (token or "").strip()
     chat_id = (chat_id or "").strip()
@@ -205,6 +210,8 @@ def send_message(
         payload["reply_markup"] = reply_markup
     if parse_mode is not None:
         payload["parse_mode"] = parse_mode
+    if message_thread_id is not None:
+        payload["message_thread_id"] = int(message_thread_id)
     return _ok(_post(token, "sendMessage", payload, timeout=timeout))
 
 
@@ -430,6 +437,7 @@ def send_document(
     filename: str,
     data: bytes,
     *,
+    message_thread_id: Optional[int] = None,
     timeout: float = 30.0,
 ) -> bool:
     """Send ``data`` as a document to ``chat_id`` (multipart upload).
@@ -439,6 +447,8 @@ def send_document(
     caller reports that honestly (the web settings page can still
     download the same file). Never raises, never logs the token.
     The 30 s timeout covers a multi-MB upload on a slow link.
+    ``message_thread_id`` routes the document into a forum topic
+    (same contract as :func:`send_message`).
     """
     token = (token or "").strip()
     chat_id = (chat_id or "").strip()
@@ -447,14 +457,80 @@ def send_document(
         return False
     if len(data) > MAX_DOCUMENT_BYTES:
         return False
+    payload: dict[str, Any] = {"chat_id": chat_id}
+    if message_thread_id is not None:
+        payload["message_thread_id"] = int(message_thread_id)
     result = _post_files(
         token,
         "sendDocument",
-        data={"chat_id": chat_id},
+        data=payload,
         files={"document": (filename, data, "application/zip")},
         timeout=timeout,
     )
     return _ok(result)
+
+
+# Marzban splits backup archives at 49 MB for Telegram delivery —
+# 1 MB under the Bot API's 50 MB cap, so a part is never refused for
+# size. Same margin here.
+DOCUMENT_PART_BYTES = 49 * 1024 * 1024
+
+
+def split_document_parts(filename: str, data: bytes) -> list[tuple[str, bytes]]:
+    """Split ``data`` into Telegram-sized parts.
+
+    Returns ``[(filename, data)]`` unchanged when the file fits in
+    one part; otherwise one entry per 49 MB chunk, named
+    ``<stem>.part<n>of<m><suffix>`` (e.g.
+    ``backup.zip`` -> ``backup.part1of3.zip``). Pure function —
+    the sender below is the only part that touches the network.
+    """
+    if len(data) <= DOCUMENT_PART_BYTES:
+        return [(filename, data)]
+    stem, dot, suffix = filename.rpartition(".")
+    if not dot:
+        stem, suffix = filename, ""
+    else:
+        suffix = "." + suffix
+    total = (len(data) + DOCUMENT_PART_BYTES - 1) // DOCUMENT_PART_BYTES
+    parts: list[tuple[str, bytes]] = []
+    for index in range(total):
+        chunk = data[
+            index * DOCUMENT_PART_BYTES : (index + 1) * DOCUMENT_PART_BYTES
+        ]
+        parts.append((f"{stem}.part{index + 1}of{total}{suffix}", chunk))
+    return parts
+
+
+def send_document_parts(
+    token: str,
+    chat_id: str,
+    filename: str,
+    data: bytes,
+    *,
+    message_thread_id: Optional[int] = None,
+    timeout: float = 30.0,
+) -> bool:
+    """Send ``data`` as one document, or several parts when it is too
+    large for a single upload (Marzban's split-at-49 MB rule).
+
+    True only when EVERY part was accepted — a partial delivery is
+    reported as a failure (the caller logs it; the file stays
+    downloadable from the panel). Never raises, never logs the token.
+    """
+    if not data:
+        return False
+    for part_name, chunk in split_document_parts(filename, data):
+        if not send_document(
+            token,
+            chat_id,
+            part_name,
+            chunk,
+            message_thread_id=message_thread_id,
+            timeout=timeout,
+        ):
+            return False
+    return True
 
 
 __all__ = [
@@ -462,6 +538,7 @@ __all__ = [
     "DEFAULT_TIMEOUT",
     "MAX_MESSAGE_LENGTH",
     "MAX_DOCUMENT_BYTES",
+    "DOCUMENT_PART_BYTES",
     "mask_token",
     "send_message",
     "edit_message_text",
@@ -473,4 +550,6 @@ __all__ = [
     "get_me",
     "set_my_commands",
     "send_document",
+    "split_document_parts",
+    "send_document_parts",
 ]

@@ -8,41 +8,64 @@
 
 {% set enabled_inbounds = inbounds | selectattr('enabled') | list | length %}
 {% set active_pct = ((active_users / total_users * 100) | round(1)) if total_users else 0 %}
+{# Phase A item 5: the counter cards are links — each opens the
+   page its number comes from (3x-ui's clickable cards). #}
 <div class="cards">
-  <div class="card metric-card">
+  <a class="card metric-card metric-link" href="{{ base_path }}/users">
     <div class="metric-top">
       <span class="metric-label">{{ t.total_users }}</span>
     </div>
     <div class="metric-num" dir="ltr">{{ total_users }}</div>
     <div class="metric-foot"><span dir="ltr">{{ active_users }}</span> {{ t.active_users }}</div>
-  </div>
-  <div class="card metric-card">
+  </a>
+  <a class="card metric-card metric-link" href="{{ base_path }}/users?status=enabled">
     <div class="metric-top">
       <span class="metric-label">{{ t.active_users }}</span>
     </div>
     <div class="metric-num" dir="ltr">{{ active_users }}</div>
     <div class="metric-foot"><span dir="ltr">{{ active_pct }}%</span></div>
-  </div>
-  <div class="card metric-card">
+  </a>
+  <a class="card metric-card metric-link" href="{{ base_path }}/inbounds">
     <div class="metric-top">
       <span class="metric-label">{{ t.total_inbounds }}</span>
     </div>
     <div class="metric-num" dir="ltr">{{ total_inbounds }}</div>
     <div class="metric-foot"><span dir="ltr">{{ enabled_inbounds }}</span> {{ t.enabled }}</div>
-  </div>
-  <div class="card metric-card">
+  </a>
+  <a class="card metric-card metric-link" href="{{ base_path }}/users?sort=traffic">
     <div class="metric-top">
       <span class="metric-label">{{ t.traffic_used }}</span>
     </div>
     <div class="metric-num" dir="ltr">{{ (traffic_used / 1073741824) | round(2) }} GB</div>
-  </div>
-  <div class="card metric-card">
+  </a>
+  <a class="card metric-card metric-link" href="{{ base_path }}/users">
     <div class="metric-top">
       <span class="metric-label">{{ t.active_today }}</span>
     </div>
     <div class="metric-num" dir="ltr">{{ active_today }}</div>
     <div class="metric-foot"><span dir="ltr">{{ today.strftime('%Y-%m-%d') }}</span></div>
+  </a>
+</div>
+
+{# Phase A item 7: self-check summary — the last run's overall
+   status, or "never run" until the first check. Links to the
+   full self-check page. #}
+<div class="card selfcheck-summary">
+  <div class="page-head">
+    <h2>{{ t.selfcheck }}</h2>
+    <a class="btn btn-ghost btn-small" href="{{ base_path }}/selfcheck">{{ t.selfcheck_run }}</a>
   </div>
+  {% if selfcheck_last is defined and selfcheck_last and selfcheck_last.overall in ("ok", "down", "unknown") %}
+  <p class="muted">
+    {{ t.selfcheck_overall }}:
+    {% if selfcheck_last.overall == "ok" %}<span class="badge badge-ok">{{ t.selfcheck_ok }}</span>
+    {% elif selfcheck_last.overall == "down" %}<span class="badge badge-err">{{ t.selfcheck_down }}</span>
+    {% else %}<span class="badge badge-warn">{{ t.selfcheck_unknown }}</span>{% endif %}
+    <span dir="ltr">{{ selfcheck_last.run_at }}</span>
+  </p>
+  {% else %}
+  <p class="muted">{{ t.selfcheck_last_run }}: {{ t.selfcheck_never }}</p>
+  {% endif %}
 </div>
 
 <div class="card">

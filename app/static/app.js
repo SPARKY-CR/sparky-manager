@@ -236,4 +236,20 @@
       });
     });
   }
+
+  // PWA (Phase A item 5): register the service worker. The base
+  // path comes from the manifest link href (the panel's secret web
+  // path is per-install, so it cannot be hardcoded). Registration
+  // failure is silent — the panel works fine without a worker.
+  if ("serviceWorker" in navigator) {
+    var manifestLink = document.querySelector("link[rel=\"manifest\"]");
+    if (manifestLink) {
+      var manifestHref = manifestLink.getAttribute("href") || "";
+      var swUrl = manifestHref.replace(/manifest\.webmanifest$/, "sw.js");
+      if (swUrl !== manifestHref) {
+        navigator.serviceWorker.register(swUrl).catch(
+          function () { /* installable app is optional */ });
+      }
+    }
+  }
 })();

@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %} — {{ t.selfcheck }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ t.selfcheck }}</h1>
+</div>
+<p class="field-hint">{{ t.selfcheck_desc }}</p>
+
+{# Phase A item 7: client-eye self-check (Mistgate's best idea).
+   The panel probes its own inbounds (TCP connect) and fetches its
+   own subscription the way a client would. "Unknown" is an honest
+   answer — a UDP port cannot be probed by connect, and a fetch
+   that times out says nothing about the feed. #}
+
+<div class="card">
+  <div class="page-head">
+    <h2>{{ t.selfcheck_last_run }}</h2>
+    <form method="post" action="{{ base_path }}/selfcheck/run" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="btn btn-primary btn-small">{{ t.selfcheck_run }}</button>
+    </form>
+  </div>
+  {% if selfcheck_last %}
+  <p class="muted">
+    {{ t.selfcheck_overall }}:
+    {% if selfcheck_last.overall == "ok" %}<span class="badge badge-ok">{{ t.selfcheck_ok }}</span>
+    {% elif selfcheck_last.overall == "down" %}<span class="badge badge-err">{{ t.selfcheck_down }}</span>
+    {% else %}<span class="badge badge-warn">{{ t.selfcheck_unknown }}</span>{% endif %}
+    <span dir="ltr">{{ selfcheck_last.run_at }}</span>
+  </p>
+  {% if selfcheck_last.checks %}
+  <table class="table-cards">
+    <thead>
+      <tr>
+        <th>{{ t.selfcheck_check }}</th>
+        <th>{{ t.selfcheck_detail }}</th>
+        <th>{{ t.selfcheck_overall }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for check in selfcheck_last.checks %}
+      <tr>
+        <td data-label="{{ t.selfcheck_check }}"><b dir="ltr">{{ check.tag or check.kind }}</b></td>
+        <td data-label="{{ t.selfcheck_detail }}">
+          {% if check.kind == "port" %}
+          <span dir="ltr">{{ check.protocol }} :{{ check.port }}</span>
+          {% else %}
+          {{ t.selfcheck_subscription }}
+          {% endif %}
+          {% if check.reason %}<br><span class="muted">{{ check.reason }}</span>{% endif %}
+        </td>
+        <td data-label="{{ t.selfcheck_overall }}">
+          {% if check.status == "ok" %}<span class="badge badge-ok">{{ t.selfcheck_ok }}</span>
+          {% elif check.status == "down" %}<span class="badge badge-err">{{ t.selfcheck_down }}</span>
+          {% else %}<span class="badge badge-warn">{{ t.selfcheck_unknown }}</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">{{ t.selfcheck_no_checks }}</p>
+  {% endif %}
+  {% else %}
+  <p class="muted">{{ t.selfcheck_never }}</p>
+  {% endif %}
+</div>
+
+<div class="card card-narrow">
+  <h2>{{ t.selfcheck_interval }}</h2>
+  <form method="post" action="{{ base_path }}/selfcheck/interval">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>
+      {{ t.selfcheck_interval }}
+      <input type="number" name="interval" value="{{ selfcheck_interval }}" min="0" dir="ltr">
+    </label>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{{ t.save }}</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

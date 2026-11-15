@@ -44,6 +44,8 @@ def _pages(seeded):
         "/logs",
         "/cores",
         "/cores?log=xray",
+        "/tools",
+        "/selfcheck",
     ]
     for section in ("general", "telegram", "security", "backup",
                     "services", "advanced"):

@@ -418,8 +418,9 @@ def test_every_nav_link_resolves(authed_client):
     resp = authed_client.get("/dashboard")
     assert resp.status_code == 200
     hrefs = re.findall(r'class="nav-link[^"]*" href="([^"]+)"', resp.text)
-    # Dashboard, Inbounds, Users, Logs, Settings, Cores — no dead links.
-    assert len(hrefs) == 6, hrefs
+    # Dashboard, Inbounds, Users, Logs, Self-check, Settings, Cores,
+    # Tools — no dead links.
+    assert len(hrefs) == 8, hrefs
     for href in hrefs:
         page = authed_client.get(href)
         assert page.status_code == 200, href

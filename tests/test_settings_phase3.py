@@ -389,9 +389,12 @@ def test_rerender_failure_notification_throttled(db, seeded, monkeypatch):
     assert main_mod._notify_rerender_failure(db, ["xray: bad config"]) is True
     assert main_mod._notify_rerender_failure(db, ["xray: bad config"]) is False
     assert len(sent) == 1
-    # Backdate the last-notify stamp: the next failure notifies again.
+    # Backdate the event-bus dedup stamp: the next failure notifies again.
     old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
-    main_mod.set_setting(db, "telegram_rerender_notified_at", old)
+    main_mod.set_setting(
+        db, "telegram_event_dedup",
+        json.dumps({"rerender.failed": old}),
+    )
     assert main_mod._notify_rerender_failure(db, ["xray: bad config"]) is True
     assert len(sent) == 2
 

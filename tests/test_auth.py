@@ -14,6 +14,7 @@ import pytest
 
 from app import auth
 from app.auth import (
+    FAILED_LOGIN_WINDOW_SECONDS,
     LOCKOUT_SECONDS,
     MAX_FAILED_LOGINS,
     create_session,
@@ -152,12 +153,40 @@ def test_lockout_expires_after_window_without_sleeping():
     for _ in range(MAX_FAILED_LOGINS):
         record_failed_login(ip)
     assert is_locked_out(ip) is True
-    # Simulate 15 minutes passing by backdating the stored timestamps
-    # (the module's own in-memory record — no sleeping).
+    # Simulate 15 minutes passing by backdating the stored block
+    # end (the module's own in-memory record — no sleeping).
     import time
-    old = time.time() - LOCKOUT_SECONDS - 1
-    auth._failed_logins[ip] = [old] * MAX_FAILED_LOGINS
+    auth._blocked_until[ip] = time.time() - 1
     assert is_locked_out(ip) is False
+
+
+def test_failures_spread_over_window_do_not_lock_out():
+    # Phase A item 3: the counting window is 5 minutes — 5 failures
+    # spread over MORE than 5 minutes must NOT lock the IP out.
+    ip = "198.51.100.16"
+    import time
+    for _ in range(MAX_FAILED_LOGINS - 1):
+        record_failed_login(ip)
+    # Age the 4 failures past the 5-minute window.
+    old = time.time() - FAILED_LOGIN_WINDOW_SECONDS - 1
+    auth._failed_logins[ip] = [old] * (MAX_FAILED_LOGINS - 1)
+    record_failed_login(ip)
+    assert is_locked_out(ip) is False
+
+
+def test_block_does_not_extend_on_further_failures():
+    # Phase A item 3: failures DURING the block do not push the
+    # block end later — a hammering attacker cannot extend the
+    # lockout forever.
+    ip = "198.51.100.17"
+    for _ in range(MAX_FAILED_LOGINS):
+        record_failed_login(ip)
+    assert is_locked_out(ip) is True
+    blocked_until = auth._blocked_until[ip]
+    for _ in range(3):
+        record_failed_login(ip)
+    assert auth._blocked_until[ip] == blocked_until
+    assert is_locked_out(ip) is True
 
 
 def test_lockout_is_per_ip():

@@ -12,7 +12,9 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from app.links import parse_vmess_link
 from app.models import Client, Inbound, User, client_is_usable, user_is_usable
+from app.subscription import decode_v2rayng_feed
 from app.traffic import is_online, sync_traffic
 
 
@@ -252,8 +254,14 @@ def test_toggle_user_flips_enabled(authed_client, db, seeded):
     assert resp.status_code == 303
     db.expire_all()
     assert db.get(User, alice.id).enabled is False
-    # A disabled user gets 403 on its subscription.
-    assert authed_client.get(f"/sub/{alice.sub_token}").status_code == 403
+    # Phase A item 2 (intentional behavior change): a disabled
+    # user gets a 200 with a visible "disabled" placeholder entry
+    # in the feed instead of a silent 403.
+    resp = authed_client.get(f"/sub/{alice.sub_token}")
+    assert resp.status_code == 200
+    links = decode_v2rayng_feed(resp.content)
+    assert len(links) == 1
+    assert "Disabled" in parse_vmess_link(links[0])["name"]
     authed_client.post(f"/users/{alice.id}/toggle", follow_redirects=False)
     db.expire_all()
     assert db.get(User, alice.id).enabled is True

@@ -18,6 +18,15 @@
     <span class="meta-chip">{{ t.used }}: <b dir="ltr">{{ (user.traffic_used_bytes / 1073741824) | round(2) }} GB</b></span>
     <span class="meta-chip">{{ t.limit }}: <b>{{ ((user.traffic_limit_bytes / 1073741824) | round(2)) ~ ' GB' if user.traffic_limit_bytes else t.unlimited }}</b></span>
     <span class="meta-chip">{{ t.expires }}: <b>{{ user.expires_at.strftime('%Y-%m-%d') if user.expires_at else t.never }}</b></span>
+    {# Phase A item 6: what is LEFT (public page only — the admin
+       view passes no data_left/days_left, so the chips stay hidden
+       there; the admin sees used/limit/expiry above). #}
+    {% if data_left is defined and data_left is not none %}
+    <span class="meta-chip">{{ t.data_left }}: <b dir="ltr">{{ data_left }}</b></span>
+    {% endif %}
+    {% if days_left is defined and days_left is not none %}
+    <span class="meta-chip">{{ t.days_left }}: <b dir="ltr">{{ days_left }}</b></span>
+    {% endif %}
   </div>
 
   {% if not public %}

@@ -59,6 +59,10 @@ PUBLIC_GETS = {
     "/sub/{token}/amneziawg.conf",
     "/sub/{token}/ikev2.mobileconfig",
     "/sub/{token}/qr",
+    # Phase A PWA metadata (no secrets, no user data): the manifest
+    # names the panel, the service worker only caches static assets.
+    "/manifest.webmanifest",
+    "/sw.js",
     # FastAPI's auto-generated API docs (/docs, /redoc,
     # /openapi.json) are NOT listed here: they were disabled in
     # Phase 7 (docs_url/redoc_url/openapi_url=None on both app

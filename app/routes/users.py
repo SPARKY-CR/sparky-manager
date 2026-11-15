@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
+from app import events as events_mod
 from app.i18n import get_lang, t_for
 from app.models import Client, Inbound, User
 from app.webcommon import (
@@ -34,7 +35,6 @@ from app.webcommon import (
     _links_for_user,
     _next_awg_address,
     _next_wg_address,
-    _notify_telegram,
     _redirect,
     _set_client_extra,
     _set_client_frozen,
@@ -470,7 +470,12 @@ def create_user(
     _create_clients_for_user(db, user)
     _audit(db, admin.id, "user.create", name)
     logger.info("user created: %s", name)
-    _notify_telegram(db, t["tg_user_created"].format(name=name))
+    # Phase A event bus: user creation is a selectable event
+    # (``user.created``); a user created twice in a row is two
+    # real events, so no dedup key.
+    events_mod.notify_event(
+        db, "user.created", t["tg_user_created"].format(name=name)
+    )
     errors = rerender_configs(db)
     err = "; ".join(errors) if errors else ""
     if err:

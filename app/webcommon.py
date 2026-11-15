@@ -212,7 +212,18 @@ def _inbound_dict(inbound: Any) -> dict[str, Any]:
 def _links_for_user(
     db: Session, user: Any, host: str, settings: dict[str, Any] | None = None
 ) -> list[dict[str, Any]]:
-    """Share links for one user's usable clients."""
+    """Share links for one user's usable clients.
+
+    The link remark comes from the ``sub_remark_template`` setting
+    (Phase A item 2): ``{USER}``, ``{INBOUND}``, ``{DATA_LEFT}`` and
+    ``{DAYS_LEFT}`` expand per user/inbound; the default template
+    is ``{USER}-{INBOUND}`` (the shape the sing-box feed tags
+    already use — previously the v2rayNG remark was the bare user
+    name, so all of a user's configs looked identical).
+    """
+    from app import subscription as subscription_mod
+
+    template = (settings or {}).get("sub_remark_template", "") or None
     links: list[dict[str, Any]] = []
     for client, inbound in _usable_clients(db, user):
         try:
@@ -228,12 +239,15 @@ def _links_for_user(
                     (settings or {}).get("amneziawg_public_key") or "",
                 )
                 inbound_dict["stream_json"] = stream
+            remark = subscription_mod.expand_remark_variables(
+                template, user, inbound.tag
+            )
             link = links_mod.build_share_link(
                 inbound.protocol,
                 _client_dict(client, user),
                 inbound_dict,
                 host,
-                user.name,
+                remark,
             )
         except Exception:  # noqa: BLE001
             logger.exception("build_share_link failed for %s", inbound.tag)
@@ -611,6 +625,21 @@ def _client_is_frozen(client: Any) -> bool:
     extra = getattr(client, "extra", None) or {}
     return bool(extra.get("frozen")) if isinstance(extra, dict) else False
 
+def telegram_topic_id(settings: dict[str, Any]) -> Optional[int]:
+    """The configured forum-topic id for Telegram notifications, or
+    None when unset/invalid (a non-numeric or non-positive value is
+    ignored — plain chat delivery)."""
+    raw = (settings.get("telegram_topic_id", "") or "")
+    raw = str(raw).strip()
+    if not raw:
+        return None
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
+
+
 def _notify_telegram(db: Session, text: str) -> bool:
     """Send a Telegram notification if configured. Never raises.
 
@@ -618,6 +647,16 @@ def _notify_telegram(db: Session, text: str) -> bool:
     sender — it is never logged (not even on failure: the warning
     below carries no exception text, because HTTP errors can echo
     the request URL, which contains the token).
+
+    Forum-topic routing (Phase A event bus): when the
+    ``telegram_topic_id`` setting holds a positive integer, the
+    message is sent with ``message_thread_id`` into that topic of
+    the admin's forum supergroup. A non-numeric or non-positive
+    value is ignored (plain chat delivery); a wrong-but-numeric
+    topic makes Telegram refuse the message, which is reported as
+    a failed send — there is no silent fallback, so the admin sees
+    the misconfiguration instead of wondering where the messages
+    went.
     """
     if not text:
         return False
@@ -627,7 +666,14 @@ def _notify_telegram(db: Session, text: str) -> bool:
         chat_id = settings.get("telegram_chat_id", "")
         if not token or not chat_id:
             return False
-        return bool(telegram_mod.send_message(token, chat_id, text))
+        return bool(
+            telegram_mod.send_message(
+                token,
+                chat_id,
+                text,
+                message_thread_id=telegram_topic_id(settings),
+            )
+        )
     except Exception:  # noqa: BLE001
         logger.warning("telegram notification failed")
         return False

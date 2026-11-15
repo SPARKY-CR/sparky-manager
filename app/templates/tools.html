@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %} — {{ t.tools }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ t.tools }}</h1>
+</div>
+<p class="field-hint">{{ t.tools_desc }}</p>
+
+{# Phase A item 5: in-panel tools (Hiddify's Tools group). Three
+   server-side forms — no JS required. The config tester REDACTS
+   credentials before display; the decoder shows what the admin
+   pasted (decoding is its whole purpose). Each POST re-renders
+   this page with its result. #}
+
+<div class="card">
+  <h2>{{ t.tool_config_tester }}</h2>
+  <p class="muted">{{ t.tool_config_tester_hint }}</p>
+  <form method="post" action="{{ base_path }}/tools/test">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>
+      {{ t.tool_input }}
+      <textarea name="config_text" rows="4" dir="ltr" placeholder="vless://… / vmess://… / { &quot;inbounds&quot;: … }"></textarea>
+    </label>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{{ t.tool_test }}</button>
+    </div>
+  </form>
+  {% if tool_result and tool_result.tool == "test" %}
+  <div class="tool-result">
+    {% if tool_result.ok %}
+    <p class="flash flash-ok">{{ tool_result.message }}</p>
+    {% if tool_result.data is mapping %}
+    <dl class="kv">
+      {% for key, value in tool_result.data.items() %}
+      <dt dir="ltr">{{ key }}</dt><dd dir="ltr">{{ value }}</dd>
+      {% endfor %}
+    </dl>
+    {% endif %}
+    {% else %}
+    <p class="flash flash-err">{{ tool_result.message }}</p>
+    {% if tool_result.data is sequence and tool_result.data is not string %}
+    <ul class="muted">
+      {% for error in tool_result.data %}
+      <li dir="ltr">{{ error }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>{{ t.tool_qr }}</h2>
+  <p class="muted">{{ t.tool_qr_hint }}</p>
+  <form method="post" action="{{ base_path }}/tools/qr">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>
+      {{ t.tool_input }}
+      <textarea name="qr_text" rows="3" dir="ltr" maxlength="4096"></textarea>
+    </label>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{{ t.tool_make_qr }}</button>
+    </div>
+  </form>
+  {% if tool_result and tool_result.tool == "qr" %}
+  <div class="tool-result">
+    {% if tool_result.ok %}
+    <img class="qr" src="{{ tool_result.data }}" alt="{{ t.qr_code }}">
+    {% else %}
+    <p class="flash flash-err">{{ tool_result.message }}</p>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>{{ t.tool_decoder }}</h2>
+  <p class="muted">{{ t.tool_decoder_hint }}</p>
+  <form method="post" action="{{ base_path }}/tools/decode">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>
+      {{ t.tool_input }}
+      <textarea name="decode_text" rows="4" dir="ltr" placeholder="vmess://… / base64…"></textarea>
+    </label>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{{ t.tool_decode }}</button>
+    </div>
+  </form>
+  {% if tool_result and tool_result.tool == "decode" %}
+  <div class="tool-result">
+    {% if tool_result.ok %}
+    <pre class="log-line log-output" dir="ltr">{{ tool_result.data }}</pre>
+    {% else %}
+    <p class="flash flash-err">{{ tool_result.message }}</p>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

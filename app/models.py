@@ -321,6 +321,31 @@ def user_is_usable(user: "User", now: Optional[datetime] = None) -> bool:
     return True
 
 
+def user_unusable_reason(
+    user: "User", now: Optional[datetime] = None
+) -> Optional[str]:
+    """Why ``user`` is unusable: ``"disabled"``, ``"expired"`` or
+    ``"limited"`` (over quota) — ``None`` when the user is usable.
+
+    The same rule as :func:`user_is_usable`, split into the reason
+    so the subscription placeholder feed (Phase A) can name the
+    state instead of serving a silently empty feed. Precedence:
+    disabled beats expired beats limited (an admin-disabled user is
+    disabled whatever else is true about them).
+    """
+    now = _as_aware(now or _utcnow())
+    if not user.enabled:
+        return "disabled"
+    if user.expires_at is not None and _as_aware(user.expires_at) <= now:
+        return "expired"
+    if (
+        user.traffic_limit_bytes is not None
+        and user.traffic_used_bytes >= user.traffic_limit_bytes
+    ):
+        return "limited"
+    return None
+
+
 def client_is_frozen(client: "Client") -> bool:
     """True when the client's ``extra`` JSON carries ``frozen: true``.
 
@@ -370,6 +395,7 @@ __all__ = [
     "Session",
     "generate_sub_token",
     "user_is_usable",
+    "user_unusable_reason",
     "client_is_usable",
     "client_is_frozen",
 ]

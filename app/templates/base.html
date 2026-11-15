@@ -3,7 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080B10">
   <title>{{ t.app_name }}{% block title %}{% endblock %}</title>
+  {# PWA (Phase A item 5): the manifest is served from the panel
+     root (see /manifest.webmanifest) so start_url/scope cover the
+     whole panel under its web path. #}
+  <link rel="manifest" href="{{ base_path }}/manifest.webmanifest">
+  {# No apple-touch-icon: iOS requires a PNG, and the panel ships
+     an SVG icon only (see app/static/icons/icon.svg). #}
   <link rel="stylesheet" href="{{ base_path }}/static/style.css">
 </head>
 <body class="{{ 'auth-page' if not admin else '' }}">
@@ -14,6 +21,8 @@
 {% elif here.endswith('/settings') %}{% set crumb = t.settings %}
 {% elif here.endswith('/logs') %}{% set crumb = t.logs %}
 {% elif here.endswith('/cores') %}{% set crumb = t.cores %}
+{% elif here.endswith('/tools') %}{% set crumb = t.tools %}
+{% elif here.endswith('/selfcheck') %}{% set crumb = t.selfcheck %}
 {% endif %}
 <div class="app-shell">
   {% if admin %}
@@ -43,11 +52,13 @@
       <div class="nav-group">
         <span class="nav-group-label">{{ t.nav_monitoring }}</span>
         <a class="nav-link{{ ' active' if here.endswith('/logs') }}" href="{{ base_path }}/logs"{% if here.endswith('/logs') %} aria-current="page"{% endif %}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="3.5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="3.5" cy="18" r="1" fill="currentColor" stroke="none"/></svg><span class="nav-text">{{ t.logs }}</span></a>
+        <a class="nav-link{{ ' active' if here.endswith('/selfcheck') }}" href="{{ base_path }}/selfcheck"{% if here.endswith('/selfcheck') %} aria-current="page"{% endif %}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg><span class="nav-text">{{ t.selfcheck }}</span></a>
       </div>
       <div class="nav-group">
         <span class="nav-group-label">{{ t.nav_system }}</span>
         <a class="nav-link{{ ' active' if here.endswith('/settings') }}" href="{{ base_path }}/settings"{% if here.endswith('/settings') %} aria-current="page"{% endif %}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h9M19 7h1M4 17h3M13 17h7"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg><span class="nav-text">{{ t.settings }}</span></a>
         <a class="nav-link{{ ' active' if here.endswith('/cores') }}" href="{{ base_path }}/cores"{% if here.endswith('/cores') %} aria-current="page"{% endif %}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg><span class="nav-text">{{ t.cores }}</span></a>
+        <a class="nav-link{{ ' active' if here.endswith('/tools') }}" href="{{ base_path }}/tools"{% if here.endswith('/tools') %} aria-current="page"{% endif %}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg><span class="nav-text">{{ t.tools }}</span></a>
       </div>
     </nav>
     <div class="side-foot">

@@ -12,6 +12,7 @@ import json
 
 import pytest
 
+from app.links import parse_vmess_link
 from app.main import _client_dict, _inbound_dict, _links_for_user
 from app.subscription import (
     build_singbox_feed,
@@ -326,13 +327,40 @@ def test_sub_userinfo_header_reports_quota_and_expiry(
                f"expire={int(expires.timestamp())}")
 
 
-@pytest.mark.parametrize("name", ["bob", "carol", "dave"])
-def test_sub_unusable_user_gets_403_empty(test_client, seeded, name):
+@pytest.mark.parametrize(
+    "name,remark",
+    [
+        ("bob", "Expired"),
+        ("carol", "Limit reached"),
+        ("dave", "Disabled"),
+    ],
+)
+def test_sub_unusable_user_gets_placeholder_feed(
+        test_client, seeded, name, remark):
+    """Phase A item 2 (intentional behavior change): a KNOWN token
+    whose user is unusable gets a 200 with one placeholder entry
+    (a visible "expired / limit reached / disabled" line in the
+    client) instead of a silent 403. The placeholder points at
+    127.0.0.1:1 and can never connect. An UNKNOWN token still 403s
+    (see test_sub_unknown_token_gets_403_empty)."""
     token = seeded["users"][name].sub_token
-    for url in (f"/sub/{token}", f"/sub/{token}?format=singbox"):
-        resp = test_client.get(url)
-        assert resp.status_code == 403, (name, url)
-        assert resp.content == b"", (name, url)
+    # v2rayNG format: base64 feed with one vmess link whose decoded
+    # remark names the reason.
+    resp = test_client.get(f"/sub/{token}")
+    assert resp.status_code == 200, name
+    links = decode_v2rayng_feed(resp.content)
+    assert len(links) == 1, name
+    assert links[0].startswith("vmess://"), name
+    parsed = parse_vmess_link(links[0])
+    assert remark in parsed["name"], (name, parsed["name"])
+    assert parsed["host"] == "127.0.0.1", name
+    # sing-box format: one socks outbound with the same remark.
+    resp = test_client.get(f"/sub/{token}?format=singbox")
+    assert resp.status_code == 200, name
+    feed = resp.json()
+    assert len(feed["outbounds"]) == 1, name
+    assert remark in feed["outbounds"][0]["tag"], name
+    assert feed["outbounds"][0]["server"] == "127.0.0.1", name
 
 
 def test_sub_unknown_token_gets_403_empty(test_client):

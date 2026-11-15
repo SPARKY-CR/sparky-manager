@@ -1,0 +1,9 @@
+<!-- sparky-manager PWA icon (Phase A item 5). SVG, not PNG: the icon is a
+     text file, so the GitHub push path can carry it (it cannot push
+     binary files), and Chromium/Firefox accept SVG manifest icons.
+     The bolt sits inside the maskable safe zone (middle 80%), so
+     installers that crop to a circle keep the whole mark. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#080B10"/>
+  <polygon points="288,96 176,272 248,272 232,416 336,232 264,232" fill="#8B7CFF"/>
+</svg>

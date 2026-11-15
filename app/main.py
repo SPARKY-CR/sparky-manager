@@ -87,6 +87,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import hmac
 import ipaddress
 import json
@@ -139,11 +140,13 @@ from app import amneziawg as amneziawg_mod
 from app import backup as backup_mod
 from app import bot as bot_mod
 from app import config as panel_config
+from app import events as events_mod
 from app import ikev2 as ikev2_mod
 from app import links as links_mod
 from app import openconnect as openconnect_mod
 from app import openvpn as openvpn_mod
 from app import panel_log as panel_log_mod
+from app import selfcheck as selfcheck_mod
 from app import singbox as singbox_mod
 from app import subscription as subscription_mod
 from app import system_status as system_status_mod
@@ -181,6 +184,7 @@ from app.models import (
     User,
     client_is_usable,
     user_is_usable,
+    user_unusable_reason,
 )
 
 
@@ -250,6 +254,7 @@ from app.webcommon import (  # noqa: E402
     require_csrf,
     require_csrf_api,
     set_setting,
+    telegram_topic_id,
     templates,
 )
 
@@ -606,11 +611,18 @@ def _rerender_configs_impl(db: Session) -> list[str]:
                 [_inbound_dict(i) for i in xray_inbounds], clients_by_tag, settings
             )
             # write_and_validate() returns (ok, messages) and never raises
-            # for a missing binary / bad path — honour it.
+            # for a missing binary / bad path — honour it. On success
+            # the messages are informational (e.g. "binary not
+            # present — JSON validated only"): log them so the admin
+            # knows the core binary did NOT validate this config —
+            # the panel must never silently claim a validation that
+            # did not run (Phase A item 8).
             ok, messages = xray_mod.write_and_validate(cfg, XRAY_CONFIG_PATH, XRAY_BINARY)
             if not ok:
                 errors.append("xray config not written: " + "; ".join(messages))
             else:
+                for message in messages:
+                    logger.warning("xray config validation note: %s", message)
                 err = _restart_service("xray")
                 if err:
                     errors.append(err)
@@ -633,6 +645,10 @@ def _rerender_configs_impl(db: Session) -> list[str]:
             if not ok:
                 errors.append("sing-box config not written: " + "; ".join(messages))
             else:
+                for message in messages:
+                    logger.warning(
+                        "sing-box config validation note: %s", message
+                    )
                 err = _restart_service("sing-box")
                 if err:
                     errors.append(err)
@@ -1181,6 +1197,182 @@ async def _expiry_sweeper_loop() -> None:
             db.close()
 
 
+# ---------------------------------------------------------------------------
+# Scheduled auto-backup (Phase A item 4) + client-eye self-check (item 7)
+# ---------------------------------------------------------------------------
+
+#: Both loops tick once a minute and check their own due rule (the
+#: stamp lives in settings, so a restart does not lose the schedule).
+AUTO_BACKUP_LOOP_INTERVAL_SECONDS = 60
+SELFCHECK_LOOP_INTERVAL_SECONDS = 60
+
+
+def _run_auto_backup_once(db: Session) -> tuple[bool, str]:
+    """One scheduled auto-backup run: create the ZIP (SQLite backup
+    API — never a file copy of a live WAL DB), store it with
+    retention, stamp ``auto_backup_last_run``, and deliver it to
+    Telegram when ``auto_backup_telegram`` is on (split into <49 MB
+    parts when needed).
+
+    Returns ``(ok, detail)`` — ``detail`` is the backup filename on
+    success, the failure reason on failure. Never raises.
+    """
+    try:
+        db_path = _db_file_path(db)
+        if db_path is None or not db_path.exists():
+            return False, "database path unknown"
+        settings = get_settings(db)
+        try:
+            keep = int(
+                (settings.get("auto_backup_keep") or "").strip()
+                or str(backup_mod.AUTO_BACKUP_DEFAULT_KEEP)
+            )
+        except ValueError:
+            keep = backup_mod.AUTO_BACKUP_DEFAULT_KEEP
+        try:
+            path, data = backup_mod.run_scheduled_backup(
+                db_path, DATA_DIR / "backups", keep=keep
+            )
+        except Exception as exc:  # noqa: BLE001
+            return False, str(exc)
+        now = datetime.now(timezone.utc)
+        set_setting(db, "auto_backup_last_run", now.isoformat())
+        _audit(
+            db, None, "settings.auto_backup",
+            f"{path.name}, {len(data)} bytes",
+        )
+        if (settings.get("auto_backup_telegram") or "").strip() != "1":
+            return True, path.name
+        token = (settings.get("telegram_bot_token") or "").strip()
+        chat_id = (settings.get("telegram_chat_id") or "").strip()
+        if not token or not chat_id:
+            return False, "telegram delivery enabled but bot not configured"
+        if not telegram_mod.send_document_parts(
+            token,
+            chat_id,
+            path.name,
+            data,
+            message_thread_id=telegram_topic_id(settings),
+        ):
+            return False, "could not deliver backup to Telegram"
+        return True, path.name
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("auto-backup run failed")
+        return False, str(exc)
+
+
+async def _auto_backup_loop() -> None:
+    """Every minute: take a scheduled backup when one is due
+    (``auto_backup_hours``, 0 = off). A failed run notifies once
+    per hour via the ``backup.failed`` event (deduped by the bus)."""
+    while True:
+        await asyncio.sleep(AUTO_BACKUP_LOOP_INTERVAL_SECONDS)
+        db = SessionLocal()
+        try:
+            if not backup_mod.auto_backup_due(get_settings(db)):
+                continue
+            ok, detail = await asyncio.to_thread(_run_auto_backup_once, db)
+            if not ok:
+                t = t_for("fa")
+                events_mod.notify_event(
+                    db,
+                    "backup.failed",
+                    t["tg_backup_failed"].format(detail=detail),
+                    dedup_key="backup.failed",
+                    dedup_seconds=3600,
+                )
+        except Exception:  # noqa: BLE001
+            logger.exception("auto-backup loop failed")
+        finally:
+            db.close()
+
+
+def _run_self_check_once(db: Session) -> dict[str, Any]:
+    """Run the client-eye self-check against the live DB, persist
+    the result in the ``selfcheck_last`` setting, and return it.
+
+    The subscription fetch uses the panel's public URL when a
+    domain is configured, else the loopback URL — either way the
+    check fetches the panel's own ``/sub/<token>`` like a client.
+    The token is the first usable user's (any usable user proves
+    the feed works). Never raises.
+    """
+    try:
+        settings = get_settings(db)
+        inbounds = db.query(Inbound).all()
+        base_url = _public_panel_url(settings)
+        if base_url is None:
+            base_url = f"https://127.0.0.1:{PANEL_PORT}{WEB_PATH}"
+        token = None
+        for user in db.query(User).order_by(User.id).all():
+            if user_is_usable(user):
+                token = user.sub_token
+                break
+        result = selfcheck_mod.run_self_check(
+            inbounds, base_url=base_url, sub_token=token
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("self-check run failed")
+        result = {
+            "run_at": datetime.now(timezone.utc).isoformat(),
+            "overall": "unknown",
+            "checks": [
+                {
+                    "kind": "subscription",
+                    "tag": "—",
+                    "protocol": "—",
+                    "port": None,
+                    "status": "unknown",
+                    "reason": "self-check run failed",
+                }
+            ],
+        }
+    try:
+        set_setting(
+            db, selfcheck_mod.SELFCHECK_LAST_KEY, json.dumps(result)
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("self-check result persist failed")
+    return result
+
+
+async def _selfcheck_loop() -> None:
+    """Every minute: run the client-eye self-check when one is due
+    (``selfcheck_interval_minutes``, 0 = off). A failed run
+    notifies once per hour via the ``selfcheck.failed`` event
+    (deduped by the bus)."""
+    while True:
+        await asyncio.sleep(SELFCHECK_LOOP_INTERVAL_SECONDS)
+        db = SessionLocal()
+        try:
+            if not selfcheck_mod.selfcheck_due(get_settings(db)):
+                continue
+            result = await asyncio.to_thread(_run_self_check_once, db)
+            if result.get("overall") == "down":
+                failed = [
+                    c
+                    for c in result.get("checks", [])
+                    if c.get("status") == "down"
+                ]
+                detail = "; ".join(
+                    f"{c.get('tag') or c.get('kind')}: "
+                    f"{c.get('reason') or c.get('status')}"
+                    for c in failed
+                )[:200]
+                t = t_for("fa")
+                events_mod.notify_event(
+                    db,
+                    "selfcheck.failed",
+                    t["tg_selfcheck_failed"].format(detail=detail),
+                    dedup_key="selfcheck.failed",
+                    dedup_seconds=3600,
+                )
+        except Exception:  # noqa: BLE001
+            logger.exception("self-check loop failed")
+        finally:
+            db.close()
+
+
 def _telegram_polling_token() -> Optional[str]:
     """The bot token when polling is the active transport, else None.
 
@@ -1421,6 +1613,11 @@ async def lifespan(app: FastAPI):
         # transport is "polling" (see _telegram_polling_loop); it is
         # cancelled with the other loops on shutdown.
         asyncio.create_task(_telegram_polling_loop()),
+        # Phase A: scheduled auto-backup + client-eye self-check.
+        # Both tick once a minute and check their own due rule, so
+        # a disabled setting (0) costs one cheap settings read.
+        asyncio.create_task(_auto_backup_loop()),
+        asyncio.create_task(_selfcheck_loop()),
     ]
     yield
     for task in tasks:
@@ -2573,6 +2770,78 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+# ---------------------------------------------------------------------------
+# PWA (Phase A item 5): installable panel app.
+#
+# The manifest and the service worker are served from ROUTES, not
+# from /static: the manifest's start_url/scope must be the panel's
+# secret web path (a static file cannot know it), and a service
+# worker's scope is its own URL's directory — /static/sw.js could
+# only ever control /static/. Both are public metadata (no secrets,
+# no user data): the manifest names the panel, the worker only
+# caches the panel's own static assets.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/manifest.webmanifest")
+def pwa_manifest() -> JSONResponse:
+    """Web app manifest: install the panel as an app (3x-ui parity).
+
+    Served from the panel root so ``start_url``/``scope`` cover the
+    whole panel under its web path. Icons are the static PNGs in
+    ``app/static/icons/`` (generated at build time, no runtime
+    dependency).
+    """
+    base = WEB_PATH or ""
+    return JSONResponse(
+        content={
+            "name": "Sparky Manager",
+            "short_name": "Sparky",
+            "description": "Sparky Manager VPN panel",
+            "lang": "fa",
+            "dir": "rtl",
+            "start_url": f"{base}/dashboard",
+            "scope": f"{base}/",
+            "display": "standalone",
+            "background_color": "#080B10",
+            "theme_color": "#080B10",
+            # One SVG icon: a text file, so the push path can carry it
+            # (binary PNGs cannot be pushed), and Chromium/Firefox
+            # accept SVG manifest icons. "any" size: SVG scales.
+            "icons": [
+                {
+                    "src": f"{base}/static/icons/icon.svg",
+                    "sizes": "any",
+                    "type": "image/svg+xml",
+                    "purpose": "any maskable",
+                },
+            ],
+        },
+        media_type="application/manifest+json",
+        # The manifest is tiny and changes with the install; never
+        # let a stale cached copy hide an icon or start_url change.
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/sw.js")
+def service_worker() -> FileResponse:
+    """The panel's service worker (see ``app/static/sw.js``).
+
+    Served from the panel root so its scope is the whole panel.
+    It precaches the panel's own static assets and serves them
+    cache-first when offline; pages are always network-first (a
+    stale cached dashboard would be worse than no dashboard).
+    Served with ``no-cache`` so the browser re-checks for a new
+    worker (and a new CACHE_NAME) on every navigation.
+    """
+    return FileResponse(
+        STATIC_DIR / "sw.js",
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
 @app.get("/")
 def index(request: Request, db: Session = Depends(db_session)):
     """Root: dashboard when signed in, login page otherwise."""
@@ -2598,6 +2867,16 @@ def login_submit(
     t = t_for(lang)
     ip = request.client.host if request.client else "unknown"
     if is_locked_out(ip):
+        # Phase A event bus: a lockout notifies once per block
+        # (deduped on the IP for the 15-minute block length, so a
+        # hammering attacker cannot spam the admin either).
+        events_mod.notify_event(
+            db,
+            "login.locked",
+            t_for("fa")["tg_login_locked"].format(ip=ip),
+            dedup_key=f"login.locked:{ip}",
+            dedup_seconds=900,
+        )
         return templates.TemplateResponse(request, "login.html",
             _template_ctx(request, {"admin": None, "error": t["locked_out"]}),
             status_code=429,
@@ -2752,6 +3031,9 @@ def dashboard(
                 "recent_audit": recent_audit,
                 "traffic_chart": traffic_chart,
                 "traffic_14d": traffic_14d,
+                # Phase A self-check summary card (None until the
+                # first run — the template shows "never run").
+                "selfcheck_last": _load_selfcheck_last(db),
             },
         ),
     )
@@ -2998,7 +3280,6 @@ def delete_inbound(
 
 PASSWORD_MIN_LENGTH = 8
 TELEGRAM_EXPIRY_HOURS = 24
-TELEGRAM_RERENDER_NOTIFY_MIN_GAP = timedelta(hours=1)
 CHAT_ID_RE = re.compile(r"^-?\d+$")
 # Ports Telegram delivers webhooks to (Bot API rule — a panel on any
 # other port cannot receive webhooks; see _public_panel_url).
@@ -3253,25 +3534,15 @@ def _get_webhook_info_cached(db: Session, token: str) -> Optional[dict]:
 def _notify_expiring_users(db: Session, now: Optional[datetime] = None) -> int:
     """Notify about users expiring within 24h (once per user per day).
 
-    Runs from the expiry sweeper. Dedup state lives in the
-    ``telegram_expiry_notified`` setting (``{user_id: "YYYY-MM-DD"}``)
-    — no schema change. Returns the number of notifications sent.
-    Background task, so the message uses Persian (panel default).
-    Never raises.
+    Runs from the expiry sweeper. The send goes through the event
+    bus (``user.expiring`` event) with a per-user-per-day dedup key
+    — the bus's ``telegram_event_dedup`` setting replaces the old
+    bespoke ``telegram_expiry_notified`` row. Returns the number of
+    notifications sent. Background task, so the message uses
+    Persian (panel default). Never raises.
     """
     try:
         now = now or datetime.now(timezone.utc)
-        today = now.date().isoformat()
-        settings = get_settings(db)
-        try:
-            notified = json.loads(settings.get("telegram_expiry_notified", "") or "{}")
-            if not isinstance(notified, dict):
-                notified = {}
-        except ValueError:
-            notified = {}
-        pruned = {k: v for k, v in notified.items() if v == today}
-        changed = len(pruned) != len(notified)
-        notified = pruned
         t = t_for("fa")
         sent = 0
         horizon = now + timedelta(hours=TELEGRAM_EXPIRY_HOURS)
@@ -3283,17 +3554,16 @@ def _notify_expiring_users(db: Session, now: Optional[datetime] = None) -> int:
                 expires = expires.replace(tzinfo=timezone.utc)
             if not (now < expires <= horizon):
                 continue
-            if notified.get(str(user.id)) == today:
-                continue
             hours = max(1, int((expires - now).total_seconds() // 3600))
-            if _notify_telegram(
-                db, t["tg_user_expiring"].format(name=user.name, hours=hours)
+            if events_mod.notify_event(
+                db,
+                "user.expiring",
+                t["tg_user_expiring"].format(name=user.name, hours=hours),
+                dedup_key=f"user.expiring:{user.id}",
+                dedup_seconds=86400,
+                now=now,
             ):
-                notified[str(user.id)] = today
-                changed = True
                 sent += 1
-        if changed:
-            set_setting(db, "telegram_expiry_notified", json.dumps(notified))
         return sent
     except Exception:  # noqa: BLE001
         logger.warning("expiry notification check failed")
@@ -3304,31 +3574,23 @@ def _notify_rerender_failure(db: Session, errors: list[str]) -> bool:
     """Notify about a re-render failure, at most once per hour.
 
     The sweeper runs every 5 minutes, so an unthrottled hook would
-    spam the admin while a failure persists. The last-notify time
-    lives in the ``telegram_rerender_notified_at`` setting. Never
-    raises.
+    spam the admin while a failure persists. The send goes through
+    the event bus (``rerender.failed`` event) with a 1-hour dedup —
+    the bus's ``telegram_event_dedup`` setting replaces the old
+    bespoke ``telegram_rerender_notified_at`` row. Never raises.
     """
     if not errors:
         return False
     try:
-        now = datetime.now(timezone.utc)
-        settings = get_settings(db)
-        last = settings.get("telegram_rerender_notified_at", "")
-        if last:
-            try:
-                last_dt = datetime.fromisoformat(last)
-                if last_dt.tzinfo is None:
-                    last_dt = last_dt.replace(tzinfo=timezone.utc)
-                if now - last_dt < TELEGRAM_RERENDER_NOTIFY_MIN_GAP:
-                    return False
-            except ValueError:
-                pass
         t = t_for("fa")
         detail = "; ".join(str(e) for e in errors)[:200]
-        if _notify_telegram(db, t["tg_rerender_failed"].format(errors=detail)):
-            set_setting(db, "telegram_rerender_notified_at", now.isoformat())
-            return True
-        return False
+        return events_mod.notify_event(
+            db,
+            "rerender.failed",
+            t["tg_rerender_failed"].format(errors=detail),
+            dedup_key="rerender.failed",
+            dedup_seconds=3600,
+        )
     except Exception:  # noqa: BLE001
         logger.warning("re-render failure notification failed")
         return False
@@ -3460,6 +3722,17 @@ def settings_page(
                 "last_error": settings.get(TELEGRAM_POLLING_LAST_ERROR_KEY, ""),
                 "offset": settings.get(TELEGRAM_POLLING_OFFSET_KEY, ""),
             },
+            # Phase A event bus: the catalog (in a stable order) and
+            # the currently enabled set for the checklist. An
+            # explicitly saved empty list means "nothing notifies";
+            # an absent setting means "everything" (see
+            # events.enabled_events) — the template checks the
+            # enabled set, so both cases render correctly.
+            "telegram_events_catalog": list(events_mod.EVENT_CATALOG.items()),
+            "telegram_events_enabled": events_mod.enabled_events(db),
+            "auto_backup_last_run": settings.get(
+                "auto_backup_last_run", ""
+            ),
         }),
     )
 
@@ -3470,10 +3743,18 @@ def save_settings(
     domain: Optional[str] = Form(None),
     subscription_host: Optional[str] = Form(None),
     reality_sni: Optional[str] = Form(None),
+    sub_remark_template: Optional[str] = Form(None),
     log_level: Optional[str] = Form(None),
     telegram_bot_token: Optional[str] = Form(None),
     telegram_chat_id: Optional[str] = Form(None),
     telegram_transport: Optional[str] = Form(None),
+    telegram_topic_id: Optional[str] = Form(None),
+    telegram_events_present: Optional[str] = Form(None),
+    telegram_events: Optional[list[str]] = Form(None),
+    auto_backup_present: Optional[str] = Form(None),
+    auto_backup_hours: Optional[str] = Form(None),
+    auto_backup_keep: Optional[str] = Form(None),
+    auto_backup_telegram: Optional[str] = Form(None),
     section: str = Form(""),
     admin: Any = Depends(require_admin),
     csrf: None = Depends(require_csrf),
@@ -3482,7 +3763,13 @@ def save_settings(
     """Save settings. Partial updates (Phase 4): each settings tab
     posts only its own fields, so a field that is ABSENT from the
     form is left untouched — only a field that is PRESENT is written
-    (an empty present value still clears, as before)."""
+    (an empty present value still clears, as before).
+
+    Checkbox groups (Phase A) need a marker: unchecked boxes submit
+    nothing, so the form carries a hidden ``*_present`` field — when
+    it is present, the group is saved exactly as submitted (possibly
+    empty = everything off); when absent, the group is untouched.
+    """
     t = t_for(get_lang(request))
     settings_before = get_settings(db)
     chat_id = (telegram_chat_id or "").strip()
@@ -3490,6 +3777,15 @@ def save_settings(
         return _settings_redirect(
             request, section, err=t["invalid_chat_id"]
         )
+    topic_id = (telegram_topic_id or "").strip()
+    if telegram_topic_id is not None and topic_id:
+        try:
+            if int(topic_id) <= 0:
+                raise ValueError
+        except ValueError:
+            return _settings_redirect(
+                request, section, err=t["invalid_topic_id"]
+            )
     # The previous transport is read before saving so a switch to
     # polling can be detected (it needs a deleteWebhook call — see
     # below). An invalid submitted value keeps the previous one.
@@ -3512,6 +3808,43 @@ def save_settings(
     if reality_sni is not None:
         set_setting(
             db, "reality_sni", reality_sni.strip() or "www.microsoft.com"
+        )
+    if sub_remark_template is not None:
+        # An empty template clears the setting — the default
+        # ({USER}-{INBOUND}) applies (see expand_remark_variables).
+        set_setting(db, "sub_remark_template", sub_remark_template.strip())
+    if telegram_topic_id is not None:
+        set_setting(db, "telegram_topic_id", topic_id)
+    if telegram_events_present is not None:
+        # Checkbox group (see the docstring): save exactly what was
+        # submitted — unknown names are dropped, an empty list means
+        # "notify nothing".
+        enabled = [
+            name
+            for name in (telegram_events or [])
+            if name in events_mod.EVENT_CATALOG
+        ]
+        set_setting(db, events_mod.EVENTS_SETTING_KEY, json.dumps(enabled))
+    if auto_backup_present is not None:
+        # Numeric fields: a bad value keeps the previous one (never
+        # a 500); negatives clamp to 0 (off / keep-all).
+        for key, raw, default in (
+            ("auto_backup_hours", auto_backup_hours,
+             backup_mod.AUTO_BACKUP_DEFAULT_HOURS),
+            ("auto_backup_keep", auto_backup_keep,
+             backup_mod.AUTO_BACKUP_DEFAULT_KEEP),
+        ):
+            if raw is None:
+                continue
+            try:
+                value = max(0, int(raw.strip() or default))
+            except ValueError:
+                continue
+            set_setting(db, key, str(value))
+        set_setting(
+            db,
+            "auto_backup_telegram",
+            "1" if (auto_backup_telegram or "").strip() == "1" else "0",
         )
     commands_err = ""
     if telegram_bot_token is not None and telegram_bot_token.strip():
@@ -3912,6 +4245,7 @@ async def restore_backup(
     request: Request,
     backup_file: UploadFile = File(None),
     confirm_restore: str = Form(""),
+    preserve_identity: str = Form(""),
     section: str = Form(""),
     admin: Any = Depends(require_admin),
     csrf: None = Depends(require_csrf),
@@ -3957,6 +4291,22 @@ async def restore_backup(
                 message = t[key] + (exc.detail or exc.code)
             return _settings_redirect(request, section, err=message)
         # Validation passed: back up the current DB first, then swap.
+        # Safe import (Phase A item 4, 3x-ui's model): when the
+        # "preserve machine identity" box is checked (the default),
+        # snapshot this machine's identity settings now — they are
+        # re-applied to the restored DB after the swap, so a backup
+        # from another install cannot silently take over this
+        # panel's domain, Telegram bot or webhook secret. The flag
+        # is tracked separately from the snapshot: a machine with
+        # no identity rows yet still gets the reapply (which deletes
+        # the backup's identity rows), it must not silently import
+        # another install's bot token.
+        preserve = preserve_identity.strip() == "yes"
+        identity_snapshot: dict[str, str] = {}
+        if preserve:
+            identity_snapshot = backup_mod.snapshot_identity_settings(
+                get_settings(db)
+            )
         try:
             backup_mod.backup_current_db(db_path, DATA_DIR / "backups")
         except Exception:  # noqa: BLE001
@@ -3988,6 +4338,8 @@ async def restore_backup(
     errors: list[str] = []
     fresh = SessionLocal()
     try:
+        if preserve:
+            backup_mod.reapply_identity_settings(fresh, identity_snapshot)
         _audit(fresh, admin_id, "settings.restore",
                f"{info.users} users, {info.inbounds} inbounds")
         errors = rerender_configs(fresh)
@@ -4226,6 +4578,294 @@ def cores_action(
 
 
 # ---------------------------------------------------------------------------
+# In-panel tools (Phase A item 5; Hiddify's Tools group)
+#
+# Server-side POST forms (the panel's idiom — no JS required):
+# a config tester (share link or Xray/sing-box JSON), a QR display
+# and base64/vmess decoders. All admin-only + CSRF-protected. The
+# tester REDACTS credentials before display (see
+# links.redact_parsed_link); the decoder shows what the admin
+# pasted — decoding is its whole purpose.
+# ---------------------------------------------------------------------------
+
+
+def _test_config_text(text: str) -> tuple[bool, str, Optional[Any]]:
+    """Test pasted text as a share link or a core config JSON.
+
+    Returns ``(valid, message, data)`` — ``data`` is the redacted
+    parsed link dict, or the list of validation errors for a JSON
+    config. Never raises.
+    """
+    text = (text or "").strip()
+    if not text:
+        return False, "empty", None
+    if text.startswith("{"):
+        try:
+            cfg = json.loads(text)
+        except ValueError as exc:
+            return False, f"invalid JSON: {exc}", None
+        if not isinstance(cfg, dict):
+            return False, "config must be a JSON object", None
+        inbounds = cfg.get("inbounds")
+        first = (
+            inbounds[0]
+            if isinstance(inbounds, list) and inbounds
+            and isinstance(inbounds[0], dict)
+            else {}
+        )
+        if "protocol" in first:
+            ok, errors = xray_mod.validate_xray_config(cfg)
+            return ok, ("xray" if ok else "; ".join(errors)), errors
+        if "type" in first:
+            ok, errors = singbox_mod.validate_singbox_config(cfg)
+            return ok, ("sing-box" if ok else "; ".join(errors)), errors
+        return False, "not an Xray or sing-box config (no inbounds)", None
+    if "://" in text:
+        try:
+            parsed = links_mod.parse_share_link(text)
+        except ValueError as exc:
+            return False, str(exc), None
+        return True, parsed.get("protocol", ""), links_mod.redact_parsed_link(parsed)
+    return False, "not a share link or a JSON config", None
+
+
+def _decode_text(text: str) -> tuple[bool, str]:
+    """Decode pasted text: a ``vmess://`` link (pretty JSON) or
+    base64 (UTF-8 text). Returns ``(ok, result_or_error)``.
+    Never raises."""
+    text = (text or "").strip()
+    if not text:
+        return False, "empty"
+    if text.startswith("vmess://"):
+        try:
+            parsed = links_mod.parse_vmess_link(text)
+        except ValueError as exc:
+            return False, str(exc)
+        return True, json.dumps(parsed, indent=2, ensure_ascii=False)
+    compact = "".join(text.split())
+    try:
+        padded = compact + "=" * (-len(compact) % 4)
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii"))
+    except (ValueError, binascii.Error):
+        return False, "not valid base64"
+    try:
+        return True, decoded.decode("utf-8")
+    except UnicodeDecodeError:
+        return False, "decoded bytes are not UTF-8 text"
+
+
+def _render_tools(
+    request: Request,
+    admin: Any,
+    tool_result: Optional[dict[str, Any]] = None,
+) -> Any:
+    """Render the Tools page, optionally with one tool's result."""
+    return templates.TemplateResponse(request, "tools.html",
+        _template_ctx(request, {
+            "admin": admin,
+            "tool_result": tool_result,
+        }),
+    )
+
+
+@app.get("/tools", response_class=HTMLResponse)
+def tools_page(
+    request: Request,
+    admin: Any = Depends(require_admin),
+):
+    """In-panel tools (config tester, QR, decoders)."""
+    return _render_tools(request, admin)
+
+
+@app.post("/tools/test")
+def tools_test_config(
+    request: Request,
+    config_text: str = Form(""),
+    admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
+):
+    """Test a pasted share link or core config JSON."""
+    t = t_for(get_lang(request))
+    text = (config_text or "").strip()
+    if not text:
+        return _render_tools(request, admin, {
+            "tool": "test", "ok": False,
+            "message": t["tool_empty_input"], "data": None,
+        })
+    valid, message, data = _test_config_text(text)
+    if valid:
+        label = t["tool_config_valid"]
+        if message and message not in ("xray", "sing-box"):
+            label += f" ({message})"
+        elif message in ("xray", "sing-box"):
+            label += f" ({message})"
+    else:
+        label = t["tool_config_invalid"] + (
+            f": {message}" if message != "empty" else ""
+        )
+    return _render_tools(request, admin, {
+        "tool": "test", "ok": valid, "message": label, "data": data,
+    })
+
+
+@app.post("/tools/qr")
+def tools_make_qr(
+    request: Request,
+    qr_text: str = Form(""),
+    admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
+):
+    """Render pasted text as a QR code (data URI — no extra route)."""
+    t = t_for(get_lang(request))
+    text = (qr_text or "").strip()
+    if not text:
+        return _render_tools(request, admin, {
+            "tool": "qr", "ok": False,
+            "message": t["tool_empty_input"], "data": None,
+        })
+    if len(text) > 4096:
+        return _render_tools(request, admin, {
+            "tool": "qr", "ok": False,
+            "message": t["tool_config_invalid"] + ": text too long (max 4096)",
+            "data": None,
+        })
+    try:
+        png = links_mod.make_qr_png(text)
+    except Exception:  # noqa: BLE001
+        logger.exception("tools QR generation failed")
+        return _render_tools(request, admin, {
+            "tool": "qr", "ok": False,
+            "message": t["tool_config_invalid"], "data": None,
+        })
+    data_uri = (
+        "data:image/png;base64,"
+        + base64.b64encode(png).decode("ascii")
+    )
+    return _render_tools(request, admin, {
+        "tool": "qr", "ok": True, "message": "", "data": data_uri,
+    })
+
+
+@app.post("/tools/decode")
+def tools_decode(
+    request: Request,
+    decode_text: str = Form(""),
+    admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
+):
+    """Decode pasted base64 text or a vmess:// link."""
+    t = t_for(get_lang(request))
+    text = (decode_text or "").strip()
+    if not text:
+        return _render_tools(request, admin, {
+            "tool": "decode", "ok": False,
+            "message": t["tool_empty_input"], "data": None,
+        })
+    ok, result = _decode_text(text)
+    return _render_tools(request, admin, {
+        "tool": "decode", "ok": ok,
+        "message": "" if ok else t["tool_config_invalid"] + f": {result}",
+        "data": result if ok else None,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Client-eye self-check (Phase A item 7; Mistgate's best idea)
+# ---------------------------------------------------------------------------
+
+
+def _load_selfcheck_last(db: Session) -> Optional[dict[str, Any]]:
+    """The last self-check result dict, or None when never run (or
+    when the stored value is corrupt — a bad row must not 500 the
+    page)."""
+    raw = get_setting(db, selfcheck_mod.SELFCHECK_LAST_KEY, "")
+    if not (raw or "").strip():
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+@app.get("/selfcheck", response_class=HTMLResponse)
+def selfcheck_page(
+    request: Request,
+    admin: Any = Depends(require_admin),
+    db: Session = Depends(db_session),
+):
+    """Self-check status: the last run's results + a Run button."""
+    settings = get_settings(db)
+    return templates.TemplateResponse(request, "selfcheck.html",
+        _template_ctx(request, {
+            "admin": admin,
+            "selfcheck_last": _load_selfcheck_last(db),
+            "selfcheck_interval": settings.get(
+                selfcheck_mod.SELFCHECK_INTERVAL_KEY, ""
+            ) or str(selfcheck_mod.SELFCHECK_DEFAULT_INTERVAL_MINUTES),
+        }),
+    )
+
+
+@app.post("/selfcheck/run")
+def selfcheck_run(
+    request: Request,
+    admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
+    db: Session = Depends(db_session),
+):
+    """Run the self-check now (synchronous, bounded timeouts), then
+    back to the page with the overall result. A failed run notifies
+    via the ``selfcheck.failed`` event (same dedup as the loop)."""
+    t = t_for(get_lang(request))
+    result = _run_self_check_once(db)
+    overall = str(result.get("overall") or "unknown")
+    if overall == "down":
+        failed = [
+            c
+            for c in result.get("checks", [])
+            if c.get("status") == "down"
+        ]
+        detail = "; ".join(
+            f"{c.get('tag') or c.get('kind')}: "
+            f"{c.get('reason') or c.get('status')}"
+            for c in failed
+        )[:200]
+        events_mod.notify_event(
+            db,
+            "selfcheck.failed",
+            t_for("fa")["tg_selfcheck_failed"].format(detail=detail),
+            dedup_key="selfcheck.failed",
+            dedup_seconds=3600,
+        )
+    label = t.get(f"selfcheck_{overall}", overall)
+    _audit(db, admin.id, "selfcheck.run", f"overall={overall}")
+    return _redirect(
+        "/selfcheck", request,
+        msg=f"{t['selfcheck_overall']}: {label}",
+    )
+
+
+@app.post("/selfcheck/interval")
+def selfcheck_set_interval(
+    request: Request,
+    interval: str = Form(""),
+    admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
+    db: Session = Depends(db_session),
+):
+    """Save the scheduled self-check interval (minutes, 0 = off).
+    A bad value keeps the previous one — never a 500."""
+    try:
+        value = max(0, int((interval or "").strip() or "0"))
+    except ValueError:
+        return _redirect("/selfcheck", request)
+    set_setting(db, selfcheck_mod.SELFCHECK_INTERVAL_KEY, str(value))
+    _audit(db, admin.id, "selfcheck.interval", f"{value} min")
+    return _redirect("/selfcheck", request)
+
+
+# ---------------------------------------------------------------------------
 # Public per-user pages and subscriptions (token only, no admin auth)
 # ---------------------------------------------------------------------------
 
@@ -4268,6 +4908,14 @@ def user_page(request: Request, token: str, db: Session = Depends(db_session)):
                 "user_url": f"{base}/u/{user.sub_token}",
                 "file_urls": _file_export_urls(db, user, base) if usable else {},
                 "host": host,
+                # Phase A item 6: what is LEFT, not just what was
+                # used (the same values the {DATA_LEFT}/{DAYS_LEFT}
+                # remark variables expand to).
+                "data_left": subscription_mod.format_data_left(
+                    user.traffic_used_bytes or 0,
+                    user.traffic_limit_bytes,
+                ),
+                "days_left": subscription_mod.days_left(user.expires_at),
                 "error": "" if usable else t_for(get_lang(request))["user_unusable"],
             },
         ),
@@ -4327,7 +4975,14 @@ def _singbox_outbounds_for(
             _client_dict(client, user),
             inbound_dict,
             host,
-            f"{user.name}-{inbound.tag}",
+            # Phase A item 2: the sing-box tag expands the same
+            # remark template as the v2rayNG links (default
+            # {USER}-{INBOUND}, the shape these tags already had).
+            subscription_mod.expand_remark_variables(
+                settings.get("sub_remark_template") or None,
+                user,
+                inbound.tag,
+            ),
         )
     except Exception:  # noqa: BLE001
         logger.exception("outbounds_for_client failed for %s", inbound.tag)
@@ -4641,8 +5296,8 @@ def _build_zedsecure_bundle(
 
 def _subscription_response(request: Request, token: str, db: Session) -> Response:
     user = db.query(User).filter(User.sub_token == token).first()
-    if user is None or not user_is_usable(user):
-        # Disabled / expired / over-quota / unknown: 403 with an EMPTY body.
+    if user is None:
+        # Unknown token: 403 with an EMPTY body (no information leak).
         logger.warning("subscription 403 for token %s", _token_fp(token))
         return Response(content=b"", status_code=403)
     settings = get_settings(db)
@@ -4661,6 +5316,62 @@ def _subscription_response(request: Request, token: str, db: Session) -> Respons
     userinfo = _userinfo_header(user)
     if userinfo:
         headers["Subscription-Userinfo"] = userinfo
+
+    # Phase A item 2 — placeholder feeds: a KNOWN token whose user
+    # is unusable gets a 200 with one placeholder entry (a visible
+    # "expired / limit reached / disabled" line in the client)
+    # instead of a silently empty feed. The placeholder points at
+    # 127.0.0.1:1 and can never connect — it is a message, not a
+    # config. (An UNKNOWN token still 403s above.)
+    if not user_is_usable(user):
+        reason = user_unusable_reason(user)
+        logger.info(
+            "subscription placeholder: user=%s reason=%s format=%s token=%s",
+            user.name, reason, chosen, _token_fp(token),
+        )
+        if chosen == "singbox":
+            try:
+                feed = subscription_mod.build_singbox_feed(
+                    subscription_mod.placeholder_singbox_outbounds(reason)
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("build_singbox_feed failed")
+                return Response(content=b"", status_code=500)
+            return JSONResponse(content=feed, headers=headers)
+        try:
+            body = subscription_mod.build_v2rayng_feed(
+                subscription_mod.placeholder_feed_links(reason)
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("build_v2rayng_feed failed")
+            return Response(content=b"", status_code=500)
+        if isinstance(body, str):
+            body = body.encode()
+        headers["Content-Type"] = "text/plain; charset=utf-8"
+        return Response(content=body, headers=headers, media_type="text/plain")
+
+    # Phase A item 2 — browser copy-only page: a human opening the
+    # subscription URL in a browser gets a readable page (links with
+    # copy buttons + QR codes) instead of a raw base64 dump.
+    # ``?view=html`` forces it, ``?view=raw`` forces the raw feed,
+    # and anything else follows the User-Agent (a real browser gets
+    # the page; a VPN client or an empty UA gets the feed).
+    view = request.query_params.get("view", "")
+    if view == "html" or (
+        view != "raw" and subscription_mod.is_browser_user_agent(ua)
+    ):
+        links = _links_for_user(db, user, host, settings)
+        return templates.TemplateResponse(request, "subscription_page.html",
+            _template_ctx(request, {
+                "admin": None,
+                "public": True,
+                "user": user,
+                "links": links,
+                "sub_url": str(request.url).split("?")[0],
+                "chosen_format": chosen,
+            }),
+        )
+
     logger.info(
         "subscription served: user=%s format=%s token=%s",
         user.name, chosen, _token_fp(token),

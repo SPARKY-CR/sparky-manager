@@ -41,12 +41,47 @@ import sqlite3
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
 SCHEMA_VERSION = 1
 BACKUP_MAX_BYTES = 200 * 1024 * 1024  # 200 MiB upload cap
 BACKUPS_KEEP = 5
+
+#: Default scheduled auto-backup settings (Phase A item 4; Hiddify's
+#: 6-hourly cadence is the model). Overridable in Settings → Backup
+#: (``auto_backup_hours`` / ``auto_backup_keep``).
+AUTO_BACKUP_DEFAULT_HOURS = 6
+AUTO_BACKUP_DEFAULT_KEEP = 7
+#: Prefix for scheduled-backup ZIPs in the backups dir (kept
+#: separate from the pre-restore ``panel.db.*.bak`` snapshots so
+#: each retention rule prunes only its own files).
+AUTO_BACKUP_PREFIX = "auto-"
+
+#: Settings that identify THIS machine/installation (Phase A item 4,
+#: 3x-ui's "safe import"). A restore from another install's backup
+#: replaces the whole DB — including these rows — unless the admin
+#: keeps the "preserve machine identity" box checked (the default),
+#: in which case the current values are re-applied after the swap:
+#: the panel's own domain/host, its Telegram bot identity (token,
+#: chat, transport, topic, event selection) and the webhook secret
+#: (Telegram posts to the URL carrying it — importing another
+#: install's secret would silently break the webhook). Everything
+#: else (users, inbounds, keys, traffic) comes from the backup.
+#: The panel port and web path are NOT in this list: they live in
+#: the environment (panel.env), not the DB, so a restore can never
+#: change them.
+IDENTITY_SETTING_KEYS = (
+    "domain",
+    "subscription_host",
+    "telegram_bot_token",
+    "telegram_chat_id",
+    "telegram_transport",
+    "telegram_topic_id",
+    "telegram_events",
+    "telegram_webhook_secret",
+)
 
 REQUIRED_TABLES = (
     "admins",
@@ -143,6 +178,107 @@ def create_backup_zip(db_path: str | Path) -> bytes:
                 "meta.json", json.dumps(meta, indent=2, ensure_ascii=False)
             )
         return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Scheduled auto-backup (Phase A item 4)
+# ---------------------------------------------------------------------------
+
+
+def auto_backup_due(
+    settings: dict, now: Optional[datetime] = None
+) -> bool:
+    """True when a scheduled backup is due.
+
+    ``auto_backup_hours`` (0 = off, default 6) sets the cadence;
+    ``auto_backup_last_run`` (ISO timestamp) is the last completed
+    run. A missing/unparseable stamp means "never ran" — due now.
+    Pure function over the settings dict (no DB access), so the
+    loop and the tests share the rule.
+    """
+    try:
+        hours = int(
+            (settings.get("auto_backup_hours") or "").strip()
+            or str(AUTO_BACKUP_DEFAULT_HOURS)
+        )
+    except (ValueError, TypeError, AttributeError):
+        hours = AUTO_BACKUP_DEFAULT_HOURS
+    if hours <= 0:
+        return False
+    now = now or datetime.now(timezone.utc)
+    raw = (settings.get("auto_backup_last_run") or "").strip()
+    if not raw:
+        return True
+    try:
+        last = datetime.fromisoformat(raw)
+    except ValueError:
+        return True
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    return (now - last) >= timedelta(hours=hours)
+
+
+def run_scheduled_backup(
+    db_path: str | Path,
+    backups_dir: str | Path,
+    keep: int = AUTO_BACKUP_DEFAULT_KEEP,
+) -> tuple[Path, bytes]:
+    """Take one scheduled backup: a ZIP (SQLite backup API snapshot,
+    never a file copy of a live WAL DB) written to ``backups_dir``
+    as ``auto-<UTC stamp>.zip``, pruning older auto-backups to
+    ``keep`` (pre-restore ``panel.db.*.bak`` files are untouched —
+    they have their own retention).
+
+    Returns ``(path, zip_bytes)`` — the bytes go to Telegram delivery
+    when enabled, so the file is not re-read. ``keep <= 0`` keeps
+    everything (Hiddify's "0 = keep all").
+    """
+    data = create_backup_zip(db_path)
+    backups_dir = Path(backups_dir)
+    backups_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+    dest = backups_dir / f"{AUTO_BACKUP_PREFIX}{stamp}.zip"
+    dest.write_bytes(data)
+    if keep > 0:
+        existing = sorted(backups_dir.glob(f"{AUTO_BACKUP_PREFIX}*.zip"))
+        for old in existing[: max(0, len(existing) - keep)]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+    return dest, data
+
+
+def snapshot_identity_settings(settings: dict) -> dict[str, str]:
+    """The machine-identity rows to preserve across a restore
+    (only keys actually present — a missing key stays missing)."""
+    return {
+        key: str(settings[key])
+        for key in IDENTITY_SETTING_KEYS
+        if settings.get(key) not in (None, "")
+    }
+
+
+def reapply_identity_settings(db, snapshot: dict[str, str]) -> None:
+    """Re-apply a snapshot taken by :func:`snapshot_identity_settings`
+    to a (restored) DB. Keys absent from the snapshot are deleted
+    from the restored DB — a restore must not resurrect another
+    install's bot token or webhook secret by omission.
+
+    Takes a SQLAlchemy session; the caller commits.
+    """
+    from app.models import Setting
+
+    for key in IDENTITY_SETTING_KEYS:
+        row = db.query(Setting).filter(Setting.key == key).first()
+        if key in snapshot:
+            if row is None:
+                db.add(Setting(key=key, value=snapshot[key]))
+            else:
+                row.value = snapshot[key]
+        elif row is not None:
+            db.delete(row)
+    db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -358,10 +494,18 @@ __all__ = [
     "SCHEMA_VERSION",
     "BACKUP_MAX_BYTES",
     "BACKUPS_KEEP",
+    "AUTO_BACKUP_DEFAULT_HOURS",
+    "AUTO_BACKUP_DEFAULT_KEEP",
+    "AUTO_BACKUP_PREFIX",
+    "IDENTITY_SETTING_KEYS",
     "REQUIRED_TABLES",
     "BackupError",
     "BackupInfo",
     "create_backup_zip",
+    "auto_backup_due",
+    "run_scheduled_backup",
+    "snapshot_identity_settings",
+    "reapply_identity_settings",
     "validate_backup_bytes",
     "backup_current_db",
     "swap_db_file",

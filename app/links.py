@@ -43,6 +43,9 @@ __all__ = [
     "parse_vmess_link",
     "parse_trojan_link",
     "parse_ss_link",
+    "parse_vpn_link",
+    "parse_share_link",
+    "redact_parsed_link",
     "make_qr_png",
 ]
 
@@ -827,6 +830,137 @@ def _split_host_port(hostport: str, link: str) -> tuple[str, int]:
     if not host:
         raise ValueError(f"link is missing a host: {link!r}")
     return host, port
+
+
+def _parse_generic_url_link(link: str, scheme: str) -> dict:
+    """Parse a ``scheme://userinfo@host:port?query#name`` link.
+
+    Covers the URL-shaped protocols with no dedicated parser
+    (``hysteria2``/``hy2``, ``tuic``, ``anytls``, ``naive``): the
+    shape is the same for all of them (userinfo, host, port, query
+    params, fragment remark), so one parser serves them all. Returns
+    a dict with ``protocol``, ``userinfo`` (unquoted, credentials
+    intact — the caller redacts before display), ``host``,
+    ``port`` (int), ``name`` and ``params`` (single-value query
+    dict). Raises :class:`ValueError` on a malformed link.
+    """
+    if not isinstance(link, str) or not link.startswith(scheme + "://"):
+        raise ValueError(f"not a {scheme}:// link: {link!r}")
+    parsed = urlparse(link)
+    if not parsed.username and not parsed.password:
+        raise ValueError(f"{scheme} link is missing credentials: {link!r}")
+    host, port = _parse_host_port(parsed, scheme)
+    query = parse_qs(parsed.query)
+    userinfo = unquote(parsed.username or "")
+    if parsed.password:
+        userinfo += ":" + unquote(parsed.password)
+    return {
+        "protocol": scheme,
+        "userinfo": userinfo,
+        "host": host,
+        "port": port,
+        "name": unquote(parsed.fragment or ""),
+        "params": {k: v[0] for k, v in query.items() if v},
+    }
+
+
+def parse_vpn_link(link: str) -> dict:
+    """Parse a ``vpn://`` AmneziaWG link (base64url of a client
+    ``.conf``) back into its sections.
+
+    Returns a dict with ``protocol`` (``"amneziawg"``), ``address``,
+    ``endpoint`` (``host:port``) and ``has_peer`` (the ``[Peer]``
+    section exists with a public key). Raises :class:`ValueError`
+    when the payload is not base64 or not a ``[Interface]`` config.
+    Private keys are NOT returned — the tester shows structure, not
+    secrets.
+    """
+    if not isinstance(link, str) or not link.startswith("vpn://"):
+        raise ValueError(f"not a vpn:// link: {link!r}")
+    payload = link[len("vpn://"):].strip()
+    if not payload:
+        raise ValueError("vpn link has an empty payload")
+    try:
+        conf = _b64decode_padded(payload).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        raise ValueError("vpn link payload is not valid base64") from None
+    if "[Interface]" not in conf:
+        raise ValueError("vpn link payload is not a WireGuard config")
+    address = ""
+    endpoint = ""
+    has_peer = "[Peer]" in conf and "PublicKey" in conf
+    for line in conf.splitlines():
+        line = line.strip()
+        if line.startswith("Address") and "=" in line:
+            address = line.split("=", 1)[1].strip()
+        elif line.startswith("Endpoint") and "=" in line:
+            endpoint = line.split("=", 1)[1].strip()
+    return {
+        "protocol": "amneziawg",
+        "address": address,
+        "endpoint": endpoint,
+        "has_peer": has_peer,
+    }
+
+
+#: Scheme -> dedicated parser (the config tester dispatches here).
+_SHARE_LINK_PARSERS = {
+    "vless": parse_vless_link,
+    "vmess": parse_vmess_link,
+    "trojan": parse_trojan_link,
+    "ss": parse_ss_link,
+    "vpn": parse_vpn_link,
+}
+
+#: Schemes handled by the generic URL parser (same shape, no
+#: dedicated parser needed). ``hy2`` is Hysteria2's short scheme.
+_GENERIC_URL_SCHEMES = ("hysteria2", "hy2", "tuic", "anytls", "naive")
+
+
+def parse_share_link(link: str) -> dict:
+    """Parse any share link the panel can emit, by scheme.
+
+    Returns the parsed dict from the matching parser, with a
+    ``"protocol"`` key added (the dedicated parsers do not set one).
+    Raises :class:`ValueError` for an unknown scheme or a malformed
+    link. Used by the in-panel config tester (Tools page) — the
+    tester redacts credential fields before display.
+    """
+    if not isinstance(link, str) or "://" not in link:
+        raise ValueError(f"not a share link: {link!r}")
+    scheme = link.split("://", 1)[0].strip().lower()
+    if scheme in _SHARE_LINK_PARSERS:
+        parsed = _SHARE_LINK_PARSERS[scheme](link)
+        parsed["protocol"] = "amneziawg" if scheme == "vpn" else scheme
+        return parsed
+    if scheme == "naive+https":
+        # Naive links carry their TLS in the scheme
+        # (``naive+https://...``) — same URL shape otherwise.
+        parsed = _parse_generic_url_link(link, scheme)
+        parsed["protocol"] = "naive"
+        return parsed
+    if scheme in _GENERIC_URL_SCHEMES:
+        parsed = _parse_generic_url_link(link, scheme)
+        if scheme == "hy2":
+            parsed["protocol"] = "hysteria2"
+        return parsed
+    raise ValueError(f"unsupported share-link scheme: {scheme!r}")
+
+
+def redact_parsed_link(parsed: dict) -> dict:
+    """A display copy of a parsed link with credentials masked.
+
+    ``password``, ``uuid`` and ``userinfo`` values are replaced by
+    ``"••••"`` (present) or ``""`` (absent); everything else passes
+    through unchanged. The config tester shows the redacted form —
+    a pasted link's secrets must not sit on screen (or in a
+    screenshot) longer than the paste itself.
+    """
+    redacted = dict(parsed)
+    for key in ("password", "uuid", "userinfo"):
+        if key in redacted and redacted[key]:
+            redacted[key] = "••••"
+    return redacted
 
 
 # ---------------------------------------------------------------------------

@@ -19,6 +19,9 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
+import math
+from datetime import datetime, timezone
 
 __all__ = [
     "choose_format",
@@ -27,6 +30,14 @@ __all__ = [
     "outbound_for_client",
     "subscription_userinfo",
     "decode_v2rayng_feed",
+    "DEFAULT_REMARK_TEMPLATE",
+    "format_data_left",
+    "days_left",
+    "expand_remark_variables",
+    "placeholder_remark",
+    "placeholder_feed_links",
+    "placeholder_singbox_outbounds",
+    "is_browser_user_agent",
 ]
 
 # Canonical format names returned by choose_format().
@@ -41,6 +52,180 @@ _SINGBOX_ALIASES = {"singbox", "sing-box"}
 # naming a sing-box client wins even if it also mentions something else).
 _SINGBOX_UA_MARKERS = ("sing-box", "singbox", "sfa", "hiddify")
 _V2RAYNG_UA_MARKERS = ("v2rayng", "v2rayn", "nekobox", "clash")
+
+# Extra client markers for the browser check below: a UA naming any
+# known VPN client is a client even if it also says "Mozilla" (some
+# clients send a browser-like UA).
+_CLIENT_UA_MARKERS = _SINGBOX_UA_MARKERS + _V2RAYNG_UA_MARKERS + (
+    "mihomo", "stash", "shadowrocket", "surge", "quantumult",
+    "v2rayu", "nekoray", "v2ray", "trojan", "hiddify",
+)
+
+
+def is_browser_user_agent(user_agent: str | None) -> bool:
+    """True when ``user_agent`` looks like a web browser, not a VPN client.
+
+    A browser UA contains "Mozilla" and names no known VPN client.
+    An empty or unknown UA is NOT a browser — subscription clients
+    that send no UA must keep getting the raw feed (the previous
+    default), and only a real browser gets the copy-only HTML page.
+    """
+    ua = (user_agent or "").lower()
+    if "mozilla" not in ua:
+        return False
+    return not any(marker in ua for marker in _CLIENT_UA_MARKERS)
+
+
+# ---------------------------------------------------------------------------
+# Remark template variables (Phase A item 2)
+# ---------------------------------------------------------------------------
+
+#: Default remark template: the same ``user-inbound`` shape the
+#: sing-box feed tags already use. The admin can change it in
+#: Settings → General (``sub_remark_template``).
+DEFAULT_REMARK_TEMPLATE = "{USER}-{INBOUND}"
+
+#: Variables expandable in a remark template (Marzban/PasarGuard
+#: "info host" convention).
+REMARK_VARIABLES = ("{USER}", "{INBOUND}", "{DATA_LEFT}", "{DAYS_LEFT}")
+
+
+def _format_bytes(value: int) -> str:
+    """Human size: ``"512 MB"``, ``"3.2 GB"`` (one decimal, trailing
+    ``.0`` stripped), ``"0 B"`` for zero/negative."""
+    if value <= 0:
+        return "0 B"
+    units = ("B", "KB", "MB", "GB", "TB")
+    index = min(int(math.log(value, 1024)), len(units) - 1)
+    scaled = value / (1024 ** index)
+    text = f"{scaled:.1f}".rstrip("0").rstrip(".")
+    return f"{text} {units[index]}"
+
+
+def format_data_left(used_bytes: int, limit_bytes: int | None) -> str:
+    """Remaining quota for a remark: ``"3.2 GB"``, ``"0 B"`` when
+    exhausted, ``"∞"`` when unlimited."""
+    if limit_bytes is None:
+        return "∞"
+    return _format_bytes(max(0, int(limit_bytes) - int(used_bytes or 0)))
+
+
+def days_left(
+    expires_at: datetime | None, now: datetime | None = None
+) -> str:
+    """Whole days until ``expires_at``: ``"12"``, ``"0"`` when the
+    expiry is today or past, ``"∞"`` when the user never expires."""
+    if expires_at is None:
+        return "∞"
+    now = now or datetime.now(timezone.utc)
+    exp = expires_at
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    remaining = (exp - now).total_seconds()
+    if remaining <= 0:
+        return "0"
+    return str(int(remaining // 86400))
+
+
+def expand_remark_variables(
+    template: str | None,
+    user: object,
+    inbound_tag: str,
+    now: datetime | None = None,
+) -> str:
+    """Expand a remark template for one (user, inbound) pair.
+
+    ``{USER}`` is the user name, ``{INBOUND}`` the inbound tag,
+    ``{DATA_LEFT}`` the remaining quota (``format_data_left``),
+    ``{DAYS_LEFT}`` the days until expiry (``days_left``). A blank
+    template falls back to :data:`DEFAULT_REMARK_TEMPLATE` (an empty
+    remark would be worse than the default); unknown ``{...}``
+    spellings are left untouched so a typo is visible instead of
+    silently swallowed. ``user`` is duck-typed (``name``,
+    ``traffic_used_bytes``, ``traffic_limit_bytes``, ``expires_at``)
+    so the function stays pure and testable without the ORM.
+    """
+    template = (template or "").strip() or DEFAULT_REMARK_TEMPLATE
+    values = {
+        "{USER}": str(getattr(user, "name", "") or ""),
+        "{INBOUND}": str(inbound_tag or ""),
+        "{DATA_LEFT}": format_data_left(
+            getattr(user, "traffic_used_bytes", 0) or 0,
+            getattr(user, "traffic_limit_bytes", None),
+        ),
+        "{DAYS_LEFT}": days_left(
+            getattr(user, "expires_at", None), now=now
+        ),
+    }
+    out = template
+    for variable, value in values.items():
+        out = out.replace(variable, value)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Placeholder feeds for unusable users (Phase A item 2)
+# ---------------------------------------------------------------------------
+
+#: Remark text per unusable state (Marzban/Remnawave convention: the
+#: client shows a visible entry instead of a silently empty feed).
+#: The entry points at 127.0.0.1:1 — it can never connect, which is
+#: honest: the account is dead, and the remark says why.
+PLACEHOLDER_REMARKS = {
+    "expired": "⏰ Expired — sparky-manager",
+    "limited": "📊 Limit reached — sparky-manager",
+    "disabled": "🚫 Disabled — sparky-manager",
+}
+
+_PLACEHOLDER_UUID = "00000000-0000-0000-0000-000000000000"
+
+
+def placeholder_remark(state: str) -> str:
+    """The placeholder remark for an unusable state (unknown states
+    fall back to the disabled text — never an empty remark)."""
+    return PLACEHOLDER_REMARKS.get(
+        (state or "").strip().lower(), PLACEHOLDER_REMARKS["disabled"]
+    )
+
+
+def placeholder_feed_links(state: str) -> list[str]:
+    """A one-link v2rayNG feed for an unusable user: a VMess link
+    whose remark names the state, pointing at 127.0.0.1:1."""
+    payload = {
+        "v": "2",
+        "ps": placeholder_remark(state),
+        "add": "127.0.0.1",
+        "port": "1",
+        "id": _PLACEHOLDER_UUID,
+        "aid": 0,
+        "scy": "auto",
+        "net": "tcp",
+        "type": "none",
+        "host": "",
+        "path": "",
+        "tls": "",
+        "sni": "",
+    }
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        .encode("utf-8")
+    ).decode("ascii")
+    return [f"vmess://{encoded}"]
+
+
+def placeholder_singbox_outbounds(state: str) -> list[dict]:
+    """A one-outbound sing-box feed for an unusable user: a SOCKS
+    outbound tagged with the state, pointing at 127.0.0.1:1."""
+    return [
+        {
+            "type": "socks",
+            "tag": placeholder_remark(state),
+            "server": "127.0.0.1",
+            "server_port": 1,
+        }
+    ]
 
 
 # ---------------------------------------------------------------------------
