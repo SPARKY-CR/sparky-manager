@@ -62,16 +62,16 @@
 <div class="card">
   {% if lines %}
   <div class="table-wrap">
-    <table>
+    <table class="table-cards">
       <thead>
         <tr><th>{{ t.log_time }}</th><th>{{ t.log_filter_level }}</th><th>{{ t.log_message }}</th></tr>
       </thead>
       <tbody>
         {% for line in lines %}
         <tr>
-          <td><span class="num" dir="ltr">{{ line.ts }}</span></td>
-          <td><span class="badge {{ 'badge-ok' if line.level == 'INFO' else 'badge-warn' if line.level == 'WARNING' else 'badge-err' if line.level in ('ERROR', 'CRITICAL') else 'badge-off' }}">{{ line.level }}</span></td>
-          <td><pre class="log-line" dir="ltr">{{ line.message }}</pre></td>
+          <td data-label="{{ t.log_time }}"><span class="num" dir="ltr">{{ line.ts }}</span></td>
+          <td data-label="{{ t.log_filter_level }}"><span class="badge {{ 'badge-ok' if line.level == 'INFO' else 'badge-warn' if line.level == 'WARNING' else 'badge-err' if line.level in ('ERROR', 'CRITICAL') else 'badge-off' }}">{{ line.level }}</span></td>
+          <td data-label="{{ t.log_message }}"><pre class="log-line" dir="ltr">{{ line.message }}</pre></td>
         </tr>
         {% endfor %}
       </tbody>

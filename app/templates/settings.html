@@ -5,212 +5,289 @@
   <h1>{{ t.settings }}</h1>
 </div>
 
-<div class="card card-narrow">
-  <form method="post" action="{{ base_path }}/settings">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label>
-      {{ t.domain }}
-      <input type="text" name="domain" value="{{ settings.get('domain', '') }}" dir="ltr">
-    </label>
-    <label>
-      {{ t.subscription_host }}
-      <input type="text" name="subscription_host" value="{{ settings.get('subscription_host', '') }}" dir="ltr">
-    </label>
-    <label>
-      {{ t.reality_sni }}
-      <input type="text" name="reality_sni" value="{{ settings.get('reality_sni', 'www.microsoft.com') }}" dir="ltr">
-    </label>
-    <label>
-      {{ t.log_level }}
-      <select name="log_level" dir="ltr">
-        {% for lv in ["DEBUG", "INFO", "WARNING", "ERROR"] %}
-        <option value="{{ lv }}"{% if settings.get('log_level', 'INFO') == lv %} selected{% endif %}>{{ lv }}</option>
-        {% endfor %}
-      </select>
-      <span class="muted">{{ t.log_level_hint }}</span>
-    </label>
-    <h2>{{ t.telegram_notifications }}</h2>
-    <label>
-      {{ t.telegram_bot_token }}
-      {% if telegram_token_set %}<span class="badge badge-ok">{{ t.telegram_configured }}</span>{% endif %}
-      <input type="password" name="telegram_bot_token" value="" dir="ltr" autocomplete="off">
-      <span class="muted">{{ t.telegram_bot_token_hint }}</span>
-    </label>
-    <label>
-      {{ t.telegram_chat_id }}
-      <input type="text" name="telegram_chat_id" value="{{ settings.get('telegram_chat_id', '') }}" dir="ltr">
-      <span class="muted">{{ t.telegram_chat_id_hint }}</span>
-    </label>
-    <label>
-      {{ t.telegram_transport }}
-      <select name="telegram_transport" dir="ltr">
-        <option value="webhook"{% if settings.get('telegram_transport', telegram_transport_default) == 'webhook' %} selected{% endif %}>{{ t.telegram_transport_webhook }}</option>
-        <option value="polling"{% if settings.get('telegram_transport', telegram_transport_default) == 'polling' %} selected{% endif %}>{{ t.telegram_transport_polling }}</option>
-      </select>
-      <span class="muted">{{ t.telegram_transport_hint }}</span>
-    </label>
-    <div class="form-actions">
-      <button type="submit" class="btn btn-primary">{{ t.save }}</button>
-    </div>
-  </form>
-  {% if telegram_configured %}
-  <form method="post" action="{{ base_path }}/settings/telegram-test">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <div class="form-actions">
-      <button type="submit" class="btn">{{ t.telegram_test }}</button>
-    </div>
-  </form>
-  <h2>{{ t.telegram_diag }}</h2>
-  <dl class="kv">
-    <dt>{{ t.telegram_diag_mode }}</dt>
-    <dd dir="ltr">{% if settings.get('telegram_transport', telegram_transport_default) == 'polling' %}{{ t.telegram_transport_polling }}{% else %}{{ t.telegram_transport_webhook }}{% endif %}</dd>
-    <dt>{{ t.telegram_diag_bot }}</dt>
-    <dd dir="ltr">{% if telegram_bot_identity %}{% if telegram_bot_identity.get('username') %}@{{ telegram_bot_identity.get('username') }}{% endif %}{% if telegram_bot_identity.get('first_name') %} ({{ telegram_bot_identity.get('first_name') }}){% endif %}{% if telegram_bot_identity.get('id') is not none %} — {{ telegram_bot_identity.get('id') }}{% endif %}{% else %}{{ t.telegram_diag_identity_unknown }}{% endif %}</dd>
-    <dt>{{ t.telegram_diag_chat }}</dt>
-    <dd dir="ltr">{{ settings.get('telegram_chat_id', '') }}</dd>
-    <dt>{{ t.telegram_diag_commands_registered }}</dt>
-    <dd dir="ltr">{{ telegram_commands_registered_at or t.telegram_diag_never }}</dd>
-    {% if settings.get('telegram_transport', telegram_transport_default) == 'polling' %}
-    <dt>{{ t.telegram_diag_polling_last_poll }}</dt>
-    <dd dir="ltr">{{ telegram_polling_status.last_poll or t.telegram_diag_never }}</dd>
-    <dt>{{ t.telegram_diag_polling_last_update }}</dt>
-    <dd dir="ltr">{{ telegram_polling_status.last_update or t.telegram_diag_never }}</dd>
-    <dt>{{ t.telegram_diag_polling_last_error }}</dt>
-    <dd dir="ltr">{{ telegram_polling_status.last_error or '—' }}</dd>
-    <dt>{{ t.telegram_diag_polling_offset }}</dt>
-    <dd dir="ltr">{{ telegram_polling_status.offset or '—' }}</dd>
-    {% endif %}
-  </dl>
-  <form method="post" action="{{ base_path }}/settings/telegram-commands">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <div class="form-actions">
-      <button type="submit" class="btn">{{ t.telegram_commands_register }}</button>
-    </div>
-  </form>
-  <form method="post" action="{{ base_path }}/settings/telegram-identity">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <div class="form-actions">
-      <button type="submit" class="btn">{{ t.telegram_identity_refresh }}</button>
-    </div>
-  </form>
-  <h2>{{ t.telegram_webhook }}</h2>
-  <p class="muted">{{ t.telegram_webhook_hint }}</p>
-  {% if telegram_webhook_url_display %}
-  <dl class="kv">
-    <dt>{{ t.telegram_webhook_url }}</dt>
-    <dd dir="ltr">{{ telegram_webhook_url_display }}</dd>
-    {% if telegram_webhook_registered_at %}
-    <dt>{{ t.telegram_webhook_registered_at }}</dt>
-    <dd dir="ltr">{{ telegram_webhook_registered_at }}</dd>
-    {% endif %}
-    {% if telegram_webhook_info %}
-    <dt>{{ t.telegram_webhook_pending }}</dt>
-    <dd dir="ltr">{{ telegram_webhook_info.get('pending_update_count', '—') }}</dd>
-    {% if telegram_webhook_info.get('last_error_message') %}
-    <dt>{{ t.telegram_webhook_last_error }}</dt>
-    <dd>{{ telegram_webhook_info.get('last_error_message') }}</dd>
-    {% endif %}
-    {% endif %}
-  </dl>
-  {% else %}
-  <p class="muted">{{ t.telegram_webhook_not_registered }}</p>
-  {% endif %}
-  <form method="post" action="{{ base_path }}/settings/telegram-webhook">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <div class="form-actions">
-      <button type="submit" class="btn btn-primary">{{ t.telegram_webhook_register }}</button>
-    </div>
-  </form>
-  <form method="post" action="{{ base_path }}/settings/telegram-webhook-status">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <div class="form-actions">
-      <button type="submit" class="btn">{{ t.telegram_webhook_refresh }}</button>
-    </div>
-  </form>
-  {% endif %}
-</div>
+{# Tabbed settings (Phase 4). The tabs are real links (?section=…) so
+   they work without JS (the server renders the active panel); with JS
+   app.js switches panels in place. Every form carries its section as
+   a hidden field, so a POST round-trip returns to the same tab. Each
+   tab's form posts only its own fields — save_settings updates only
+   the fields present in the form (partial updates). #}
+<div class="tabs" data-active-section="{{ active_section }}">
+  <nav class="tab-bar" role="tablist" aria-label="{{ t.settings }}">
+    <a class="tab-link{{ ' active' if active_section == 'general' }}" href="{{ base_path }}/settings?section=general" data-section="general" role="tab" aria-selected="{{ 'true' if active_section == 'general' else 'false' }}">{{ t.settings_general }}</a>
+    <a class="tab-link{{ ' active' if active_section == 'telegram' }}" href="{{ base_path }}/settings?section=telegram" data-section="telegram" role="tab" aria-selected="{{ 'true' if active_section == 'telegram' else 'false' }}">{{ t.settings_telegram }}</a>
+    <a class="tab-link{{ ' active' if active_section == 'security' }}" href="{{ base_path }}/settings?section=security" data-section="security" role="tab" aria-selected="{{ 'true' if active_section == 'security' else 'false' }}">{{ t.settings_security }}</a>
+    <a class="tab-link{{ ' active' if active_section == 'backup' }}" href="{{ base_path }}/settings?section=backup" data-section="backup" role="tab" aria-selected="{{ 'true' if active_section == 'backup' else 'false' }}">{{ t.settings_backup }}</a>
+    <a class="tab-link{{ ' active' if active_section == 'services' }}" href="{{ base_path }}/settings?section=services" data-section="services" role="tab" aria-selected="{{ 'true' if active_section == 'services' else 'false' }}">{{ t.settings_services }}</a>
+    <a class="tab-link{{ ' active' if active_section == 'advanced' }}" href="{{ base_path }}/settings?section=advanced" data-section="advanced" role="tab" aria-selected="{{ 'true' if active_section == 'advanced' else 'false' }}">{{ t.settings_advanced }}</a>
+  </nav>
 
-<div class="card card-narrow">
-  <h2>{{ t.change_password }}</h2>
-  <form method="post" action="{{ base_path }}/settings/password">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label>
-      {{ t.current_password }}
-      <input type="password" name="current_password" value="" dir="ltr" autocomplete="current-password">
-    </label>
-    <label>
-      {{ t.new_password }}
-      <input type="password" name="new_password" value="" dir="ltr" autocomplete="new-password">
-    </label>
-    <label>
-      {{ t.confirm_password }}
-      <input type="password" name="confirm_password" value="" dir="ltr" autocomplete="new-password">
-    </label>
-    <p class="field-hint">{{ t.password_change_hint }}</p>
-    <div class="form-actions">
-      <button type="submit" class="btn btn-primary">{{ t.change_password }}</button>
+  {# ---- General ---- #}
+  <section class="tab-panel" data-panel="general"{% if active_section != 'general' %} hidden{% endif %}>
+    <div class="card card-narrow">
+      <h2>{{ t.settings_general }}</h2>
+      <p class="field-hint">{{ t.settings_general_desc }}</p>
+      <form method="post" action="{{ base_path }}/settings">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="section" value="general">
+        <label>
+          {{ t.domain }}
+          <input type="text" name="domain" value="{{ settings.get('domain', '') }}" dir="ltr">
+          <span class="muted">{{ t.domain_hint }}</span>
+        </label>
+        <label>
+          {{ t.subscription_host }}
+          <input type="text" name="subscription_host" value="{{ settings.get('subscription_host', '') }}" dir="ltr">
+          <span class="muted">{{ t.subscription_host_hint }}</span>
+        </label>
+        <label>
+          {{ t.reality_sni }}
+          <input type="text" name="reality_sni" value="{{ settings.get('reality_sni', 'www.microsoft.com') }}" dir="ltr">
+          <span class="muted">{{ t.reality_sni_hint }}</span>
+        </label>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">{{ t.save }}</button>
+        </div>
+      </form>
     </div>
-  </form>
-</div>
+  </section>
 
-<div class="card card-narrow">
-  <h2>{{ t.backup_restore }}</h2>
-  <p class="muted">{{ t.backup_hint }}</p>
-  <p class="form-actions">
-    <a class="btn" href="{{ base_path }}/settings/backup">↓ {{ t.backup_download }}</a>
-  </p>
-  <form method="post" action="{{ base_path }}/settings/restore" enctype="multipart/form-data">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label>
-      {{ t.restore_file }}
-      <input type="file" name="backup_file" accept=".zip,.db" dir="ltr">
-    </label>
-    <label class="check-label">
-      <input type="checkbox" name="confirm_restore" value="yes">
-      <span>{{ t.restore_confirm }}</span>
-    </label>
-    <p class="field-hint">{{ t.restore_hint }}</p>
-    <div class="form-actions">
-      <button type="submit" class="btn btn-danger">{{ t.restore }}</button>
+  {# ---- Telegram ---- #}
+  <section class="tab-panel" data-panel="telegram"{% if active_section != 'telegram' %} hidden{% endif %}>
+    <div class="card card-narrow">
+      <h2>{{ t.settings_telegram }}</h2>
+      <p class="field-hint">{{ t.settings_telegram_desc }}</p>
+      <form method="post" action="{{ base_path }}/settings">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="section" value="telegram">
+        <label>
+          {{ t.telegram_bot_token }}
+          {% if telegram_token_set %}<span class="badge badge-ok">{{ t.telegram_configured }}</span>{% endif %}
+          <input type="password" name="telegram_bot_token" value="" dir="ltr" autocomplete="off">
+          <span class="muted">{{ t.telegram_bot_token_hint }}</span>
+        </label>
+        <label>
+          {{ t.telegram_chat_id }}
+          <input type="text" name="telegram_chat_id" value="{{ settings.get('telegram_chat_id', '') }}" dir="ltr">
+          <span class="muted">{{ t.telegram_chat_id_hint }}</span>
+        </label>
+        <label>
+          {{ t.telegram_transport }}
+          <select name="telegram_transport" dir="ltr">
+            <option value="webhook"{% if settings.get('telegram_transport', telegram_transport_default) == 'webhook' %} selected{% endif %}>{{ t.telegram_transport_webhook }}</option>
+            <option value="polling"{% if settings.get('telegram_transport', telegram_transport_default) == 'polling' %} selected{% endif %}>{{ t.telegram_transport_polling }}</option>
+          </select>
+          <span class="muted">{{ t.telegram_transport_hint }}</span>
+        </label>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">{{ t.save }}</button>
+        </div>
+      </form>
+      {% if telegram_configured %}
+      <form method="post" action="{{ base_path }}/settings/telegram-test">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="section" value="telegram">
+        <div class="form-actions">
+          <button type="submit" class="btn">{{ t.telegram_test }}</button>
+        </div>
+      </form>
+      <h3>{{ t.telegram_diag }}</h3>
+      <dl class="kv">
+        <dt>{{ t.telegram_diag_mode }}</dt>
+        <dd dir="ltr">{% if settings.get('telegram_transport', telegram_transport_default) == 'polling' %}{{ t.telegram_transport_polling }}{% else %}{{ t.telegram_transport_webhook }}{% endif %}</dd>
+        <dt>{{ t.telegram_diag_bot }}</dt>
+        <dd dir="ltr">{% if telegram_bot_identity %}{% if telegram_bot_identity.get('username') %}@{{ telegram_bot_identity.get('username') }}{% endif %}{% if telegram_bot_identity.get('first_name') %} ({{ telegram_bot_identity.get('first_name') }}){% endif %}{% if telegram_bot_identity.get('id') is not none %} — {{ telegram_bot_identity.get('id') }}{% endif %}{% else %}{{ t.telegram_diag_identity_unknown }}{% endif %}</dd>
+        <dt>{{ t.telegram_diag_chat }}</dt>
+        <dd dir="ltr">{{ settings.get('telegram_chat_id', '') }}</dd>
+        <dt>{{ t.telegram_diag_commands_registered }}</dt>
+        <dd dir="ltr">{{ telegram_commands_registered_at or t.telegram_diag_never }}</dd>
+        {% if settings.get('telegram_transport', telegram_transport_default) == 'polling' %}
+        <dt>{{ t.telegram_diag_polling_last_poll }}</dt>
+        <dd dir="ltr">{{ telegram_polling_status.last_poll or t.telegram_diag_never }}</dd>
+        <dt>{{ t.telegram_diag_polling_last_update }}</dt>
+        <dd dir="ltr">{{ telegram_polling_status.last_update or t.telegram_diag_never }}</dd>
+        <dt>{{ t.telegram_diag_polling_last_error }}</dt>
+        <dd dir="ltr">{{ telegram_polling_status.last_error or '—' }}</dd>
+        <dt>{{ t.telegram_diag_polling_offset }}</dt>
+        <dd dir="ltr">{{ telegram_polling_status.offset or '—' }}</dd>
+        {% endif %}
+      </dl>
+      <form method="post" action="{{ base_path }}/settings/telegram-commands">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="section" value="telegram">
+        <div class="form-actions">
+          <button type="submit" class="btn">{{ t.telegram_commands_register }}</button>
+        </div>
+      </form>
+      <form method="post" action="{{ base_path }}/settings/telegram-identity">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="section" value="telegram">
+        <div class="form-actions">
+          <button type="submit" class="btn">{{ t.telegram_identity_refresh }}</button>
+        </div>
+      </form>
+      <h3>{{ t.telegram_webhook }}</h3>
+      <p class="muted">{{ t.telegram_webhook_hint }}</p>
+      {% if telegram_webhook_url_display %}
+      <dl class="kv">
+        <dt>{{ t.telegram_webhook_url }}</dt>
+        <dd dir="ltr">{{ telegram_webhook_url_display }}</dd>
+        {% if telegram_webhook_registered_at %}
+        <dt>{{ t.telegram_webhook_registered_at }}</dt>
+        <dd dir="ltr">{{ telegram_webhook_registered_at }}</dd>
+        {% endif %}
+        {% if telegram_webhook_info %}
+        <dt>{{ t.telegram_webhook_pending }}</dt>
+        <dd dir="ltr">{{ telegram_webhook_info.get('pending_update_count', '—') }}</dd>
+        {% if telegram_webhook_info.get('last_error_message') %}
+        <dt>{{ t.telegram_webhook_last_error }}</dt>
+        <dd>{{ telegram_webhook_info.get('last_error_message') }}</dd>
+        {% endif %}
+        {% endif %}
+      </dl>
+      {% else %}
+      <p class="muted">{{ t.telegram_webhook_not_registered }}</p>
+      {% endif %}
+      <form method="post" action="{{ base_path }}/settings/telegram-webhook">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="section" value="telegram">
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">{{ t.telegram_webhook_register }}</button>
+        </div>
+      </form>
+      <form method="post" action="{{ base_path }}/settings/telegram-webhook-status">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="section" value="telegram">
+        <div class="form-actions">
+          <button type="submit" class="btn">{{ t.telegram_webhook_refresh }}</button>
+        </div>
+      </form>
+      {% endif %}
     </div>
-  </form>
-</div>
+  </section>
 
-<div class="card">
-  <h2>{{ t.server_status }}</h2>
-  {% if server_status %}
-  <dl class="kv">
-    <dt>{{ t.cpu_load }}</dt>
-    <dd dir="ltr">{% if server_status.load %}{{ "%.2f" | format(server_status.load[0]) }} / {{ "%.2f" | format(server_status.load[1]) }} / {{ "%.2f" | format(server_status.load[2]) }}{% else %}—{% endif %}</dd>
-    <dt>{{ t.memory }}</dt>
-    <dd dir="ltr">{% if server_status.memory %}{{ ((server_status.memory.total - server_status.memory.available) / 1073741824) | round(2) }} / {{ (server_status.memory.total / 1073741824) | round(2) }} GB{% else %}—{% endif %}</dd>
-    <dt>{{ t.disk }}</dt>
-    <dd dir="ltr">{% if server_status.disk %}{{ (server_status.disk.used / 1073741824) | round(2) }} / {{ (server_status.disk.total / 1073741824) | round(2) }} GB{% else %}—{% endif %}</dd>
-    <dt>{{ t.uptime }}</dt>
-    <dd dir="ltr">{{ server_status.uptime }}</dd>
-  </dl>
-  {% set service_names = {"xray": "Xray", "sing-box": "sing-box", "wireguard": "WireGuard", "amneziawg": "AmneziaWG", "openvpn": "OpenVPN", "openconnect": "OpenConnect", "ikev2": "IKEv2"} %}
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr><th>{{ t.service }}</th><th>{{ t.status }}</th></tr>
-      </thead>
-      <tbody>
-        {% for key, state in server_status.services.items() %}
-        <tr>
-          <td dir="ltr">{{ service_names.get(key, key) }}</td>
-          <td>
-            {% if state == "running" %}<span class="badge badge-ok">{{ t.service_running }}</span>
-            {% elif state == "stopped" %}<span class="badge badge-off">{{ t.service_stopped }}</span>
-            {% else %}<span class="badge badge-warn">{{ t.service_unknown }}</span>{% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}
-  <p class="muted">{{ t.service_unknown }}</p>
-  {% endif %}
+  {# ---- Security ---- #}
+  <section class="tab-panel" data-panel="security"{% if active_section != 'security' %} hidden{% endif %}>
+    <div class="card card-narrow">
+      <h2>{{ t.settings_security }}</h2>
+      <p class="field-hint">{{ t.settings_security_desc }}</p>
+      <h3>{{ t.change_password }}</h3>
+      <form method="post" action="{{ base_path }}/settings/password">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="section" value="security">
+        <label>
+          {{ t.current_password }}
+          <input type="password" name="current_password" value="" dir="ltr" autocomplete="current-password">
+        </label>
+        <label>
+          {{ t.new_password }}
+          <input type="password" name="new_password" value="" dir="ltr" autocomplete="new-password">
+        </label>
+        <label>
+          {{ t.confirm_password }}
+          <input type="password" name="confirm_password" value="" dir="ltr" autocomplete="new-password">
+        </label>
+        <p class="field-hint">{{ t.password_change_hint }}</p>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">{{ t.change_password }}</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  {# ---- Backup ---- #}
+  <section class="tab-panel" data-panel="backup"{% if active_section != 'backup' %} hidden{% endif %}>
+    <div class="card card-narrow">
+      <h2>{{ t.settings_backup }}</h2>
+      <p class="field-hint">{{ t.settings_backup_desc }}</p>
+      <h3>{{ t.backup_restore }}</h3>
+      <p class="muted">{{ t.backup_hint }}</p>
+      <p class="form-actions">
+        <a class="btn" href="{{ base_path }}/settings/backup">↓ {{ t.backup_download }}</a>
+      </p>
+      <form method="post" action="{{ base_path }}/settings/restore" enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="section" value="backup">
+        <label>
+          {{ t.restore_file }}
+          <input type="file" name="backup_file" accept=".zip,.db" dir="ltr">
+        </label>
+        <label class="check-label">
+          <input type="checkbox" name="confirm_restore" value="yes">
+          <span>{{ t.restore_confirm }}</span>
+        </label>
+        <p class="field-hint">{{ t.restore_hint }}</p>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-danger">{{ t.restore }}</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  {# ---- Services ---- #}
+  <section class="tab-panel" data-panel="services"{% if active_section != 'services' %} hidden{% endif %}>
+    <div class="card">
+      <h2>{{ t.settings_services }}</h2>
+      <p class="field-hint">{{ t.settings_services_desc }}</p>
+      <h3>{{ t.server_status }}</h3>
+      {% if server_status %}
+      <dl class="kv">
+        <dt>{{ t.cpu_load }}</dt>
+        <dd dir="ltr">{% if server_status.load %}{{ "%.2f" | format(server_status.load[0]) }} / {{ "%.2f" | format(server_status.load[1]) }} / {{ "%.2f" | format(server_status.load[2]) }}{% else %}—{% endif %}</dd>
+        <dt>{{ t.memory }}</dt>
+        <dd dir="ltr">{% if server_status.memory %}{{ ((server_status.memory.total - server_status.memory.available) / 1073741824) | round(2) }} / {{ (server_status.memory.total / 1073741824) | round(2) }} GB{% else %}—{% endif %}</dd>
+        <dt>{{ t.disk }}</dt>
+        <dd dir="ltr">{% if server_status.disk %}{{ (server_status.disk.used / 1073741824) | round(2) }} / {{ (server_status.disk.total / 1073741824) | round(2) }} GB{% else %}—{% endif %}</dd>
+        <dt>{{ t.uptime }}</dt>
+        <dd dir="ltr">{{ server_status.uptime }}</dd>
+      </dl>
+      {% set service_names = {"xray": "Xray", "sing-box": "sing-box", "wireguard": "WireGuard", "amneziawg": "AmneziaWG", "openvpn": "OpenVPN", "openconnect": "OpenConnect", "ikev2": "IKEv2"} %}
+      <div class="table-wrap">
+        <table class="table-cards">
+          <thead>
+            <tr><th>{{ t.service }}</th><th>{{ t.status }}</th></tr>
+          </thead>
+          <tbody>
+            {% for key, state in server_status.services.items() %}
+            <tr>
+              <td data-label="{{ t.service }}" dir="ltr">{{ service_names.get(key, key) }}</td>
+              <td data-label="{{ t.status }}">
+                {% if state == "running" %}<span class="badge badge-ok">{{ t.service_running }}</span>
+                {% elif state == "stopped" %}<span class="badge badge-off">{{ t.service_stopped }}</span>
+                {% else %}<span class="badge badge-warn">{{ t.service_unknown }}</span>{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="muted">{{ t.server_status_unavailable }}</p>
+      {% endif %}
+    </div>
+  </section>
+
+  {# ---- Advanced ---- #}
+  <section class="tab-panel" data-panel="advanced"{% if active_section != 'advanced' %} hidden{% endif %}>
+    <div class="card card-narrow">
+      <h2>{{ t.settings_advanced }}</h2>
+      <p class="field-hint">{{ t.settings_advanced_desc }}</p>
+      <form method="post" action="{{ base_path }}/settings">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="section" value="advanced">
+        <label>
+          {{ t.log_level }}
+          <select name="log_level" dir="ltr">
+            {% for lv in ["DEBUG", "INFO", "WARNING", "ERROR"] %}
+            <option value="{{ lv }}"{% if settings.get('log_level', 'INFO') == lv %} selected{% endif %}>{{ lv }}</option>
+            {% endfor %}
+          </select>
+          <span class="muted">{{ t.log_level_hint }}</span>
+        </label>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">{{ t.save }}</button>
+        </div>
+      </form>
+    </div>
+  </section>
 </div>
 {% endblock %}

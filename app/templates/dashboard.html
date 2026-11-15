@@ -19,7 +19,6 @@
   <div class="card metric-card">
     <div class="metric-top">
       <span class="metric-label">{{ t.active_users }}</span>
-      <span class="live-dot">LIVE</span>
     </div>
     <div class="metric-num" dir="ltr">{{ active_users }}</div>
     <div class="metric-foot"><span dir="ltr">{{ active_pct }}%</span></div>
@@ -39,10 +38,9 @@
   </div>
   <div class="card metric-card">
     <div class="metric-top">
-      <span class="metric-label">{{ t.online_now }}</span>
-      <span class="live-dot">LIVE</span>
+      <span class="metric-label">{{ t.active_today }}</span>
     </div>
-    <div class="metric-num" dir="ltr">{{ online }}</div>
+    <div class="metric-num" dir="ltr">{{ active_today }}</div>
     <div class="metric-foot"><span dir="ltr">{{ today.strftime('%Y-%m-%d') }}</span></div>
   </div>
 </div>
@@ -58,6 +56,44 @@
   {% if not traffic_14d %}<p class="muted">{{ t.no_traffic_data }}</p>{% endif %}
   {% else %}
   <p class="muted">{{ t.no_traffic_data }}</p>
+  {% endif %}
+</div>
+
+{# Server status (Phase 4): the same collector the settings page
+   uses. Unavailable data shows as "—" / "unknown", never as zero. #}
+<div class="card">
+  <div class="page-head">
+    <h2>{{ t.server_status }}</h2>
+    <span class="spacer"></span>
+    <a class="btn btn-small" href="{{ base_path }}/settings?section=services">{{ t.settings }}</a>
+  </div>
+  {% if server_status %}
+  <div class="status-grid">
+    <div class="status-item">
+      <span class="status-label">{{ t.cpu_load }}</span>
+      <span class="status-value" dir="ltr">{% if server_status.load %}{{ "%.2f" | format(server_status.load[0]) }} / {{ "%.2f" | format(server_status.load[1]) }} / {{ "%.2f" | format(server_status.load[2]) }}{% else %}—{% endif %}</span>
+    </div>
+    <div class="status-item">
+      <span class="status-label">{{ t.memory }}</span>
+      <span class="status-value" dir="ltr">{% if server_status.memory %}{{ ((server_status.memory.total - server_status.memory.available) / 1073741824) | round(2) }} / {{ (server_status.memory.total / 1073741824) | round(2) }} GB{% else %}—{% endif %}</span>
+    </div>
+    <div class="status-item">
+      <span class="status-label">{{ t.disk }}</span>
+      <span class="status-value" dir="ltr">{% if server_status.disk %}{{ (server_status.disk.used / 1073741824) | round(2) }} / {{ (server_status.disk.total / 1073741824) | round(2) }} GB{% else %}—{% endif %}</span>
+    </div>
+    <div class="status-item">
+      <span class="status-label">{{ t.uptime }}</span>
+      <span class="status-value" dir="ltr">{{ server_status.uptime or '—' }}</span>
+    </div>
+  </div>
+  {% set service_names = {"xray": "Xray", "sing-box": "sing-box", "wireguard": "WireGuard", "amneziawg": "AmneziaWG", "openvpn": "OpenVPN", "openconnect": "OpenConnect", "ikev2": "IKEv2"} %}
+  <div class="service-badges">
+    {% for key, state in server_status.services.items() %}
+    <span class="service-badge" dir="ltr">{{ service_names.get(key, key) }} {% if state == "running" %}<span class="badge badge-ok">{{ t.service_running }}</span>{% elif state == "stopped" %}<span class="badge badge-off">{{ t.service_stopped }}</span>{% else %}<span class="badge badge-warn">{{ t.service_unknown }}</span>{% endif %}</span>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">{{ t.server_status_unavailable }}</p>
   {% endif %}
 </div>
 
@@ -159,18 +195,18 @@
   </div>
   {% if users %}
   <div class="table-wrap">
-    <table>
+    <table class="table-cards">
       <thead>
         <tr><th>{{ t.name }}</th><th>{{ t.status }}</th><th>{{ t.used }}</th><th>{{ t.expires }}</th><th>{{ t.actions }}</th></tr>
       </thead>
       <tbody>
         {% for u in users %}
         <tr>
-          <td><a href="{{ base_path }}/users/{{ u.id }}">{{ u.name }}</a></td>
-          <td><span class="badge {{ 'badge-ok' if u.enabled else 'badge-off' }}">{{ t.enabled if u.enabled else t.disabled }}</span></td>
-          <td><span class="num" dir="ltr">{{ (u.traffic_used_bytes / 1073741824) | round(2) }} GB</span></td>
-          <td>{{ u.expires_at.strftime('%Y-%m-%d') if u.expires_at else t.never }}</td>
-          <td><a class="btn btn-small" href="{{ base_path }}/users/{{ u.id }}">{{ t.details }}</a></td>
+          <td data-label="{{ t.name }}"><a href="{{ base_path }}/users/{{ u.id }}">{{ u.name }}</a></td>
+          <td data-label="{{ t.status }}"><span class="badge {{ 'badge-ok' if u.enabled else 'badge-off' }}">{{ t.enabled if u.enabled else t.disabled }}</span></td>
+          <td data-label="{{ t.used }}"><span class="num" dir="ltr">{{ (u.traffic_used_bytes / 1073741824) | round(2) }} GB</span></td>
+          <td data-label="{{ t.expires }}">{{ u.expires_at.strftime('%Y-%m-%d') if u.expires_at else t.never }}</td>
+          <td data-label="{{ t.actions }}"><a class="btn btn-small" href="{{ base_path }}/users/{{ u.id }}">{{ t.details }}</a></td>
         </tr>
         {% endfor %}
       </tbody>

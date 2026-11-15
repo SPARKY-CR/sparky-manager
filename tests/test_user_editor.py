@@ -946,6 +946,8 @@ def test_detail_page_shows_new_fields(authed_client, seeded, db):
     assert resp.status_code == 200
     assert f"/users/{alice.id}/edit" in resp.text  # Edit button
     assert "xtls-rprx-vision" in resp.text          # flow column
-    assert "<td>2</td>" in resp.text                # IP limit cell
+    # Phase 4: the cell carries a data-label for the card-table
+    # layout, so match the cell content, not the bare tag.
+    assert ">2</td>" in resp.text                   # IP limit cell
     assert t_for("fa")["unlimited"] in resp.text   # other clients: no limit
     assert f"/users/{alice.id}/freeze" in resp.text

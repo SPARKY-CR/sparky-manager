@@ -35,7 +35,7 @@
     <h2>{{ t.per_client_settings }}</h2>
     {% if rows %}
     <div class="table-wrap">
-      <table>
+      <table class="table-cards">
         <thead>
           <tr>
             <th>{{ t.inbounds }}</th><th>{{ t.flow }}</th><th>{{ t.ip_limit }}</th>
@@ -46,11 +46,11 @@
           {% for row in rows %}
           {% set c = row.client %}
           <tr>
-            <td>
+            <td data-label="{{ t.inbounds }}">
               {{ row.inbound.tag }}
               <span class="chip" dir="ltr">{{ row.inbound.protocol }}</span>
             </td>
-            <td>
+            <td data-label="{{ t.flow }}">
               {% if row.flow_options %}
               {# A single-option select (security=none) still renders: saving
                  it clears any stale Vision flow the client picked up when
@@ -64,16 +64,16 @@
               —
               {% endif %}
             </td>
-            <td>
+            <td data-label="{{ t.ip_limit }}">
               <input type="number" name="ip_limit_{{ c.id }}" min="0" max="1000" value="{{ values["ip_limit_" ~ c.id] }}" dir="ltr">
             </td>
-            <td>
+            <td data-label="{{ t.frozen }}">
               <label class="check-label">
                 <input type="checkbox" name="frozen_{{ c.id }}" {% if values["frozen_" ~ c.id] %}checked{% endif %}>
                 {{ t.freeze }}
               </label>
             </td>
-            <td>
+            <td data-label="{{ t.move_to }}">
               {% if row.move_targets %}
               <select name="move_{{ c.id }}" dir="ltr">
                 <option value="">{{ t.keep_inbound }}</option>

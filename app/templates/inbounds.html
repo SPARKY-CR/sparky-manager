@@ -34,25 +34,25 @@
 </div>
 
 <div class="cards">
-  <div class="card stat-card" style="border-inline-start: 2px solid #8b7cff">
+  <div class="card stat-card stat-accent-violet">
     <div>
       <div class="stat-num" dir="ltr">{{ inbounds | length }}</div>
       <div class="stat-label">{{ t.total_inbounds }}</div>
     </div>
   </div>
-  <div class="card stat-card" style="border-inline-start: 2px solid #4ae176">
+  <div class="card stat-card stat-accent-ok">
     <div>
       <div class="stat-num" dir="ltr">{{ enabled_inbounds }}</div>
       <div class="stat-label">{{ t.enabled }}</div>
     </div>
   </div>
-  <div class="card stat-card" style="border-inline-start: 2px solid #94a3b8">
+  <div class="card stat-card stat-accent-muted">
     <div>
       <div class="stat-num" dir="ltr">{{ (inbounds | length) - enabled_inbounds }}</div>
       <div class="stat-label">{{ t.disabled }}</div>
     </div>
   </div>
-  <div class="card stat-card" style="border-inline-start: 2px solid #38bdf8">
+  <div class="card stat-card stat-accent-sky">
     <div>
       <div class="stat-num" dir="ltr">{{ protocols | length }}</div>
       <div class="stat-label">{{ t.protocol }}</div>
@@ -66,11 +66,11 @@
     <span class="count-badge" dir="ltr">{{ inbounds | length }}</span>
   </div>
   <div class="table-wrap">
-    <table id="inbounds-table">
+    <table id="inbounds-table" class="table-cards">
       <thead>
         <tr>
           <th>{{ t.tag }}</th><th>{{ t.protocol }}</th><th>{{ t.core }}</th>
-          <th>{{ t.port }}</th><th>{{ t.status }}</th><th>{{ t.remark }}</th><th>{{ t.actions }}</th>
+          <th>{{ t.port }}</th><th>{{ t.status }}</th><th>{{ t.clients }}</th><th>{{ t.remark }}</th><th>{{ t.actions }}</th>
         </tr>
       </thead>
       <tbody>
@@ -81,13 +81,14 @@
         {% elif proto in ('wireguard', 'amneziawg') %}{% set chip = 'chip-wg' %}
         {% else %}{% set chip = 'chip-grey' %}{% endif %}
         <tr data-tag="{{ i.tag | lower }}" data-protocol="{{ i.protocol }}" data-status="{{ 'enabled' if i.enabled else 'disabled' }}">
-          <td><span class="chip" dir="ltr">{{ i.tag }}</span></td>
-          <td><span class="chip chip-proto {{ chip }}" dir="ltr">{{ i.protocol }}</span></td>
-          <td><span class="chip" dir="ltr">{{ i.core }}</span></td>
-          <td><span class="num" dir="ltr">{{ i.port }}</span></td>
-          <td><span class="badge {{ 'badge-ok' if i.enabled else 'badge-off' }}">{{ t.enabled if i.enabled else t.disabled }}</span></td>
-          <td>{{ i.remark or '' }}</td>
-          <td class="row-actions">
+          <td data-label="{{ t.tag }}"><span class="chip" dir="ltr">{{ i.tag }}</span></td>
+          <td data-label="{{ t.protocol }}"><span class="chip chip-proto {{ chip }}" dir="ltr">{{ i.protocol }}</span></td>
+          <td data-label="{{ t.core }}"><span class="chip" dir="ltr">{{ i.core }}</span></td>
+          <td data-label="{{ t.port }}"><span class="num" dir="ltr">{{ i.port }}</span></td>
+          <td data-label="{{ t.status }}"><span class="badge {{ 'badge-ok' if i.enabled else 'badge-off' }}">{{ t.enabled if i.enabled else t.disabled }}</span></td>
+          <td data-label="{{ t.clients }}"><span class="num" dir="ltr">{{ clients_by_inbound.get(i.id, 0) }}</span></td>
+          <td data-label="{{ t.remark }}">{{ i.remark or '' }}</td>
+          <td data-label="{{ t.actions }}" class="row-actions">
             <a class="icon-btn" href="{{ base_path }}/inbounds/{{ i.id }}/edit" title="{{ t.edit }}" aria-label="{{ t.edit }} {{ i.tag }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg></a>
             <form method="post" action="{{ base_path }}/inbounds/{{ i.id }}/toggle" class="inline-form">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -100,7 +101,7 @@
           </td>
         </tr>
         {% endfor %}
-        <tr id="filter-empty" hidden><td colspan="7" class="empty">{{ t.no_matches }}</td></tr>
+        <tr id="filter-empty" hidden><td colspan="8" class="empty">{{ t.no_matches }}</td></tr>
       </tbody>
     </table>
   </div>
@@ -110,6 +111,7 @@
   <div class="empty">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13.5l9 5 9-5"/></svg>
     <p class="muted">{{ t.no_inbounds }}</p>
+    <p><a class="btn btn-small btn-primary" href="#add-inbound">{{ t.add_inbound }}</a></p>
   </div>
 </div>
 {% endif %}

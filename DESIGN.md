@@ -893,6 +893,67 @@ sparky-manager/
 
 ---
 
+## 12. Web UI (professional upgrade, Phase 4, 2026-11-15)
+
+The panel is a server-rendered FastAPI/Jinja2 app with one stylesheet
+(`app/static/style.css`), one small script (`app/static/app.js`), and a
+bundled Vazirmatn font. No CDN, no external fonts, no framework JS —
+the UI works offline and with JS disabled (progressive enhancement).
+
+- **Design tokens.** The stylesheet's `:root` block is the token set:
+  solid charcoal surfaces (`--surface-solid*`), a restrained violet
+  accent + sky secondary, documented spacing/type/border/shadow/radius
+  scales. Glassmorphism is gone: no `backdrop-filter` on cards or
+  topbars, soft shadows only. The only remaining translucent tints are
+  small accents (chips, badges, stat icons). Direction-dependent rules
+  use CSS logical properties (`margin-inline-start`, `inset-inline-end`,
+  …) so Persian RTL and English LTR both render correctly.
+- **Navigation.** `base.html` groups the sidebar: Overview (Dashboard),
+  Management (Inbounds, Users), Monitoring (Logs), System (Settings).
+  There is no Network & Services or Integrations group — no such pages
+  exist, and the nav never links to a page that doesn't. Desktop:
+  collapsible sidebar (icons only, persisted in `localStorage`).
+  Mobile (≤960 px): the sidebar becomes a slide-in drawer, opened by a
+  hamburger via `:target` (works without JS; `app.js` adds overlay /
+  Escape closing). The old bottom nav was removed.
+- **Dashboard.** The server-status block (`app/system_status`) moved
+  onto the dashboard as well as Settings — same collector, no
+  duplication. A failed collection renders "unavailable", never zero.
+  The "Online (approx.)" stat was relabeled "Active today": it counts
+  users with any traffic today, which is not presence, and the old
+  label said otherwise. The "LIVE" dots were removed for the same
+  reason — nothing on the page is live.
+- **Users list.** Server-side search (name/note substring), status
+  filter (enabled/disabled/frozen/expired), sort (created/name/expiry/
+  traffic), pagination (25/page) as GET query params — bookmarkable.
+  Invalid values fall back to defaults, never 500. Filtering/sorting
+  runs in Python over the user list: the frozen filter needs per-client
+  state with no clean SQL expression, and an admin panel holds hundreds
+  of users at most. Bulk actions still act on selected IDs only; the
+  page states that selection is page-local.
+- **Inbounds list.** Client counts per inbound (one grouped query) and
+  card-table markup on narrow screens; the client-side search/filter
+  and protocol-specific create/edit forms are unchanged.
+- **Settings.** Tabbed into General / Telegram / Security / Backup /
+  Services / Advanced. There is deliberately no Network tab: the only
+  network-ish settings (domain, subscription host, Reality SNI) live in
+  General, and a Network tab would duplicate them. Tabs are real links
+  (`?section=…`); `app.js` switches them in place, the server renders
+  the active panel without JS. Every settings POST carries its `section`
+  and redirects back to it. `POST /settings` now accepts partial
+  updates: each tab posts only its own fields, and absent fields are
+  left untouched (previously a post cleared any field it didn't send).
+  All POST forms keep their CSRF token (§7).
+- **Tables.** Wide tables use the `.table-cards` pattern: below 640 px
+  they stack into cards, each cell labeled from its `data-label`
+  attribute. Tables without that class keep horizontal scroll.
+- **Verification limit.** No browser or screenshot tooling exists in
+  this environment, so the responsive/drawer behavior is verified by
+  rendered-HTML and route tests only (`tests/test_ui_phase4.py`);
+  visual layout still needs a manual check (Phase 6).
+
+---
+
 ## Sources (checked 2026-11-11)
 
 - ZedSecure README — `github.com/EbiDevSharp/ZedSecure` (also

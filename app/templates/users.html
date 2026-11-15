@@ -33,10 +33,50 @@
   </form>
 </div>
 
+{# Server-side search / filter / sort (Phase 4): a GET form, so the
+   view is bookmarkable. Bad values fall back to defaults server-side. #}
+<form method="get" action="{{ base_path }}/users" class="card filter-strip">
+    <div class="filter-search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <input type="text" name="q" value="{{ q }}" placeholder="{{ t.search_users }}" autocomplete="off" aria-label="{{ t.search_users }}">
+    </div>
+    <div class="filter-select">
+      <span class="filter-label">{{ t.status }}:</span>
+      <select name="status" aria-label="{{ t.status }}">
+        <option value="all"{% if status == 'all' %} selected{% endif %}>{{ t.all_statuses }}</option>
+        <option value="enabled"{% if status == 'enabled' %} selected{% endif %}>{{ t.enabled }}</option>
+        <option value="disabled"{% if status == 'disabled' %} selected{% endif %}>{{ t.disabled }}</option>
+        <option value="frozen"{% if status == 'frozen' %} selected{% endif %}>{{ t.frozen }}</option>
+        <option value="expired"{% if status == 'expired' %} selected{% endif %}>{{ t.filter_expired }}</option>
+      </select>
+    </div>
+    <div class="filter-select">
+      <span class="filter-label">{{ t.sort_by }}:</span>
+      <select name="sort" aria-label="{{ t.sort_by }}">
+        <option value="created"{% if sort == 'created' %} selected{% endif %}>{{ t.sort_newest }}</option>
+        <option value="name"{% if sort == 'name' %} selected{% endif %}>{{ t.sort_name }}</option>
+        <option value="expiry"{% if sort == 'expiry' %} selected{% endif %}>{{ t.sort_expiry }}</option>
+        <option value="traffic"{% if sort == 'traffic' %} selected{% endif %}>{{ t.sort_traffic }}</option>
+      </select>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{{ t.filter_apply }}</button>
+      {% if q or status != 'all' or sort != 'created' %}
+      <a class="btn" href="{{ base_path }}/users">{{ t.filter_clear }}</a>
+      {% endif %}
+    </div>
+</form>
+
 <div class="card">
+  <div class="table-head">
+    <h2>{{ t.users }}</h2>
+    <span class="count-badge" dir="ltr">{{ filtered_total }}</span>
+    <span class="spacer"></span>
+    <span class="muted">{{ t.users_showing.format(shown=users | length, total=filtered_total) }}</span>
+  </div>
   {% if users %}
   <div class="table-wrap">
-    <table>
+    <table class="table-cards">
       <thead>
         <tr>
           {# Checkboxes belong to the bulk form below via the `form`
@@ -50,12 +90,12 @@
         {% for u in users %}
         <tr>
           <td class="check-col"><input type="checkbox" name="user_ids" value="{{ u.id }}" form="bulk-form"></td>
-          <td><a href="{{ base_path }}/users/{{ u.id }}">{{ u.name }}</a></td>
-          <td><span class="badge {{ 'badge-ok' if u.enabled else 'badge-off' }}">{{ t.enabled if u.enabled else t.disabled }}</span></td>
-          <td><span class="num" dir="ltr">{{ (u.traffic_used_bytes / 1073741824) | round(2) }} GB</span></td>
-          <td>{{ ((u.traffic_limit_bytes / 1073741824) | round(2)) ~ ' GB' if u.traffic_limit_bytes else t.unlimited }}</td>
-          <td>{{ u.expires_at.strftime('%Y-%m-%d') if u.expires_at else t.never }}</td>
-          <td class="row-actions">
+          <td data-label="{{ t.name }}"><a href="{{ base_path }}/users/{{ u.id }}">{{ u.name }}</a>{% if u.note %} <span class="muted">{{ u.note }}</span>{% endif %}</td>
+          <td data-label="{{ t.status }}"><span class="badge {{ 'badge-ok' if u.enabled else 'badge-off' }}">{{ t.enabled if u.enabled else t.disabled }}</span>{% if u.id in frozen_ids %} <span class="badge badge-warn">{{ t.frozen }}</span>{% endif %}{% if u.id in expired_ids %} <span class="badge badge-err">{{ t.expired }}</span>{% endif %}</td>
+          <td data-label="{{ t.used }}"><span class="num" dir="ltr">{{ (u.traffic_used_bytes / 1073741824) | round(2) }} GB</span></td>
+          <td data-label="{{ t.limit }}">{{ ((u.traffic_limit_bytes / 1073741824) | round(2)) ~ ' GB' if u.traffic_limit_bytes else t.unlimited }}</td>
+          <td data-label="{{ t.expires }}">{{ u.expires_at.strftime('%Y-%m-%d') if u.expires_at else t.never }}</td>
+          <td data-label="{{ t.actions }}" class="row-actions">
             <a class="btn btn-small" href="{{ base_path }}/users/{{ u.id }}">{{ t.details }}</a>
             <form method="post" action="{{ base_path }}/users/{{ u.id }}/toggle" class="inline-form">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -70,6 +110,29 @@
         {% endfor %}
       </tbody>
     </table>
+  </div>
+  {% set qs = '?q=' ~ (q | urlencode) ~ '&status=' ~ status ~ '&sort=' ~ sort %}
+  {% if total_pages > 1 %}
+  <nav class="pagination" aria-label="{{ t.page_of.format(page=page, pages=total_pages) }}">
+    {% if page > 1 %}
+    <a class="btn btn-small" href="{{ base_path }}/users{{ qs }}&page={{ page - 1 }}">← {{ t.page_prev }}</a>
+    {% else %}
+    <span class="btn btn-small btn-disabled" aria-disabled="true">← {{ t.page_prev }}</span>
+    {% endif %}
+    <span class="page-indicator" dir="ltr">{{ t.page_of.format(page=page, pages=total_pages) }}</span>
+    {% if page < total_pages %}
+    <a class="btn btn-small" href="{{ base_path }}/users{{ qs }}&page={{ page + 1 }}">{{ t.page_next }} →</a>
+    {% else %}
+    <span class="btn btn-small btn-disabled" aria-disabled="true">{{ t.page_next }} →</span>
+    {% endif %}
+  </nav>
+  {% endif %}
+  {% elif total_users %}
+  {# Filters matched nothing — the panel does have users. #}
+  <div class="empty">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+    <p class="muted">{{ t.no_matches }}</p>
+    <p><a class="btn btn-small" href="{{ base_path }}/users">{{ t.filter_clear }}</a></p>
   </div>
   {% else %}
   <div class="empty">
@@ -96,6 +159,7 @@
       <button type="submit" name="action" value="delete" class="btn btn-danger" data-confirm="{{ t.confirm_bulk_delete }}">{{ t.bulk_delete }}</button>
     </div>
     <p class="field-hint">{{ t.extend_days_hint }} {{ t.traffic_reset_hint }}</p>
+    <p class="field-hint">{{ t.bulk_page_hint }}</p>
   </form>
 </div>
 {% endif %}

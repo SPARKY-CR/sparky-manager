@@ -130,7 +130,7 @@
   <div class="card">
     <h2>{{ t.clients }}</h2>
     <div class="table-wrap">
-      <table>
+      <table class="table-cards">
         <thead>
           <tr><th>{{ t.inbounds }}</th><th>{{ t.protocol }}</th><th>{{ t.flow }}</th><th>{{ t.ip_limit }}</th><th>{{ t.status }}</th></tr>
         </thead>
@@ -138,11 +138,11 @@
           {% for c in clients %}
           {% set extra = client_extra[c.id] if client_extra is defined and c.id in client_extra else none %}
           <tr>
-            <td>{{ inbounds[c.inbound_id].tag if c.inbound_id in inbounds else c.inbound_id }}</td>
-            <td><span class="chip" dir="ltr">{{ inbounds[c.inbound_id].protocol if c.inbound_id in inbounds else '' }}</span></td>
-            <td dir="ltr">{{ c.flow or '—' }}</td>
-            <td>{{ extra["ip_limit"] if extra is not none and extra["ip_limit"] is not none else t.unlimited }}</td>
-            <td>
+            <td data-label="{{ t.inbounds }}">{{ inbounds[c.inbound_id].tag if c.inbound_id in inbounds else c.inbound_id }}</td>
+            <td data-label="{{ t.protocol }}"><span class="chip" dir="ltr">{{ inbounds[c.inbound_id].protocol if c.inbound_id in inbounds else '' }}</span></td>
+            <td data-label="{{ t.flow }}" dir="ltr">{{ c.flow or '—' }}</td>
+            <td data-label="{{ t.ip_limit }}">{{ extra["ip_limit"] if extra is not none and extra["ip_limit"] is not none else t.unlimited }}</td>
+            <td data-label="{{ t.status }}">
               <span class="badge {{ 'badge-ok' if c.enabled else 'badge-off' }}">{{ t.enabled if c.enabled else t.disabled }}</span>
               {% if extra is not none and extra["frozen"] %}<span class="badge badge-warn">{{ t.frozen }}</span>{% endif %}
             </td>

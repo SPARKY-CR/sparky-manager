@@ -428,7 +428,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "active_users": "کاربران فعال",
         "total_inbounds": "کل اینباندها",
         "traffic_used": "ترافیک مصرف‌شده",
-        "online_now": "آنلاین (تقریبی)",
+        "active_today": "فعال امروز",
         "recent_users": "کاربران اخیر",
         "protocol_distribution": "توزیع پروتکل‌ها",
         "recent_activity": "فعالیت‌های اخیر",
@@ -861,6 +861,46 @@ STRINGS: dict[str, dict[str, str]] = {
         "bot_backup_failed": "ساخت یا ارسال بکاپ ناموفق بود.",
         "bot_backup_too_large": "بکاپ بزرگ‌تر از حد تلگرام (۵۰ مگابایت) است — از صفحهٔ تنظیمات پنل دانلود کنید.",
         "bot_stale_callback": "این دکمه دیگر معتبر نیست — از منو ادامه بدهید.",
+        # -- Phase 4 (UI redesign) --
+        "nav_overview": "نمای کلی",
+        "nav_management": "مدیریت",
+        "nav_monitoring": "پایش",
+        "nav_system": "سیستم",
+        "nav_collapse": "جمع‌کردن نوار کناری",
+        "nav_expand": "باز کردن نوار کناری",
+        "nav_menu": "منو",
+        "nav_close": "بستن",
+        "search_users": "جستجوی کاربر…",
+        "filter_expired": "منقضی‌شده",
+        "expired": "منقضی‌شده",
+        "sort_by": "مرتب‌سازی",
+        "sort_newest": "جدیدترین",
+        "sort_name": "نام (الفبا)",
+        "sort_expiry": "نزدیک‌ترین انقضا",
+        "sort_traffic": "بیشترین مصرف",
+        "filter_apply": "اعمال",
+        "filter_clear": "پاک کردن فیلتر",
+        "page_of": "صفحهٔ {page} از {pages}",
+        "page_prev": "قبلی",
+        "page_next": "بعدی",
+        "users_showing": "نمایش {shown} از {total} کاربر",
+        "bulk_page_hint": "عملیات گروهی فقط روی کاربران انتخاب‌شده در همین صفحه انجام می‌شود.",
+        "settings_general": "عمومی",
+        "settings_telegram": "تلگرام",
+        "settings_security": "امنیت",
+        "settings_backup": "پشتیبان‌گیری",
+        "settings_services": "سرویس‌ها",
+        "settings_advanced": "پیشرفته",
+        "settings_general_desc": "هویت عمومی پنل: دامنه، میزبان اشتراک و SNI پیش‌فرض.",
+        "settings_telegram_desc": "اعلان‌ها و ربات مدیریت تلگرام.",
+        "settings_security_desc": "رمز عبور مدیر پنل.",
+        "settings_backup_desc": "دانلود و بازیابی نسخهٔ پشتیبان.",
+        "settings_services_desc": "وضعیت زندهٔ سرور و سرویس‌ها.",
+        "settings_advanced_desc": "تنظیمات پیشرفته؛ فقط در صورت نیاز تغییر دهید.",
+        "domain_hint": "دامنهٔ عمومی پنل؛ در لینک‌های اشتراک و وبهوک تلگرام استفاده می‌شود.",
+        "subscription_host_hint": "میزبان لینک‌های اشتراک؛ خالی یعنی همان دامنه یا آی‌پی سرور.",
+        "reality_sni_hint": "SNI پیش‌فرض برای اینباندهای Reality جدید.",
+        "server_status_unavailable": "وضعیت سرور در دسترس نیست.",
     },
     "en": {
         "app_name": "Sparky Manager",
@@ -882,7 +922,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "active_users": "Active users",
         "total_inbounds": "Total inbounds",
         "traffic_used": "Traffic used",
-        "online_now": "Online (approx.)",
+        "active_today": "Active today",
         "recent_users": "Recent users",
         "protocol_distribution": "Protocol distribution",
         "recent_activity": "Recent activity",
@@ -1315,6 +1355,46 @@ STRINGS: dict[str, dict[str, str]] = {
         "bot_backup_failed": "Creating or sending the backup failed.",
         "bot_backup_too_large": "The backup is larger than Telegram's limit (50 MB) — download it from the panel settings page instead.",
         "bot_stale_callback": "This button is no longer valid — continue from the menu.",
+        # -- Phase 4 (UI redesign) --
+        "nav_overview": "Overview",
+        "nav_management": "Management",
+        "nav_monitoring": "Monitoring",
+        "nav_system": "System",
+        "nav_collapse": "Collapse sidebar",
+        "nav_expand": "Expand sidebar",
+        "nav_menu": "Menu",
+        "nav_close": "Close",
+        "search_users": "Search users…",
+        "filter_expired": "Expired",
+        "expired": "Expired",
+        "sort_by": "Sort by",
+        "sort_newest": "Newest first",
+        "sort_name": "Name (A–Z)",
+        "sort_expiry": "Soonest expiry",
+        "sort_traffic": "Most traffic",
+        "filter_apply": "Apply",
+        "filter_clear": "Clear filters",
+        "page_of": "Page {page} of {pages}",
+        "page_prev": "Previous",
+        "page_next": "Next",
+        "users_showing": "Showing {shown} of {total} users",
+        "bulk_page_hint": "Bulk actions apply only to the users selected on this page.",
+        "settings_general": "General",
+        "settings_telegram": "Telegram",
+        "settings_security": "Security",
+        "settings_backup": "Backup",
+        "settings_services": "Services",
+        "settings_advanced": "Advanced",
+        "settings_general_desc": "The panel's public identity: domain, subscription host, and default SNI.",
+        "settings_telegram_desc": "Notifications and the Telegram management bot.",
+        "settings_security_desc": "The panel admin password.",
+        "settings_backup_desc": "Download and restore a backup.",
+        "settings_services_desc": "Live server and service status.",
+        "settings_advanced_desc": "Advanced settings; change only when needed.",
+        "domain_hint": "The panel's public domain; used in share links and the Telegram webhook.",
+        "subscription_host_hint": "Host used in subscription links; empty means the domain or server IP.",
+        "reality_sni_hint": "Default SNI for new Reality inbounds.",
+        "server_status_unavailable": "Server status is unavailable.",
     },
 }
 
@@ -4209,6 +4289,60 @@ def logout(
 
 
 # ---------------------------------------------------------------------------
+# Phase 4 (UI redesign): users-list options + settings tabs
+# ---------------------------------------------------------------------------
+
+# Users list: server-side search / filter / sort / pagination.
+# Filtering and sorting run in Python over the user list (an admin
+# panel holds hundreds of users at most, and the page previously
+# loaded them all anyway) — the frozen filter needs per-client
+# state, which has no clean SQL expression.
+USERS_PAGE_SIZE = 25
+USER_SORTS = ("created", "name", "expiry", "traffic")
+USER_STATUSES = ("all", "enabled", "disabled", "frozen", "expired")
+
+# Settings tabs (Phase 4): the sections the settings page is split
+# into. There is deliberately no "network" tab — the only network-ish
+# settings (domain, subscription host, Reality SNI) live in General,
+# and a Network tab would duplicate them. See settings.html.
+SETTINGS_SECTIONS = (
+    "general",
+    "telegram",
+    "security",
+    "backup",
+    "services",
+    "advanced",
+)
+SETTINGS_SECTION_DEFAULT = "general"
+
+
+def _aware_dt(value: Optional[datetime]) -> Optional[datetime]:
+    """A stored datetime as timezone-aware UTC (SQLite returns naive
+    values for ``DateTime(timezone=True)`` columns)."""
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _valid_settings_section(value: str) -> str:
+    """A settings tab id, or ``""`` when unknown (the page falls back
+    to General; redirects drop the param)."""
+    return value if value in SETTINGS_SECTIONS else ""
+
+
+def _settings_redirect(
+    request: Request, section: str = "", msg: str = "", err: str = ""
+) -> RedirectResponse:
+    """Redirect back to the settings page, keeping the admin on the
+    tab they submitted from (Phase 4)."""
+    target = "/settings"
+    section = _valid_settings_section(section)
+    if section:
+        target = f"/settings?section={section}"
+    return _redirect(target, request, msg=msg, err=err)
+
+
+# ---------------------------------------------------------------------------
 # Dashboard
 # ---------------------------------------------------------------------------
 
@@ -4225,12 +4359,26 @@ def dashboard(
     total_inbounds = db.query(Inbound).count()
     traffic_used = sum(u.traffic_used_bytes or 0 for u in db.query(User).all())
     today = datetime.now(timezone.utc).date()
-    online = 0
+    # "Active today": users with any traffic recorded today. This is
+    # NOT "online now" — real presence is not observable (audit U2);
+    # the label says what the number actually is.
+    active_today = 0
     try:
         rows = db.query(TrafficDaily).filter(TrafficDaily.date == today).all()
-        online = sum(1 for r in rows if (r.up_bytes or 0) + (r.down_bytes or 0) > 0)
+        active_today = sum(
+            1 for r in rows if (r.up_bytes or 0) + (r.down_bytes or 0) > 0
+        )
     except Exception:  # noqa: BLE001
-        online = 0
+        active_today = 0
+    # Phase 4: server status on the dashboard (same collector the
+    # settings page uses — never duplicated). A collection failure
+    # yields None and the template shows "unavailable", never zero.
+    server_status = None
+    if system_status_mod is not None:
+        try:
+            server_status = system_status_mod.collect_server_status(DATA_DIR)
+        except Exception:  # noqa: BLE001
+            server_status = None
     # Inbound node cards + protocol distribution (dashboard sections).
     inbounds = db.query(Inbound).order_by(Inbound.id).all()
     clients_by_inbound = {
@@ -4252,7 +4400,8 @@ def dashboard(
                 "active_users": active_users,
                 "total_inbounds": total_inbounds,
                 "traffic_used": traffic_used,
-                "online": online,
+                "active_today": active_today,
+                "server_status": server_status,
                 "inbounds": inbounds,
                 "clients_by_inbound": clients_by_inbound,
                 "today": today,
@@ -4521,11 +4670,113 @@ def _apply_client_move(
 @app.get("/users", response_class=HTMLResponse)
 def users_page(
     request: Request,
+    q: str = Query(""),
+    status: str = Query("all"),
+    sort: str = Query("created"),
+    page: str = Query("1"),
     admin: Any = Depends(require_admin),
     db: Session = Depends(db_session),
 ):
-    users = db.query(User).order_by(User.created_at.desc()).all()
-    return templates.TemplateResponse(request, "users.html", _template_ctx(request, {"admin": admin, "users": users})
+    """Users list with server-side search / filter / sort / pagination
+    (Phase 4). All params are bookmarkable GET params; a bad value
+    falls back to the default, never a 500 (``page`` is parsed by
+    hand for exactly that reason — an ``int`` Query param would 422
+    on ``?page=abc``)."""
+    now = datetime.now(timezone.utc)
+    users = db.query(User).all()
+    total_users = len(users)
+
+    # Search: name or note, case-insensitive substring.
+    needle = (q or "").strip().lower()
+    if needle:
+        users = [
+            u
+            for u in users
+            if needle in u.name.lower()
+            or (u.note and needle in u.note.lower())
+        ]
+
+    # Frozen is a per-user flag: all of the user's clients frozen
+    # (and at least one client) — same rule as the detail page.
+    # Computed for every render: the table shows the frozen badge.
+    clients_by_user: dict[int, list[Any]] = {}
+    for client in db.query(Client).all():
+        clients_by_user.setdefault(client.user_id, []).append(client)
+    frozen_ids = {
+        user_id
+        for user_id, clients in clients_by_user.items()
+        if clients and all(_client_is_frozen(c) for c in clients)
+    }
+    # Expired ids are precomputed here (with naive/aware handling) —
+    # the template must never compare datetimes itself.
+    expired_ids = {
+        u.id
+        for u in db.query(User).all()
+        if _aware_dt(u.expires_at) is not None
+        and _aware_dt(u.expires_at) <= now
+    }
+
+    status = (status or "").strip().lower()
+    if status not in USER_STATUSES:
+        status = "all"
+    if status == "enabled":
+        users = [u for u in users if u.enabled]
+    elif status == "disabled":
+        users = [u for u in users if not u.enabled]
+    elif status == "frozen":
+        users = [u for u in users if u.id in frozen_ids]
+    elif status == "expired":
+        users = [u for u in users if u.id in expired_ids]
+
+    sort = (sort or "").strip().lower()
+    if sort not in USER_SORTS:
+        sort = "created"
+    if sort == "name":
+        users.sort(key=lambda u: u.name.lower())
+    elif sort == "expiry":
+        # Never-expiring users sort last (no expiry to approach).
+        users.sort(
+            key=lambda u: _aware_dt(u.expires_at)
+            or datetime.max.replace(tzinfo=timezone.utc)
+        )
+    elif sort == "traffic":
+        users.sort(key=lambda u: u.traffic_used_bytes or 0, reverse=True)
+    else:
+        users.sort(
+            key=lambda u: _aware_dt(u.created_at)
+            or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+
+    filtered_total = len(users)
+    try:
+        page_n = int((page or "1").strip())
+    except ValueError:
+        page_n = 1
+    total_pages = max(
+        1, (filtered_total + USERS_PAGE_SIZE - 1) // USERS_PAGE_SIZE
+    )
+    page_n = min(max(page_n, 1), total_pages)
+    start = (page_n - 1) * USERS_PAGE_SIZE
+    page_users = users[start : start + USERS_PAGE_SIZE]
+    return templates.TemplateResponse(request, "users.html",
+        _template_ctx(
+            request,
+            {
+                "admin": admin,
+                "users": page_users,
+                "total_users": total_users,
+                "filtered_total": filtered_total,
+                "frozen_ids": frozen_ids,
+                "expired_ids": expired_ids,
+                "q": q or "",
+                "status": status,
+                "sort": sort,
+                "page": page_n,
+                "total_pages": total_pages,
+                "page_size": USERS_PAGE_SIZE,
+            },
+        ),
     )
 
 
@@ -5017,8 +5268,19 @@ def inbounds_page(
         "port": suggested_port,
         "sni": settings.get("reality_sni") or "www.microsoft.com",
     }
+    # Phase 4: client counts for the inbounds table (same query the
+    # dashboard node cards use).
+    clients_by_inbound = {
+        i.id: db.query(Client).filter(Client.inbound_id == i.id).count()
+        for i in inbounds
+    }
     return templates.TemplateResponse(request, "inbounds.html",
-        _template_ctx(request, {"admin": admin, "inbounds": inbounds, "suggested": suggested}),
+        _template_ctx(request, {
+            "admin": admin,
+            "inbounds": inbounds,
+            "suggested": suggested,
+            "clients_by_inbound": clients_by_inbound,
+        }),
     )
 
 
@@ -5526,9 +5788,16 @@ def _db_file_path(db: Session) -> Optional[Path]:
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(
     request: Request,
+    section: str = Query(""),
     admin: Any = Depends(require_admin),
     db: Session = Depends(db_session),
 ):
+    # Phase 4: tabbed settings — `?section=` picks the active tab;
+    # an unknown value falls back to General (never a 500).
+    active_section = (
+        _valid_settings_section((section or "").strip())
+        or SETTINGS_SECTION_DEFAULT
+    )
     settings = get_settings(db)
     # The bot token never reaches the template context: the form only
     # ever shows a "configured" badge, never the value. Same for the
@@ -5567,6 +5836,7 @@ def settings_page(
     return templates.TemplateResponse(request, "settings.html",
         _template_ctx(request, {
             "admin": admin,
+            "active_section": active_section,
             "settings": settings_view,
             "server_status": server_status,
             "telegram_configured": _telegram_configured(db),
@@ -5598,42 +5868,54 @@ def settings_page(
 @app.post("/settings")
 def save_settings(
     request: Request,
-    domain: str = Form(""),
-    subscription_host: str = Form(""),
-    reality_sni: str = Form(""),
-    log_level: str = Form(""),
-    telegram_bot_token: str = Form(""),
-    telegram_chat_id: str = Form(""),
-    telegram_transport: str = Form(""),
+    domain: Optional[str] = Form(None),
+    subscription_host: Optional[str] = Form(None),
+    reality_sni: Optional[str] = Form(None),
+    log_level: Optional[str] = Form(None),
+    telegram_bot_token: Optional[str] = Form(None),
+    telegram_chat_id: Optional[str] = Form(None),
+    telegram_transport: Optional[str] = Form(None),
+    section: str = Form(""),
     admin: Any = Depends(require_admin),
     csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
+    """Save settings. Partial updates (Phase 4): each settings tab
+    posts only its own fields, so a field that is ABSENT from the
+    form is left untouched — only a field that is PRESENT is written
+    (an empty present value still clears, as before)."""
     t = t_for(get_lang(request))
-    chat_id = telegram_chat_id.strip()
-    if chat_id and not CHAT_ID_RE.match(chat_id):
-        return _redirect("/settings", request, err=t["invalid_chat_id"])
+    settings_before = get_settings(db)
+    chat_id = (telegram_chat_id or "").strip()
+    if telegram_chat_id is not None and chat_id and not CHAT_ID_RE.match(chat_id):
+        return _settings_redirect(
+            request, section, err=t["invalid_chat_id"]
+        )
     # The previous transport is read before saving so a switch to
     # polling can be detected (it needs a deleteWebhook call — see
     # below). An invalid submitted value keeps the previous one.
-    settings_before = get_settings(db)
     previous_transport = (
         (settings_before.get("telegram_transport") or "").strip().lower()
         or TELEGRAM_TRANSPORT_DEFAULT
     )
     if previous_transport not in TELEGRAM_TRANSPORTS:
         previous_transport = TELEGRAM_TRANSPORT_DEFAULT
-    submitted_transport = telegram_transport.strip().lower()
+    submitted_transport = (telegram_transport or "").strip().lower()
     transport = (
         submitted_transport
         if submitted_transport in TELEGRAM_TRANSPORTS
         else previous_transport
     )
-    set_setting(db, "domain", domain.strip())
-    set_setting(db, "subscription_host", subscription_host.strip())
-    set_setting(db, "reality_sni", reality_sni.strip() or "www.microsoft.com")
+    if domain is not None:
+        set_setting(db, "domain", domain.strip())
+    if subscription_host is not None:
+        set_setting(db, "subscription_host", subscription_host.strip())
+    if reality_sni is not None:
+        set_setting(
+            db, "reality_sni", reality_sni.strip() or "www.microsoft.com"
+        )
     commands_err = ""
-    if telegram_bot_token.strip():
+    if telegram_bot_token is not None and telegram_bot_token.strip():
         # A blank token field keeps the current token (the form never
         # shows it, so a submit without a new value must not clear it).
         # Clearing the chat ID disables notifications.
@@ -5658,14 +5940,20 @@ def save_settings(
                 commands_err = t["telegram_commands_failed"] + (
                     f" {error}" if error else ""
                 )
-    set_setting(db, "telegram_chat_id", chat_id)
-    set_setting(db, "telegram_transport", transport)
+    if telegram_chat_id is not None:
+        set_setting(db, "telegram_chat_id", chat_id)
+    if telegram_transport is not None:
+        set_setting(db, "telegram_transport", transport)
     if transport != previous_transport:
         _audit(
             db, admin.id, "telegram.transport_change",
             f"{previous_transport} -> {transport}",
         )
-    if log_level.strip() and panel_log_mod is not None:
+    if (
+        log_level is not None
+        and log_level.strip()
+        and panel_log_mod is not None
+    ):
         # Applies immediately (no restart); the value is validated
         # against the known levels inside apply_log_level.
         applied = panel_log_mod.apply_log_level(log_level.strip())
@@ -5684,7 +5972,7 @@ def save_settings(
         # success is only announced on the switch itself, not on
         # every unrelated save.
         effective_token = (
-            telegram_bot_token.strip()
+            (telegram_bot_token or "").strip()
             or settings_before.get("telegram_bot_token", "")
         ).strip()
         if effective_token:
@@ -5699,7 +5987,12 @@ def save_settings(
                 )
             else:
                 logger.warning("telegram polling webhook removal failed")
-    _audit(db, admin.id, "settings.update", f"domain={domain.strip()!r}")
+    audit_domain = (
+        domain.strip()
+        if domain is not None
+        else settings_before.get("domain", "")
+    )
+    _audit(db, admin.id, "settings.update", f"domain={audit_domain!r}")
     errors = rerender_configs(db)
     err_parts = []
     # The polling failure goes FIRST: _redirect truncates err to 500
@@ -5712,8 +6005,8 @@ def save_settings(
         err_parts.append(commands_err)
     if errors:
         err_parts.append(t["rerender_failed"] + "; ".join(errors))
-    return _redirect(
-        "/settings", request, msg=msg, err=" ".join(err_parts)
+    return _settings_redirect(
+        request, section, msg=msg, err=" ".join(err_parts)
     )
 
 
@@ -5723,6 +6016,7 @@ def change_password(
     current_password: str = Form(""),
     new_password: str = Form(""),
     confirm_password: str = Form(""),
+    section: str = Form(""),
     admin: Any = Depends(require_admin),
     csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
@@ -5734,31 +6028,33 @@ def change_password(
         keep_token=token,
     )
     if not ok:
-        return _redirect("/settings", request, err=t[key])
+        return _settings_redirect(request, section, err=t[key])
     _audit(db, admin.id, "admin.password_change", admin.username)
     logger.info("admin password changed by %s", admin.username)
-    return _redirect("/settings", request, msg=t[key])
+    return _settings_redirect(request, section, msg=t[key])
 
 
 @app.post("/settings/telegram-test")
 def telegram_test(
     request: Request,
+    section: str = Form(""),
     admin: Any = Depends(require_admin),
     csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
 ):
     t = t_for(get_lang(request))
     if not _telegram_configured(db):
-        return _redirect("/settings", request, err=t["telegram_not_configured"])
+        return _settings_redirect(request, section, err=t["telegram_not_configured"])
     if _notify_telegram(db, t["tg_test"]):
         _audit(db, admin.id, "telegram.test", "")
-        return _redirect("/settings", request, msg=t["telegram_test_sent"])
-    return _redirect("/settings", request, err=t["telegram_test_failed"])
+        return _settings_redirect(request, section, msg=t["telegram_test_sent"])
+    return _settings_redirect(request, section, err=t["telegram_test_failed"])
 
 
 @app.post("/settings/telegram-webhook")
 def register_telegram_webhook(
     request: Request,
+    section: str = Form(""),
     admin: Any = Depends(require_admin),
     csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
@@ -5774,12 +6070,12 @@ def register_telegram_webhook(
     """
     t = t_for(get_lang(request))
     if telegram_mod is None or not _telegram_configured(db):
-        return _redirect("/settings", request, err=t["telegram_not_configured"])
+        return _settings_redirect(request, section, err=t["telegram_not_configured"])
     settings = get_settings(db)
     secret = _ensure_webhook_secret(db)
     url = _public_panel_url(settings, f"/telegram/webhook/{secret}")
     if url is None:
-        return _redirect("/settings", request, err=t["telegram_domain_required"])
+        return _settings_redirect(request, section, err=t["telegram_domain_required"])
     token = settings.get("telegram_bot_token", "")
     ok, error = telegram_mod.set_webhook(token, url)
     if not ok:
@@ -5789,7 +6085,7 @@ def register_telegram_webhook(
         msg = t["telegram_webhook_failed"] + (f" {detail}" if detail else "")
         if PANEL_PORT not in TELEGRAM_WEBHOOK_PORTS:
             msg += " " + t["telegram_webhook_port_warning"]
-        return _redirect("/settings", request, err=msg)
+        return _settings_redirect(request, section, err=msg)
     set_setting(db, "telegram_webhook_url", url)
     set_setting(
         db,
@@ -5798,12 +6094,13 @@ def register_telegram_webhook(
     )
     _audit(db, admin.id, "telegram.webhook_register", "")
     logger.info("telegram webhook registered by %s", admin.username)
-    return _redirect("/settings", request, msg=t["telegram_webhook_registered"])
+    return _settings_redirect(request, section, msg=t["telegram_webhook_registered"])
 
 
 @app.post("/settings/telegram-webhook-status")
 def refresh_telegram_webhook_status(
     request: Request,
+    section: str = Form(""),
     admin: Any = Depends(require_admin),
     csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
@@ -5816,11 +6113,11 @@ def refresh_telegram_webhook_status(
     """
     t = t_for(get_lang(request))
     if telegram_mod is None or not _telegram_configured(db):
-        return _redirect("/settings", request, err=t["telegram_not_configured"])
+        return _settings_redirect(request, section, err=t["telegram_not_configured"])
     settings = get_settings(db)
     info = telegram_mod.get_webhook_info(settings.get("telegram_bot_token", ""))
     if info is None:
-        return _redirect("/settings", request, err=t["telegram_webhook_status_failed"])
+        return _settings_redirect(request, section, err=t["telegram_webhook_status_failed"])
     kept = {
         key: info[key]
         for key in (
@@ -5833,12 +6130,13 @@ def refresh_telegram_webhook_status(
         if key in info
     }
     set_setting(db, "telegram_webhook_info", json.dumps(kept))
-    return _redirect("/settings", request, msg=t["telegram_webhook_status_ok"])
+    return _settings_redirect(request, section, msg=t["telegram_webhook_status_ok"])
 
 
 @app.post("/settings/telegram-commands")
 def register_telegram_commands(
     request: Request,
+    section: str = Form(""),
     admin: Any = Depends(require_admin),
     csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
@@ -5853,26 +6151,27 @@ def register_telegram_commands(
     """
     t = t_for(get_lang(request))
     if telegram_mod is None or bot_mod is None or not _telegram_configured(db):
-        return _redirect("/settings", request, err=t["telegram_not_configured"])
+        return _settings_redirect(request, section, err=t["telegram_not_configured"])
     settings = get_settings(db)
     ok, error = telegram_mod.set_my_commands(
         settings.get("telegram_bot_token", ""), list(bot_mod.BOT_COMMANDS)
     )
     if not ok:
         msg = t["telegram_commands_failed"] + (f" {error}" if error else "")
-        return _redirect("/settings", request, err=msg)
+        return _settings_redirect(request, section, err=msg)
     set_setting(
         db,
         "telegram_commands_registered_at",
         datetime.now(timezone.utc).isoformat(),
     )
     _audit(db, admin.id, "telegram.commands_register", "")
-    return _redirect("/settings", request, msg=t["telegram_commands_registered"])
+    return _settings_redirect(request, section, msg=t["telegram_commands_registered"])
 
 
 @app.post("/settings/telegram-identity")
 def refresh_telegram_identity(
     request: Request,
+    section: str = Form(""),
     admin: Any = Depends(require_admin),
     csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
@@ -5885,11 +6184,11 @@ def refresh_telegram_identity(
     """
     t = t_for(get_lang(request))
     if telegram_mod is None or not _telegram_configured(db):
-        return _redirect("/settings", request, err=t["telegram_not_configured"])
+        return _settings_redirect(request, section, err=t["telegram_not_configured"])
     settings = get_settings(db)
     info = telegram_mod.get_me(settings.get("telegram_bot_token", ""))
     if info is None:
-        return _redirect("/settings", request, err=t["telegram_identity_failed"])
+        return _settings_redirect(request, section, err=t["telegram_identity_failed"])
     kept = {
         key: info[key]
         for key in ("id", "username", "first_name")
@@ -5898,7 +6197,7 @@ def refresh_telegram_identity(
     kept["fetched_at"] = datetime.now(timezone.utc).isoformat()
     set_setting(db, "telegram_bot_identity", json.dumps(kept))
     _audit(db, admin.id, "telegram.identity_refresh", "")
-    return _redirect("/settings", request, msg=t["telegram_identity_ok"])
+    return _settings_redirect(request, section, msg=t["telegram_identity_ok"])
 
 
 @app.post("/telegram/webhook/{secret}")
@@ -5970,6 +6269,7 @@ async def restore_backup(
     request: Request,
     backup_file: UploadFile = File(None),
     confirm_restore: str = Form(""),
+    section: str = Form(""),
     admin: Any = Depends(require_admin),
     csrf: None = Depends(require_csrf),
     db: Session = Depends(db_session),
@@ -5980,11 +6280,11 @@ async def restore_backup(
     # by the time the post-restore audit runs.
     admin_id = admin.id
     if backup_mod is None or reset_engine is None or dispose_engine is None:
-        return _redirect("/settings", request, err=t["restore_failed"])
+        return _settings_redirect(request, section, err=t["restore_failed"])
     if not confirm_restore:
-        return _redirect("/settings", request, err=t["restore_confirm_required"])
+        return _settings_redirect(request, section, err=t["restore_confirm_required"])
     if backup_file is None or not backup_file.filename:
-        return _redirect("/settings", request, err=t["restore_no_file"])
+        return _settings_redirect(request, section, err=t["restore_no_file"])
     # Read the upload with a size cap (chunked, so an oversized file
     # is refused without ever being fully buffered).
     chunks: list[bytes] = []
@@ -5996,12 +6296,12 @@ async def restore_backup(
             break
         total += len(chunk)
         if total > cap:
-            return _redirect("/settings", request, err=t["restore_invalid"])
+            return _settings_redirect(request, section, err=t["restore_invalid"])
         chunks.append(chunk)
     data = b"".join(chunks)
     db_path = _db_file_path(db)
     if db_path is None or not db_path.exists():
-        return _redirect("/settings", request, err=t["restore_failed"])
+        return _settings_redirect(request, section, err=t["restore_failed"])
     import tempfile
 
     with tempfile.TemporaryDirectory(prefix="sparky-restore-") as tmp:
@@ -6013,13 +6313,13 @@ async def restore_backup(
                 message = t[key]
             else:
                 message = t[key] + (exc.detail or exc.code)
-            return _redirect("/settings", request, err=message)
+            return _settings_redirect(request, section, err=message)
         # Validation passed: back up the current DB first, then swap.
         try:
             backup_mod.backup_current_db(db_path, DATA_DIR / "backups")
         except Exception:  # noqa: BLE001
             logger.exception("pre-restore backup failed")
-            return _redirect("/settings", request, err=t["restore_failed"])
+            return _settings_redirect(request, section, err=t["restore_failed"])
         # Close this request's session and dispose the engine BEFORE
         # the file is replaced (the old engine's connections point at
         # the old file). The session is rolled back first so the
@@ -6034,12 +6334,12 @@ async def restore_backup(
             backup_mod.swap_db_file(db_path, info.db_file)
         except Exception:  # noqa: BLE001
             logger.exception("restore file swap failed")
-            return _redirect("/settings", request, err=t["restore_failed"])
+            return _settings_redirect(request, section, err=t["restore_failed"])
         try:
             reset_engine()
         except Exception:  # noqa: BLE001
             logger.exception("engine reset after restore failed")
-            return _redirect("/settings", request, err=t["restore_failed"])
+            return _settings_redirect(request, section, err=t["restore_failed"])
     # Fresh session on the restored DB: audit + re-render configs.
     # (SessionLocal directly — get_session() would rebind to the
     # configured path if the singleton were ever unset.)
@@ -6055,11 +6355,11 @@ async def restore_backup(
     finally:
         fresh.close()
     if errors:
-        return _redirect(
-            "/settings", request,
+        return _settings_redirect(
+            request, section,
             err=t["rerender_failed"] + "; ".join(errors),
         )
-    return _redirect("/settings", request, msg=t["restore_done"])
+    return _settings_redirect(request, section, msg=t["restore_done"])
 
 
 # ---------------------------------------------------------------------------

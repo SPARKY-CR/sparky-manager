@@ -146,4 +146,94 @@
     if (network) network.addEventListener("change", applyEditVisibility);
     applyEditVisibility();
   }
+
+  // Sidebar collapse (desktop, Phase 4): icons-only sidebar,
+  // persisted in localStorage. Without JS the sidebar stays
+  // expanded — the toggle is an enhancement, not a requirement.
+  var shell = document.querySelector(".app-shell");
+  var collapseBtn = document.getElementById("sidebar-collapse");
+  if (shell && collapseBtn) {
+    var setCollapsed = function (collapsed) {
+      shell.classList.toggle("sidebar-collapsed", collapsed);
+      var label = collapsed
+        ? collapseBtn.getAttribute("data-expand-label")
+        : collapseBtn.getAttribute("data-collapse-label");
+      if (label) {
+        collapseBtn.setAttribute("title", label);
+        collapseBtn.setAttribute("aria-label", label);
+      }
+      try {
+        window.localStorage.setItem(
+          "sparky-sidebar-collapsed", collapsed ? "1" : "0");
+      } catch (e) { /* storage unavailable — session-only state */ }
+    };
+    try {
+      if (window.localStorage.getItem("sparky-sidebar-collapsed") === "1") {
+        setCollapsed(true);
+      }
+    } catch (e) { /* storage unavailable */ }
+    collapseBtn.addEventListener("click", function () {
+      setCollapsed(!shell.classList.contains("sidebar-collapsed"));
+    });
+  }
+
+  // Mobile drawer (Phase 4): the drawer also opens via :target
+  // (the hamburger links to #sidebar), so it works without JS.
+  // With JS, the class-based state adds overlay/Escape closing and
+  // keeps the URL hash clean.
+  var drawerOpen = document.getElementById("drawer-open");
+  var drawerClose = document.getElementById("drawer-close");
+  var drawerOverlay = document.getElementById("drawer-overlay");
+  var setDrawer = function (open) {
+    document.body.classList.toggle("drawer-open", open);
+    if (drawerOpen) drawerOpen.setAttribute("aria-expanded", open ? "true" : "false");
+  };
+  if (drawerOpen) {
+    drawerOpen.addEventListener("click", function (event) {
+      event.preventDefault();
+      setDrawer(true);
+    });
+  }
+  var closeDrawer = function (event) {
+    if (event) event.preventDefault();
+    setDrawer(false);
+  };
+  if (drawerClose) drawerClose.addEventListener("click", closeDrawer);
+  if (drawerOverlay) drawerOverlay.addEventListener("click", closeDrawer);
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape") setDrawer(false);
+  });
+
+  // Settings tabs (Phase 4): the tab links are real links
+  // (?section=…) so they work without JS (server renders the
+  // active panel). With JS, switching happens in place and the
+  // URL is updated for bookmarkability.
+  var tabs = document.querySelector(".tabs");
+  if (tabs) {
+    var links = tabs.querySelectorAll(".tab-link");
+    var panels = tabs.querySelectorAll(".tab-panel");
+    var activate = function (section) {
+      links.forEach(function (link) {
+        var on = link.getAttribute("data-section") === section;
+        link.classList.toggle("active", on);
+        link.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      panels.forEach(function (panel) {
+        panel.hidden = panel.getAttribute("data-panel") !== section;
+      });
+    };
+    links.forEach(function (link) {
+      link.addEventListener("click", function (event) {
+        var section = link.getAttribute("data-section");
+        if (!section) return;
+        event.preventDefault();
+        activate(section);
+        try {
+          var url = new URL(window.location.href);
+          url.searchParams.set("section", section);
+          window.history.replaceState(null, "", url.toString());
+        } catch (e) { /* URL API unavailable — tab still switched */ }
+      });
+    });
+  }
 })();
