@@ -3,8 +3,13 @@
 Sources (DESIGN.md §6.4):
 - Xray: gRPC Stats API (queried by the caller — this module only
   *applies* the per-user deltas it is handed, see :func:`sync_traffic`).
+  The caller is :mod:`app.xray_stats`, polled by the traffic sync loop.
 - WireGuard: ``wg show wg0 transfer`` / ``latest-handshakes``.
-- sing-box: nftables counters, one per dedicated user port.
+- sing-box: NOT collected — sing-box has no per-user stats API and
+  the panel does not run ``nft list``. ``sync_traffic`` still
+  accepts ``nft_text`` for a future nftables-counter implementation,
+  but nothing passes it today; sing-box users show no traffic, never
+  an invented number.
 
 Honesty rule, applied everywhere: a missing source means *no update*,
 never an invented number. Shared-port sing-box inbounds cannot be

@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from app import main as main_mod
+from app import webcommon
 from app.config import get_settings, normalize_web_path
 from app.models import Inbound, User
 from tests.conftest import ADMIN_PASSWORD, ADMIN_USERNAME, HOST, ensure_defaults
@@ -62,11 +63,13 @@ def _fake_request() -> Request:
 
 
 def test_redirect_and_template_ctx_use_web_path(monkeypatch):
-    monkeypatch.setattr(main_mod, "WEB_PATH", "/k7x9q2")
+    # WEB_PATH lives in app.webcommon now (Phase 5 split); main.py
+    # only re-exports it, so the patch target is the canonical one.
+    monkeypatch.setattr(webcommon, "WEB_PATH", "/k7x9q2")
     req = _fake_request()
     assert main_mod._redirect("/dashboard", req).headers["location"] == "/k7x9q2/dashboard"
     assert main_mod._template_ctx(req)["base_path"] == "/k7x9q2"
-    monkeypatch.setattr(main_mod, "WEB_PATH", "")
+    monkeypatch.setattr(webcommon, "WEB_PATH", "")
     assert main_mod._redirect("/dashboard", req).headers["location"] == "/dashboard"
     assert main_mod._template_ctx(req)["base_path"] == ""
 
@@ -91,7 +94,9 @@ def mounted_client(db, tmp_path, monkeypatch):
     monkeypatch.setattr(main_mod, "_restart_service", lambda name: None)
     ensure_defaults(db)  # creates the admin from the env password
     main_mod.set_setting(db, "subscription_host", HOST)
-    monkeypatch.setattr(main_mod, "WEB_PATH", "/k7x9q2")
+    # WEB_PATH lives in app.webcommon now (Phase 5 split); patch the
+    # canonical location so templates/redirects render the prefix.
+    monkeypatch.setattr(webcommon, "WEB_PATH", "/k7x9q2")
     mounted = main_mod._mount_web_path(main_mod.app, "/k7x9q2")
     # NOTE: deliberately NOT used as a context manager (same reason as
     # conftest.test_client: entering it runs the lifespan, which would
@@ -166,7 +171,14 @@ def test_no_ikev2_manager_references():
     assert design.count("Ikev2-manager") == 1  # §1 principle only
     assert "ikev2_status" not in design
     assert "open_ikev2_manager" not in design
-    assert not (REPO / "app" / "i18n.py").exists()
+    # Phase 5: app/i18n.py exists again — but as a NEW from-scratch
+    # split of main.py's own STRINGS dict (the professional upgrade's
+    # main.py split), not the old project's module. It must carry
+    # the panel's strings and no reference to the old project
+    # (checked by the loop above).
+    i18n = (REPO / "app" / "i18n.py").read_text(encoding="utf-8")
+    assert "STRINGS: dict[str, dict[str, str]]" in i18n
+    assert "def t_for" in i18n
     # v12: app/ikev2.py exists again — but as a NEW from-scratch
     # strongSwan renderer (swanctl.conf + .mobileconfig), not the
     # old detection module. It must carry the swanctl implementation

@@ -97,6 +97,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -123,231 +124,137 @@ BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 
-SESSION_COOKIE = "sparky_manager_session"
-SESSION_MAX_AGE = 12 * 3600  # 12 hours
-NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 # ---------------------------------------------------------------------------
-# Optional / contract imports.
-# Core modules (db, models, config, auth) are required for the app to run;
-# service modules (links, subscription, renderers, traffic) are
-# optional at import time: missing ones only disable the feature that
-# needs them, never the whole panel.
+# Sibling modules (Phase 5, item 6: plain imports).
+#
+# Every module below is part of the repo and required for the panel to
+# run — there are no "not written yet" siblings any more. A failed
+# import is a real bug and must fail loudly at startup, not degrade
+# silently into a half-working panel (the old try/except + None
+# fallbacks hid exactly that). Genuinely optional behaviour (a missing
+# binary, an unconfigured bot) is still handled at the call site,
+# not at import time.
 # ---------------------------------------------------------------------------
 
-try:
-    from app import config as panel_config
-    from app.config import normalize_web_path
-except ImportError:  # pragma: no cover - sibling module not written yet
-    panel_config = None  # type: ignore[assignment]
-    normalize_web_path = None  # type: ignore[assignment]
-    logger.warning("app.config not available yet; using built-in defaults")
+from app import amneziawg as amneziawg_mod
+from app import backup as backup_mod
+from app import bot as bot_mod
+from app import config as panel_config
+from app import ikev2 as ikev2_mod
+from app import links as links_mod
+from app import openconnect as openconnect_mod
+from app import openvpn as openvpn_mod
+from app import panel_log as panel_log_mod
+from app import singbox as singbox_mod
+from app import subscription as subscription_mod
+from app import system_status as system_status_mod
+from app import telegram as telegram_mod
+from app import traffic as traffic_mod
+from app import wgapply as wgapply_mod
+from app import wireguard as wireguard_mod
+from app import xray as xray_mod
+from app import xray_stats as xray_stats_mod
+from app.auth import (
+    create_session,
+    csrf_token_for_session,
+    get_admin_from_token,
+    hash_password,
+    invalidate_other_sessions,
+    invalidate_session,
+    is_locked_out,
+    record_failed_login,
+    record_successful_login,
+    verify_password,
+)
+from app.db import (
+    SessionLocal,
+    dispose_engine,
+    get_session,
+    init_db,
+    reset_engine,
+)
+from app.models import (
+    Admin,
+    AuditLog,
+    Client,
+    Inbound,
+    Setting,
+    TrafficDaily,
+    User,
+    client_is_frozen,
+    client_is_usable,
+    user_is_usable,
+)
 
-try:
-    from app.db import (
-        SessionLocal,
-        dispose_engine,
-        get_session,
-        init_db,
-        reset_engine,
-    )
-except ImportError:  # pragma: no cover
-    SessionLocal = None  # type: ignore[assignment]
-    get_session = None  # type: ignore[assignment]
-    init_db = None  # type: ignore[assignment]
-    dispose_engine = None  # type: ignore[assignment]
-    reset_engine = None  # type: ignore[assignment]
-    logger.warning("app.db not available yet")
 
-try:
-    from app import models
-    from app.models import (
-        Admin,
-        AuditLog,
-        Client,
-        Inbound,
-        Setting,
-        TrafficDaily,
-        User,
-    )
-    try:
-        from app.models import (
-            client_is_frozen,
-            client_is_usable,
-            user_is_usable,
-        )
-    except ImportError:
-        client_is_usable = None  # type: ignore[assignment]
-        client_is_frozen = None  # type: ignore[assignment]
-        user_is_usable = None  # type: ignore[assignment]
-except ImportError:  # pragma: no cover
-    models = None  # type: ignore[assignment]
-    Admin = AuditLog = Client = Inbound = Setting = TrafficDaily = User = None  # type: ignore[assignment]
-    client_is_usable = None  # type: ignore[assignment]
-    client_is_frozen = None  # type: ignore[assignment]
-    user_is_usable = None  # type: ignore[assignment]
-    logger.warning("app.models not available yet")
-
-try:
-    from app import auth as auth_mod
-    from app.auth import (
-        create_session,
-        csrf_token_for_session,
-        get_admin_from_token,
-        hash_password,
-        invalidate_other_sessions,
-        invalidate_session,
-        is_locked_out,
-        record_failed_login,
-        record_successful_login,
-        verify_csrf_token,
-        verify_password,
-    )
-except ImportError:  # pragma: no cover
-    auth_mod = None  # type: ignore[assignment]
-    create_session = get_admin_from_token = hash_password = None  # type: ignore[assignment]
-    invalidate_session = invalidate_other_sessions = None  # type: ignore[assignment]
-    is_locked_out = record_failed_login = None  # type: ignore[assignment]
-    record_successful_login = None  # type: ignore[assignment]
-    csrf_token_for_session = verify_csrf_token = None  # type: ignore[assignment]
-    verify_password = None  # type: ignore[assignment]
-    logger.warning("app.auth not available yet")
-
-try:
-    from app import links as links_mod
-except ImportError:
-    links_mod = None
-    logger.warning("app.links not available yet; share links / QR disabled")
-
-try:
-    from app import subscription as subscription_mod
-except ImportError:
-    subscription_mod = None
-    logger.warning("app.subscription not available yet; /sub feeds disabled")
-
-try:
-    from app import xray as xray_mod
-except ImportError:
-    xray_mod = None
-    logger.warning("app.xray not available yet; Xray re-render disabled")
-
-try:
-    from app import singbox as singbox_mod
-except ImportError:
-    singbox_mod = None
-    logger.warning("app.singbox not available yet; sing-box re-render disabled")
-
-try:
-    from app import wireguard as wireguard_mod
-except ImportError:
-    wireguard_mod = None
-    logger.warning("app.wireguard not available yet; WireGuard re-render disabled")
-
-try:
-    from app import wgapply as wgapply_mod
-except ImportError:
-    wgapply_mod = None
-    logger.warning("app.wgapply not available yet; WireGuard apply disabled")
-
-try:
-    from app import openvpn as openvpn_mod
-except ImportError:
-    openvpn_mod = None
-    logger.warning("app.openvpn not available yet; OpenVPN re-render disabled")
-
-try:
-    from app import openconnect as openconnect_mod
-except ImportError:
-    openconnect_mod = None
-    logger.warning("app.openconnect not available yet; OpenConnect re-render disabled")
-
-try:
-    from app import amneziawg as amneziawg_mod
-except ImportError:
-    amneziawg_mod = None
-    logger.warning("app.amneziawg not available yet; AmneziaWG re-render disabled")
-
-try:
-    from app import ikev2 as ikev2_mod
-except ImportError:
-    ikev2_mod = None
-    logger.warning("app.ikev2 not available yet; IKEv2 re-render disabled")
-
-try:
-    from app import traffic as traffic_mod
-except ImportError:
-    traffic_mod = None
-    logger.warning("app.traffic not available yet; traffic sync disabled")
-
-try:
-    from app import panel_log as panel_log_mod
-except ImportError:
-    panel_log_mod = None
-    logger.warning("app.panel_log not available yet; file logging disabled")
-
-try:
-    from app import telegram as telegram_mod
-except ImportError:
-    telegram_mod = None
-    logger.warning("app.telegram not available yet; notifications disabled")
-
-try:
-    from app import system_status as system_status_mod
-except ImportError:
-    system_status_mod = None
-    logger.warning("app.system_status not available yet; server status disabled")
-
-try:
-    from app import charts as charts_mod
-except ImportError:
-    charts_mod = None
-    logger.warning("app.charts not available yet; traffic charts disabled")
-
-try:
-    from app import backup as backup_mod
-except ImportError:
-    backup_mod = None
-    logger.warning("app.backup not available yet; backup/restore disabled")
-
-try:
-    from app import bot as bot_mod
-except ImportError:
-    bot_mod = None
-    logger.warning("app.bot not available yet; Telegram bot disabled")
-
-if panel_log_mod is not None:
-    # Rotating file log (data/logs/panel.log) + console (systemd
-    # journal). Idempotent; in tests DATA_DIR points at the temp home,
-    # so test logs never touch the real install.
-    panel_log_mod.setup_panel_logging()
+# Rotating file log (data/logs/panel.log) + console (systemd
+# journal). Idempotent; in tests DATA_DIR points at the temp home,
+# so test logs never touch the real install.
+panel_log_mod.setup_panel_logging()
 
 
 def _redact(text: object) -> str:
     """Mask credential-shaped text before it reaches a log line."""
-    if panel_log_mod is not None:
-        return panel_log_mod.redact(text)
-    return str(text)
+    return panel_log_mod.redact(text)
+
 
 def _cfg_attr(name: str, default: Any) -> Any:
     """Read an attribute from app.config, falling back to ``default``."""
-    if panel_config is not None:
-        return getattr(panel_config, name, default)
-    return default
+    return getattr(panel_config, name, default)
 
 
-def _web_prefix() -> str:
-    """Secret panel web path: "" (panel at root) or "/<segment>"."""
-    raw = _cfg_attr("WEB_PATH", "") or ""
-    if normalize_web_path is None:
-        return ""
-    try:
-        return normalize_web_path(str(raw))
-    except ValueError:
-        logger.warning("invalid SPARKY_WEB_PATH %r; panel served at root", raw)
-        return ""
-
-
-WEB_PATH = _web_prefix()
+# Shared web plumbing (Phase 5 split): session/auth/CSRF helpers,
+# settings/audit accessors, template/redirect helpers, usability and
+# client helpers live in app.webcommon now; re-exported here so
+# `main_mod.<name>` references (routes, bot, tests) keep working.
+from app.routes.users import (  # noqa: E402
+    _client_flow_options,
+    _parse_expiry_date,
+    _parse_ip_limit,
+    _user_client_rows,
+    _user_edit_values,
+    router as users_router,
+)
+from app.webcommon import (  # noqa: E402
+    NAME_RE,
+    SESSION_COOKIE,
+    SESSION_MAX_AGE,
+    WEB_PATH,
+    CSRF_FORM_FIELD,
+    CSRF_HEADER,
+    CSRFError,
+    _admin_from_request,
+    _audit,
+    _check_csrf_token,
+    _client_dict,
+    _client_is_frozen,
+    _create_clients_for_user,
+    _inbound_dict,
+    _links_for_user,
+    _new_client_credentials,
+    _next_awg_address,
+    _next_pool_address,
+    _next_wg_address,
+    _notify_telegram,
+    _redirect,
+    _set_client_extra,
+    _set_client_frozen,
+    _ss2022_password,
+    _sub_host,
+    _template_ctx,
+    _traffic_chart,
+    _usable_clients,
+    db_session,
+    get_setting,
+    get_settings,
+    require_admin,
+    require_admin_api,
+    require_csrf,
+    require_csrf_api,
+    set_setting,
+    templates,
+)
 
 # Honor X-Forwarded-Proto for the session cookie's Secure flag only
 # when the operator declared a trusted TLS-terminating proxy
@@ -404,1226 +311,12 @@ ENV_AWG_PRIVATE_KEY = "SPARKY_AWG_PRIVATE_KEY"
 ENV_AWG_PUBLIC_KEY = "SPARKY_AWG_PUBLIC_KEY"
 
 # ---------------------------------------------------------------------------
-# i18n — inline fa/en strings (no app.i18n dependency).
+# i18n — Persian/English strings live in app/i18n.py (Phase 5 split).
+# Re-exported here so `main_mod.STRINGS` / `t_for` / `get_lang`
+# references (routes, templates context, tests, bot) keep working.
 # ---------------------------------------------------------------------------
 
-STRINGS: dict[str, dict[str, str]] = {
-    "fa": {
-        "app_name": "Sparky Manager",
-        "dashboard": "داشبورد",
-        "inbounds": "اینباندها",
-        "users": "کاربران",
-        "settings": "تنظیمات",
-        "logout": "خروج",
-        "login": "ورود",
-        "username": "نام کاربری",
-        "password": "رمز عبور",
-        "sign_in": "ورود به پنل",
-        "login_hint": "با حساب مدیر وارد شوید.",
-        "wrong_credentials": "نام کاربری یا رمز عبور اشتباه است.",
-        "locked_out": "به دلیل تلاش‌های ناموفق زیاد، ورود موقتاً قفل شده است. چند دقیقه دیگر تلاش کنید.",
-        "csrf_error_title": "درخواست نامعتبر است",
-        "csrf_error_message": "توکن امنیتی این فرم معتبر نیست یا منقضی شده است. لطفاً صفحه را تازه‌سازی کنید و دوباره تلاش کنید.",
-        "total_users": "کل کاربران",
-        "active_users": "کاربران فعال",
-        "total_inbounds": "کل اینباندها",
-        "traffic_used": "ترافیک مصرف‌شده",
-        "active_today": "فعال امروز",
-        "recent_users": "کاربران اخیر",
-        "protocol_distribution": "توزیع پروتکل‌ها",
-        "recent_activity": "فعالیت‌های اخیر",
-        "view_all": "مشاهدهٔ همه",
-        "refresh": "تازه‌سازی",
-        "search_inbounds": "جستجوی اینباند…",
-        "all_protocols": "همهٔ پروتکل‌ها",
-        "all_statuses": "همهٔ وضعیت‌ها",
-        "no_matches": "موردی پیدا نشد.",
-        "name": "نام",
-        "status": "وضعیت",
-        "enabled": "فعال",
-        "disabled": "غیرفعال",
-        "used": "مصرف‌شده",
-        "limit": "سقف",
-        "unlimited": "نامحدود",
-        "expires": "انقضا",
-        "never": "بدون انقضا",
-        "actions": "عملیات",
-        "add_user": "افزودن کاربر",
-        "add_inbound": "افزودن اینباند",
-        "new_values": "مقادیر جدید",
-        "port_auto_hint": "پورت و برچسب خودکار ساخته می‌شوند؛ کافیست ثبت کنید.",
-        "zedsecure_bundle": "خروجی ZedSecure",
-        "zedsecure_hint": "یک فایل JSON با همهٔ کانفیگ‌های این کاربر، مخصوص اپ ZedSecure.",
-        "file_exports": "فایل‌های کانفیگ",
-        "file_exports_hint": "فایل آمادهٔ دانلود برای پروتکل‌هایی که لینک اشتراک ندارند (OpenVPN ،OpenConnect ،AmneziaWG ،IKEv2).",
-        "note": "یادداشت",
-        "traffic_limit_gb": "سقف ترافیک (گیگابایت، خالی = نامحدود)",
-        "expires_days": "انقضا (روز، خالی = بدون انقضا)",
-        "create": "ایجاد",
-        "save": "ذخیره",
-        "delete": "حذف",
-        "toggle": "فعال / غیرفعال",
-        "rotate_token": "تعویض توکن اشتراک",
-        "confirm_delete": "آیا مطمئن هستید؟ این عمل قابل بازگشت نیست.",
-        "tag": "برچسب (tag)",
-        "core": "هسته",
-        "protocol": "پروتکل",
-        "port": "پورت",
-        "remark": "توضیح",
-        "sni": "SNI (برای Reality / TLS)",
-        "path": "مسیر (Path)",
-        "network": "شبکه / انتقال",
-        "domain": "دامنه (اختیاری — خالی یعنی بدون دامنه)",
-        "subscription_host": "هاست اشتراک (IP یا دامنه؛ خالی یعنی خودکار)",
-        "reality_sni": "SNI پیش‌فرض Reality",
-        "subscription_link": "لینک اشتراک",
-        "user_page": "صفحه کاربر",
-        "copy": "کپی",
-        "copied": "کپی شد!",
-        "show_password": "نمایش رمز",
-        "hide_password": "پنهان کردن رمز",
-        "back_to_users": "بازگشت به کاربران",
-        "back_to_dashboard": "بازگشت به داشبورد",
-        "no_users": "هنوز کاربری ساخته نشده است.",
-        "no_inbounds": "هنوز اینباندی ساخته نشده است.",
-        "clients": "کلاینت‌ها",
-        "share_links": "لینک‌های اشتراک",
-        "qr_code": "کد QR",
-        "sub_v2rayng": "اشتراک v2rayNG",
-        "sub_singbox": "اشتراک sing-box",
-        "user_not_found": "کاربر پیدا نشد.",
-        "user_unusable": "این اشتراک غیرفعال، منقضی یا پر شده است.",
-        "links_unavailable": "ماژول ساخت لینک هنوز در دسترس نیست.",
-        "rerender_failed": "خطا در بازسازی کانفیگ: ",
-        "port_in_use": "این پورت قبلاً استفاده شده است.",
-        "invalid_port": "پورت باید بین ۱ تا ۶۵۵۳۵ باشد.",
-        "port_reserved": "پورت‌های ۵۰۰ و ۴۵۰۰ برای IKEv2 رزرو شده‌اند و نمی‌توان آن‌ها را به اینباند داد.",
-        "invalid_name": "نام فقط می‌تواند شامل حروف، عدد، - و _ باشد.",
-        "name_exists": "کاربری با این نام از قبل وجود دارد.",
-        "tag_exists": "اینباندی با این برچسب از قبل وجود دارد.",
-        "traffic_today": "ترافیک امروز",
-        "sub_token": "توکن اشتراک",
-        "created_at": "ساخته شده",
-        "details": "جزئیات",
-        "logs": "لاگ‌ها",
-        "log_level": "سطح لاگ",
-        "log_level_hint": "DEBUG جزئیات بیشتری می‌نویسد (برای دیباگ خطاها)؛ بدون ری‌استارت اعمال می‌شود.",
-        "log_download": "دانلود لاگ",
-        "log_clear": "پاک‌کردن لاگ",
-        "log_search": "جستجو در لاگ",
-        "log_search_ph": "متن موردنظر…",
-        "log_filter_level": "سطح",
-        "log_empty": "هنوز لاگی نوشته نشده است.",
-        "log_file": "فایل لاگ",
-        "log_files": "فایل‌های لاگ",
-        "log_cleared": "لاگ پاک شد.",
-        "log_time": "زمان",
-        "log_message": "پیام",
-        "logs_hint": "جدیدترین خط‌ها اول می‌آیند. خطاها و ری‌استارت‌ها با جزئیات کامل اینجا ثبت می‌شوند.",
-        "confirm_clear_logs": "لاگ فعلی پاک شود؟",
-        "size": "اندازه",
-        "footer_note": "پنل VPN — فاز ۱",
-        # Inbound editor (Phase 1 of the professional-panel expansion).
-        "edit": "ویرایش",
-        "edit_inbound": "ویرایش اینباند",
-        "back_to_inbounds": "بازگشت به اینباندها",
-        "basic_settings": "تنظیمات پایه",
-        "security": "امنیت",
-        "security_none": "بدون امنیت",
-        "transport": "ترانسپورت",
-        "host_header": "هاست (Host header)",
-        "service_name": "نام سرویس gRPC",
-        "xhttp_mode": "حالت XHTTP",
-        "fingerprint": "اثرانگشت (Fingerprint)",
-        "reality_settings": "تنظیمات Reality",
-        "reality_dest": "مقصد (dest)",
-        "reality_server_names": "نام‌های سرور (با کاما جدا کنید)",
-        "short_id": "Short ID",
-        "private_key": "کلید خصوصی",
-        "public_key": "کلید عمومی",
-        "regenerate": "تولید دوباره",
-        "regenerate_reality_hint": "کلید و Short ID جدید ساخته می‌شود — لینک‌های قدیمی از کار می‌افتند.",
-        "tls_settings": "تنظیمات TLS",
-        "tls_sni": "SNI برای TLS",
-        "tls_alpn": "ALPN (با کاما جدا کنید)",
-        "tls_cert_path": "مسیر گواهی (cert)",
-        "tls_key_path": "مسیر کلید (key)",
-        "tls_paths_hint": "خالی یعنی گواهی پنل (Let's Encrypt یا خودامضا) استفاده می‌شود.",
-        "sniffing": "اسنیفینگ (تشخیص پروتکل)",
-        "sniffing_hint": "تشخیص خودکار پروتکل ترافیک (HTTP/TLS/QUIC) برای روتینگ بهتر.",
-        "fallbacks": "فالبک‌ها (Fallbacks)",
-        "fallbacks_hint": "هر خط یک مقصد: host:port یا host:port,xver — برای سرو چند پروتکل روی یک پورت.",
-        "up_mbps": "سقف آپلود (Mbps، خالی = بدون سقف)",
-        "down_mbps": "سقف دانلود (Mbps، خالی = بدون سقف)",
-        "congestion_control": "کنترل ازدحام",
-        "zero_rtt": "0-RTT (اتصال مجدد سریع‌تر)",
-        "strict_mode": "حالت سخت‌گیرانه (Strict mode)",
-        "inner_port": "پورت داخلی (Inner SS)",
-        "shadowtls_password": "رمز ShadowTLS",
-        "method": "روش رمزنگاری",
-        "subnet": "زیرشبکه (Subnet)",
-        "subnet_hint_wg": "آدرس سرور اولین آدرس این زیرشبکه می‌شود؛ آدرس‌های فعلی کاربرها تغییر نمی‌کند.",
-        "mtu": "MTU",
-        "dns_servers": "سرورهای DNS",
-        "dns_hint": "با کاما جدا کنید؛ حداکثر دو سرور.",
-        "server_key": "کلید سرور",
-        "regenerate_server_key": "تولید کلید سرور جدید",
-        "regenerate_server_key_hint": "کلید عمومی سرور عوض می‌شود — همهٔ کاربرها باید کانفیگ جدید بگیرند.",
-        "confirm_regenerate": "آیا مطمئن هستید؟ کانفیگ‌های فعلی از کار می‌افتند.",
-        "awg_params": "پارامترهای آمنزیا (Obfuscation)",
-        "awg_params_hint": "این مقادیر باید در سرور و کلاینت یکسان باشند؛ با تغییر آن‌ها کاربرها باید کانفیگ جدید بگیرند.",
-        "header_protection_key": "کلید محافظت از هدر",
-        "proto": "پروتکل انتقال",
-        "max_clients": "حداکثر کلاینت هم‌زمان",
-        "listen": "آدرس گوش دادن (Listen)",
-        "invalid_subnet": "زیرشبکه معتبر نیست (مثل 10.8.0.0/24).",
-        "invalid_dns": "آدرس DNS معتبر نیست.",
-        "invalid_mtu": "MTU باید بین ۵۷۶ تا ۹۰۰۰ باشد.",
-        "invalid_fallbacks": "فرمت فالبک اشتباه است (host:port یا host:port,xver).",
-        "invalid_short_id": "Short ID باید رشتهٔ هگزادسیمال با طول زوج باشد.",
-        "invalid_reality_key": "کلید خصوصی Reality معتبر نیست (۴۳ کاراکتر base64url).",
-        "invalid_awg_params": "پارامترهای آمنزیا معتبر نیستند: ",
-        "invalid_inner_port": "پورت داخلی باید بین ۱ تا ۶۵۵۳۵ باشد.",
-        "invalid_max_clients": "حداکثر کلاینت باید بین ۱ تا ۱۰۰۰۰۰ باشد.",
-        "invalid_mbps": "سقف سرعت باید عدد مثبت باشد.",
-        "invalid_transport": "ترنسپورت یا امنیت انتخاب‌شده معتبر نیست.",
-        "invalid_input": "ورودی معتبر نیست.",
-        "reality_key_failed": "ساخت کلیدهای Reality ناموفق بود.",
-        "invalid_mode": "حالت XHTTP معتبر نیست (auto / packet / stream).",
-        "invalid_fingerprint": "فینگرپرینت معتبر نیست.",
-        "invalid_congestion": "کنترل ازدحام معتبر نیست.",
-        "invalid_method": "روش رمزنگاری معتبر نیست.",
-        "reality_needs_tcp": "Reality فقط با TCP کار می‌کند — ترنسپورت را روی TCP بگذارید.",
-        "inbound_not_found": "اینباند پیدا نشد.",
-        "inbound_updated": "اینباند به‌روز شد.",
-        "reality_regenerated": "کلیدهای Reality تازه ساخته شدند.",
-        "awg_params_regenerated": "پارامترهای آمنزیا تازه ساخته شدند.",
-        "server_key_regenerated": "کلید سرور تازه ساخته شد — کاربرها باید کانفیگ جدید بگیرند.",
-        # User editor (Phase 2 of the professional-panel expansion).
-        "edit_user": "ویرایش کاربر",
-        "back_to_user": "بازگشت به کاربر",
-        "expiry_date": "تاریخ انقضا (خالی = بدون انقضا)",
-        "expiry_date_hint": "تاریخ به وقت UTC است و کاربر تا پایان همان روز معتبر می‌ماند.",
-        "flow": "Flow (XTLS)",
-        "flow_none": "بدون Flow",
-        "ip_limit": "سقف آی‌پی هم‌زمان",
-        "ip_limit_hint": "خالی یا صفر یعنی نامحدود. فعلاً فقط ذخیره و نمایش داده می‌شود — پنل راهی برای دیدن آی‌پی‌های متصل ندارد و سقف را اعمال نمی‌کند.",
-        "frozen": "فریز شده",
-        "freeze": "فریز",
-        "unfreeze": "آزاد کردن فریز",
-        "freeze_hint": "کاربر فریز شده نمی‌تواند وصل شود، ولی کانفیگ و سابقهٔ ترافیکش حفظ می‌شود.",
-        "move_to": "انتقال به اینباند",
-        "keep_inbound": "— همین اینباند —",
-        "move_hint": "فقط اینباندهای هم‌پروتکل که کاربر در آن‌ها کلاینت ندارد. برای وایرگارد/آمنزیا آدرس جدید از ساب‌نت مقصد گرفته می‌شود.",
-        "per_client_settings": "تنظیمات هر کلاینت",
-        "no_clients": "این کاربر کلاینتی ندارد.",
-        "bulk_actions": "عملیات گروهی",
-        "bulk_enable": "فعال‌کردن انتخاب‌شده‌ها",
-        "bulk_disable": "غیرفعال‌کردن انتخاب‌شده‌ها",
-        "bulk_delete": "حذف انتخاب‌شده‌ها",
-        "bulk_reset_traffic": "صفر کردن ترافیک انتخاب‌شده‌ها",
-        "bulk_extend_expiry": "تمدید انقضا",
-        "extend_days": "تمدید (روز)",
-        "extend_days_hint": "به انقضای فعلی اضافه می‌شود؛ برای کاربر بدون انقضا از امروز حساب می‌شود.",
-        "reset_traffic": "صفر کردن ترافیک",
-        "no_users_selected": "هیچ کاربری انتخاب نشده است.",
-        "invalid_action": "عملیات انتخاب‌شده معتبر نیست.",
-        "invalid_extend_days": "روزهای تمدید باید بین ۱ تا ۳۶۵۰ باشد.",
-        "invalid_expiry_date": "تاریخ انقضا معتبر نیست (قالب: YYYY-MM-DD).",
-        "invalid_ip_limit": "سقف آی‌پی باید بین ۱ تا ۱۰۰۰ باشد (خالی = نامحدود).",
-        "invalid_flow": "Flow انتخاب‌شده معتبر نیست.",
-        "flow_needs_tls": "Flow فقط با TLS یا Reality کار می‌کند.",
-        "flow_needs_vision": "برای اینباند Reality باید یک Flow از نوع Vision انتخاب شود.",
-        "move_invalid_target": "اینباند مقصد برای انتقال معتبر نیست.",
-        "move_address_exhausted": "در ساب‌نت اینباند مقصد آدرس آزاد نیست.",
-        "user_updated": "کاربر به‌روز شد.",
-        "user_frozen": "کاربر فریز شد — کلاینت‌هایش از کانفیگ‌ها حذف شدند.",
-        "user_unfrozen": "فریز کاربر برداشته شد.",
-        "bulk_done": "عملیات گروهی انجام شد.",
-        "confirm_bulk_delete": "کاربران انتخاب‌شده حذف شوند؟ این عمل قابل بازگشت نیست.",
-        "select_all": "انتخاب همه",
-        "traffic_reset_hint": "فقط شمارندهٔ ترافیک صفر می‌شود؛ سابقهٔ روزانه حفظ می‌شود.",
-        # Panel & server settings (Phase 3 of the professional-panel expansion).
-        "change_password": "تغییر رمز عبور",
-        "current_password": "رمز عبور فعلی",
-        "new_password": "رمز عبور جدید",
-        "confirm_password": "تکرار رمز عبور جدید",
-        "password_too_short": "رمز عبور جدید باید حداقل ۸ کاراکتر باشد.",
-        "password_mismatch": "تکرار رمز عبور با رمز جدید یکی نیست.",
-        "wrong_current_password": "رمز عبور فعلی اشتباه است.",
-        "password_changed": "رمز عبور عوض شد — نشست‌های دیگر خارج شدند.",
-        "password_change_hint": "بعد از تغییر، فایل ورود نصب‌کننده (/root/sparky-manager-login.txt) هنوز رمز قدیمی را دارد.",
-        "telegram_notifications": "اعلان‌های تلگرام",
-        "telegram_bot_token": "توکن ربات تلگرام",
-        "telegram_bot_token_hint": "خالی بگذارید تا توکن فعلی حفظ شود. توکن هیچ‌وقت نمایش داده نمی‌شود.",
-        "telegram_configured": "توکن تنظیم شده",
-        "telegram_chat_id": "آیدی چت تلگرام (عدد)",
-        "telegram_chat_id_hint": "آیدی عددی چت مدیر؛ می‌توانید از ربات @userinfobot بگیرید.",
-        "telegram_test": "ارسال پیام آزمایشی",
-        "telegram_test_sent": "پیام آزمایشی ارسال شد.",
-        "telegram_test_failed": "ارسال پیام آزمایشی ناموفق بود — توکن و آیدی چت را بررسی کنید.",
-        "telegram_not_configured": "تلگرام تنظیم نشده است — اول توکن و آیدی چت را ذخیره کنید.",
-        "invalid_chat_id": "آیدی چت باید عدد باشد (مثلاً 123456789 یا برای گروه با - شروع می‌شود).",
-        "backup_restore": "پشتیبان‌گیری و بازیابی",
-        "backup_download": "دانلود پشتیبان",
-        "backup_hint": "فایل ZIP شامل دیتابیس پنل و اطلاعات نسخه است. این فایل همهٔ رمزها، کلیدهای خصوصی و توکن ربات را دارد — مثل یک کلید خصوصی با آن رفتار کنید و هرگز آن را به اشتراک نگذارید.",
-        "restore_backup": "بازیابی از پشتیبان",
-        "restore_file": "فایل پشتیبان (ZIP یا .db)",
-        "restore_confirm": "می‌دانم که وضعیت فعلی پنل جایگزین می‌شود (از وضعیت فعلی اول پشتیبان گرفته می‌شود).",
-        "restore": "بازیابی",
-        "restore_hint": "بعد از بازیابی ممکن است لازم باشد دوباره وارد شوید.",
-        "restore_done": "بازیابی انجام شد — کانفیگ‌ها بازسازی شدند.",
-        "restore_no_file": "فایلی انتخاب نشده است.",
-        "restore_confirm_required": "برای بازیابی باید تأیید کنید.",
-        "restore_invalid": "فایل پشتیبان معتبر نیست: ",
-        "restore_newer_schema": "این پشتیبان از نسخهٔ جدیدتری است و با این پنل سازگار نیست.",
-        "restore_failed": "بازیابی ناموفق بود.",
-        "server_status": "وضعیت سرور",
-        "cpu_load": "بار پردازنده (۱ / ۵ / ۱۵ دقیقه)",
-        "memory": "حافظه (RAM)",
-        "disk": "دیسک",
-        "uptime": "مدت روشن بودن سرور",
-        "service": "سرویس",
-        "service_running": "در حال اجرا",
-        "service_stopped": "متوقف",
-        "service_unknown": "نامشخص",
-        "traffic_chart": "ترافیک ۱۴ روز گذشته",
-        "traffic_chart_user": "ترافیک این کاربر — ۱۴ روز گذشته",
-        "traffic_total_14d": "مجموع ۱۴ روز گذشته",
-        "no_traffic_data": "هنوز ترافیکی ثبت نشده است.",
-        "tg_test": "🔔 sparky-manager: پیام آزمایشی — اعلان‌های تلگرام فعال‌اند.",
-        "tg_user_created": "👤 کاربر جدید ساخته شد: {name}",
-        "tg_user_expiring": "⏰ کاربر «{name}» تا {hours} ساعت دیگر منقضی می‌شود.",
-        "tg_rerender_failed": "⚠️ بازسازی کانفیگ‌ها ناموفق بود: {errors}",
-        # Telegram management bot — webhook settings (Phase 4).
-        "telegram_webhook": "ربات تلگرام (مدیریت کامل)",
-        "telegram_webhook_hint": "با ثبت وب‌هوک، ربات از تلگرام به همهٔ کارهای پنل دسترسی دارد: کاربر، اینباند، لینک و وضعیت سرور. فقط آیدی چت مدیر بالا می‌تواند از ربات استفاده کند.",
-        "telegram_webhook_register": "ثبت / به‌روزرسانی وب‌هوک",
-        "telegram_webhook_refresh": "بررسی وضعیت وب‌هوک",
-        "telegram_webhook_url": "آدرس وب‌هوک",
-        "telegram_webhook_registered_at": "ثبت‌شده در",
-        "telegram_webhook_pending": "به‌روزرسانی‌های در انتظار",
-        "telegram_webhook_last_error": "آخرین خطا",
-        "telegram_webhook_not_registered": "وب‌هوک ثبت نشده است.",
-        "telegram_webhook_registered": "وب‌هوک ثبت شد — ربات در تلگرام فعال است.",
-        "telegram_webhook_failed": "ثبت وب‌هوک ناموفق بود:",
-        "telegram_webhook_status_ok": "وضعیت وب‌هوک به‌روز شد.",
-        "telegram_webhook_status_failed": "دریافت وضعیت وب‌هوک ناموفق بود — توکن و اتصال را بررسی کنید.",
-        "telegram_domain_required": "برای وب‌هوک اول باید دامنه را در تنظیمات وارد کنید.",
-        "telegram_webhook_port_warning": "تلگرام فقط روی پورت‌های ۴۴۳، ۸۰، ۸۸ و ۸۴۴۳ وب‌هوک می‌فرستد؛ پورت فعلی پنل در این لیست نیست (نصب‌کننده را با ‎--port 8443‎ دوباره اجرا کنید یا از ریورس‌پروکسی استفاده کنید).",
-        # Telegram management bot — transport (polling, Phase 4 follow-up).
-        "telegram_transport": "روش دریافت پیام‌های ربات",
-        "telegram_transport_webhook": "وب‌هوک",
-        "telegram_transport_polling": "پولینگ (دریافت دوره‌ای)",
-        "telegram_transport_hint": "پولینگ پیش‌فرض است و روی هر پورتی کار می‌کند؛ وب‌هوک فقط روی پورت‌های ۴۴۳، ۸۰، ۸۸ و ۸۴۴۳ کار می‌کند. تغییر روش بلافاصله اعمال می‌شود و نیازی به ری‌استارت پنل نیست.",
-        "telegram_polling_active": "پولینگ فعال شد — ربات پیام‌ها را مستقیم از تلگرام می‌گیرد.",
-        "telegram_polling_webhook_failed": "حذف وب‌هوک از تلگرام ناموفق بود — تا وب‌هوک حذف نشود پولینگ پیامی نمی‌گیرد؛ دوباره ذخیره کنید تا تلاش شود.",
-        # Telegram management bot — diagnostics + commands (upgrade Phase 3).
-        "telegram_diag": "وضعیت اتصال تلگرام",
-        "telegram_diag_mode": "روش اتصال",
-        "telegram_diag_bot": "ربات",
-        "telegram_diag_chat": "چت مجاز",
-        "telegram_diag_commands_registered": "دستورات ثبت‌شده در",
-        "telegram_diag_polling_last_poll": "آخرین پولینگ موفق",
-        "telegram_diag_polling_last_update": "آخرین پیام دریافتی",
-        "telegram_diag_polling_last_error": "آخرین خطای پولینگ",
-        "telegram_diag_polling_offset": "شمارهٔ آخرین به‌روزرسانی",
-        "telegram_diag_never": "هنوز نه",
-        "telegram_diag_identity_unknown": "نامشخص — «بررسی هویت ربات» را بزنید.",
-        "telegram_commands_register": "ثبت دستورات ربات",
-        "telegram_commands_registered": "دستورات ربات در تلگرام ثبت شد.",
-        "telegram_commands_failed": "ثبت دستورات ربات در تلگرام ناموفق بود:",
-        "telegram_identity_refresh": "بررسی هویت ربات",
-        "telegram_identity_ok": "هویت ربات به‌روز شد.",
-        "telegram_identity_failed": "دریافت هویت ربات ناموفق بود — توکن و اتصال را بررسی کنید.",
-        # Telegram management bot — bot strings (Phase 4).
-        "bot_welcome": "🤖 ربات مدیریت sparky-manager\n\nاز منو انتخاب کنید:",
-        "bot_help": "🤖 راهنمای ربات\n\n/start — منوی اصلی\n/help — همین راهنما\n/menu — منوی اصلی\n/status — وضعیت سرور و ترافیک\n/users — فهرست کاربران\n/inbounds — فهرست اینباندها\n/cancel — لغو عملیات در حال انجام\n\nاز منو می‌توانید کاربران را ببینید، جستجو و ویرایش کنید و بسازید، فریز/حذف/تمدید کنید، اینباندها را بسازید و فعال/غیرفعال/حذف کنید، لینک هر کاربر را بگیرید، سرویس‌ها را ریستارت کنید، بکاپ بگیرید و وضعیت سرور را ببینید.",
-        "bot_menu_users": "👥 کاربران",
-        "bot_menu_inbounds": "📡 اینباندها",
-        "bot_menu_status": "📊 وضعیت سرور",
-        "bot_menu_help": "❓ راهنما",
-        "bot_back_main": "🔙 منوی اصلی",
-        "bot_back_users": "🔙 کاربران",
-        "bot_back_inbounds": "🔙 اینباندها",
-        "bot_back": "🔙 بازگشت",
-        "bot_cancel": "❌ لغو",
-        "bot_cancelled": "لغو شد.",
-        "bot_users_title": "👥 کاربران (صفحه {page} از {pages})",
-        "bot_no_users": "هنوز کاربری ساخته نشده است.",
-        "bot_prev": "◀️ قبلی",
-        "bot_next": "بعدی ▶️",
-        "bot_new_user": "➕ کاربر جدید",
-        "bot_user_not_found": "کاربر پیدا نشد.",
-        "bot_inbound_not_found": "اینباند پیدا نشد.",
-        "bot_status_enabled": "فعال",
-        "bot_status_disabled": "غیرفعال",
-        "bot_status_expired": "منقضی‌شده",
-        "bot_status_over_quota": "تمام‌شده (حجم)",
-        "bot_status_frozen": "فریز شده",
-        "bot_traffic": "ترافیک",
-        "bot_expires": "انقضا",
-        "bot_never": "هرگز",
-        "bot_unlimited": "نامحدود",
-        "bot_inbounds": "اینباندها",
-        "bot_days_left": "{days} روز مانده",
-        "bot_links": "🔗 لینک‌ها",
-        "bot_links_title": "🔗 لینک‌های {name}",
-        "bot_sub_link": "سابسکریپشن",
-        "bot_no_links": "برای این کاربر لینکی نیست (کاربر غیرفعال یا منقضی است، یا کلاینتی ندارد).",
-        "bot_no_host": "برای ساخت لینک اول باید دامنه یا هاست سابسکریپشن را در تنظیمات پنل وارد کنید.",
-        "bot_freeze": "🧊 فریز",
-        "bot_unfreeze": "❄️ رفع فریز",
-        "bot_frozen": "کاربر فریز شد.",
-        "bot_unfrozen": "فریز کاربر برداشته شد.",
-        "bot_extend": "⏰ تمدید",
-        "bot_extend_prompt": "تمدید «{name}» — چند روز؟",
-        "bot_extend_days": "+{days} روز",
-        "bot_extended": "انقضای کاربر {days} روز تمدید شد.",
-        "bot_reset_traffic": "🔄 ریست ترافیک",
-        "bot_reset_confirm": "ترافیک «{name}» صفر شود؟ سابقهٔ روزانه حفظ می‌شود.",
-        "bot_traffic_reset": "ترافیک کاربر صفر شد.",
-        "bot_delete": "🗑️ حذف",
-        "bot_delete_confirm": "«{name}» حذف شود؟ این عمل قابل بازگشت نیست.",
-        "bot_deleted": "کاربر حذف شد.",
-        "bot_confirm_yes": "✅ بله",
-        "bot_confirm_no": "❌ خیر",
-        "bot_create_name": "➕ ساخت کاربر جدید\n\nنام کاربر را بفرستید (فقط حروف، عدد، ‎-‎ و ‎_‎):",
-        "bot_create_name_invalid": "نام معتبر نیست — فقط حروف انگلیسی، عدد، ‎-‎ و ‎_‎ مجاز است. دوباره بفرستید:",
-        "bot_create_name_exists": "کاربری با این نام هست. نام دیگری بفرستید:",
-        "bot_create_pick_inbounds": "اینباندهای این کاربر را انتخاب کنید (با ضربه زدن روشن/خاموش می‌شوند؛ پیش‌فرض همهٔ اینباندهای فعال):",
-        "bot_create_no_inbounds": "اینباند فعالی نیست — اول از پنل یک اینباند بسازید و فعال کنید.",
-        "bot_create_pick_one": "حداقل یک اینباند انتخاب کنید.",
-        "bot_create_limit": "حجم کاربر (گیگابایت)؟ ۰ یا خالی یعنی نامحدود:",
-        "bot_create_limit_invalid": "عدد معتبر نیست — حجم را به گیگابایت بفرستید (مثلاً ۱۰) یا ۰ برای نامحدود:",
-        "bot_create_expiry": "انقضا (روز)؟ ۰ یا خالی یعنی بدون انقضا:",
-        "bot_create_expiry_invalid": "عدد معتبر نیست — تعداد روز را بفرستید (مثلاً ۳۰) یا ۰ برای بدون انقضا:",
-        "bot_create_done": "✅ کاربر «{name}» ساخته شد.",
-        "bot_create_failed": "ساخت کاربر ناموفق بود.",
-        "bot_create_confirm": "✅ انجام شد",
-        "bot_use_buttons": "لطفاً از دکمه‌ها استفاده کنید (یا /cancel برای لغو).",
-        "bot_flow_expired": "این عملیات منقضی شده است — دوباره شروع کنید.",
-        "bot_inbounds_title": "📡 اینباندها",
-        "bot_no_inbounds": "هنوز اینباندی ساخته نشده است.",
-        "bot_enable": "✅ فعال کردن",
-        "bot_disable": "❌ غیرفعال کردن",
-        "bot_inbound_toggled": "اینباند {state} شد.",
-        "bot_status_title": "📊 وضعیت سرور",
-        "bot_status_users": "👥 کاربران: {total} ({enabled} فعال، {expired} منقضی)",
-        "bot_traffic_today": "📈 ترافیک امروز",
-        "bot_traffic_14d": "📈 ترافیک ۱۴ روز گذشته",
-        "bot_unknown_command": "دستور ناشناخته است — /help را بفرستید یا از منو استفاده کنید.",
-        "bot_rerender_failed": "بازسازی کانفیگ‌ها ناموفق بود:",
-        "bot_action_failed": "عملیات ناموفق بود.",
-        "bot_view_user": "👤 مشاهدهٔ کاربر",
-        # Telegram management bot — upgrade Phase 3 (search, edit,
-        # inbound create/delete, services, backup, stale callbacks).
-        "bot_menu_services": "🛠️ سرویس‌ها",
-        "bot_menu_backup": "📦 بکاپ",
-        "bot_search": "🔍 جستجو",
-        "bot_search_prompt": "🔍 جستجوی کاربر\n\nنام یا یادداشت کاربر را بفرستید (بخشی از آن کافی است):",
-        "bot_search_title": "🔍 نتایج جستجو برای «{query}» (صفحه {page} از {pages})",
-        "bot_search_no_match": "کاربری با این مشخصات پیدا نشد.",
-        "bot_edit": "✏️ ویرایش",
-        "bot_edit_pick": "کدام را ویرایش کنیم؟",
-        "bot_edit_name": "نام",
-        "bot_edit_limit": "حجم",
-        "bot_edit_expiry": "انقضا",
-        "bot_edit_name_prompt": "نام جدید «{name}» را بفرستید (فقط حروف، عدد، ‎-‎ و ‎_‎):",
-        "bot_edit_limit_prompt": "حجم جدید (گیگابایت)؟ ۰ یا خالی یعنی نامحدود:",
-        "bot_edit_expiry_prompt": "انقضای جدید (روز از امروز)؟ ۰ یا خالی یعنی بدون انقضا:",
-        "bot_edited": "✅ ویرایش انجام شد.",
-        "bot_new_inbound": "➕ اینباند جدید",
-        "bot_create_inbound_protocol": "پروتکل اینباند جدید را انتخاب کنید:",
-        "bot_create_inbound_port": "پورت اینباند؟ خالی یعنی خودکار:",
-        "bot_create_inbound_port_invalid": "پورت معتبر نیست — عددی بین ۱ تا ۶۵۵۳۵ بفرستید یا خالی برای خودکار:",
-        "bot_create_inbound_port_in_use": "این پورت روی همین پروتکل استفاده شده است — پورت دیگری بفرستید یا خالی برای خودکار:",
-        "bot_create_inbound_port_reserved": "این پورت رزرو شده است (IKEv2) — پورت دیگری بفرستید:",
-        "bot_create_inbound_sni": "SNI برای {protocol}؟ خالی یعنی پیش‌فرض پنل ({sni}):",
-        "bot_create_inbound_done": "✅ اینباند «{tag}» ساخته شد ({protocol}:{port}).",
-        "bot_create_inbound_failed": "ساخت اینباند ناموفق بود.",
-        "bot_inbound_delete_confirm": "اینباند «{tag}» حذف شود؟ همهٔ کلاینت‌های آن هم حذف می‌شوند. این عمل قابل بازگشت نیست.",
-        "bot_inbound_deleted": "اینباند حذف شد.",
-        "bot_services_title": "🛠️ سرویس‌ها",
-        "bot_service_running": "در حال اجرا",
-        "bot_service_stopped": "متوقف",
-        "bot_service_unknown": "نامشخص",
-        "bot_service_restart": "🔄 ریستارت",
-        "bot_service_restart_confirm": "سرویس «{name}» ریستارت شود؟",
-        "bot_service_restarted": "✅ سرویس «{name}» ریستارت شد و در حال اجراست.",
-        "bot_service_restart_failed": "❌ ریستارت «{name}» ناموفق بود:",
-        "bot_service_restart_unverified": "🔄 ریستارت «{name}» انجام شد، ولی وضعیت سرویس قابل بررسی نیست.",
-        "bot_services_awg_note": "ریستارت AmneziaWG از ربات ممکن نیست (دسترسی لازم در نصب‌کننده تعریف نشده است).",
-        "bot_backup_title": "📦 بکاپ",
-        "bot_backup_hint": "بکاپ شامل کل دیتابیس و کلیدهاست — آن را مثل کلید خصوصی نگه دارید. فقط به همین چت فرستاده می‌شود.",
-        "bot_backup_send": "📦 دریافت بکاپ",
-        "bot_backup_sent": "✅ بکاپ فرستاده شد.",
-        "bot_backup_failed": "ساخت یا ارسال بکاپ ناموفق بود.",
-        "bot_backup_too_large": "بکاپ بزرگ‌تر از حد تلگرام (۵۰ مگابایت) است — از صفحهٔ تنظیمات پنل دانلود کنید.",
-        "bot_stale_callback": "این دکمه دیگر معتبر نیست — از منو ادامه بدهید.",
-        # -- Phase 4 (UI redesign) --
-        "nav_overview": "نمای کلی",
-        "nav_management": "مدیریت",
-        "nav_monitoring": "پایش",
-        "nav_system": "سیستم",
-        "nav_collapse": "جمع‌کردن نوار کناری",
-        "nav_expand": "باز کردن نوار کناری",
-        "nav_menu": "منو",
-        "nav_close": "بستن",
-        "search_users": "جستجوی کاربر…",
-        "filter_expired": "منقضی‌شده",
-        "expired": "منقضی‌شده",
-        "sort_by": "مرتب‌سازی",
-        "sort_newest": "جدیدترین",
-        "sort_name": "نام (الفبا)",
-        "sort_expiry": "نزدیک‌ترین انقضا",
-        "sort_traffic": "بیشترین مصرف",
-        "filter_apply": "اعمال",
-        "filter_clear": "پاک کردن فیلتر",
-        "page_of": "صفحهٔ {page} از {pages}",
-        "page_prev": "قبلی",
-        "page_next": "بعدی",
-        "users_showing": "نمایش {shown} از {total} کاربر",
-        "bulk_page_hint": "عملیات گروهی فقط روی کاربران انتخاب‌شده در همین صفحه انجام می‌شود.",
-        "settings_general": "عمومی",
-        "settings_telegram": "تلگرام",
-        "settings_security": "امنیت",
-        "settings_backup": "پشتیبان‌گیری",
-        "settings_services": "سرویس‌ها",
-        "settings_advanced": "پیشرفته",
-        "settings_general_desc": "هویت عمومی پنل: دامنه، میزبان اشتراک و SNI پیش‌فرض.",
-        "settings_telegram_desc": "اعلان‌ها و ربات مدیریت تلگرام.",
-        "settings_security_desc": "رمز عبور مدیر پنل.",
-        "settings_backup_desc": "دانلود و بازیابی نسخهٔ پشتیبان.",
-        "settings_services_desc": "وضعیت زندهٔ سرور و سرویس‌ها.",
-        "settings_advanced_desc": "تنظیمات پیشرفته؛ فقط در صورت نیاز تغییر دهید.",
-        "domain_hint": "دامنهٔ عمومی پنل؛ در لینک‌های اشتراک و وبهوک تلگرام استفاده می‌شود.",
-        "subscription_host_hint": "میزبان لینک‌های اشتراک؛ خالی یعنی همان دامنه یا آی‌پی سرور.",
-        "reality_sni_hint": "SNI پیش‌فرض برای اینباندهای Reality جدید.",
-        "server_status_unavailable": "وضعیت سرور در دسترس نیست.",
-    },
-    "en": {
-        "app_name": "Sparky Manager",
-        "dashboard": "Dashboard",
-        "inbounds": "Inbounds",
-        "users": "Users",
-        "settings": "Settings",
-        "logout": "Log out",
-        "login": "Login",
-        "username": "Username",
-        "password": "Password",
-        "sign_in": "Sign in to the panel",
-        "login_hint": "Sign in with the admin account.",
-        "wrong_credentials": "Wrong username or password.",
-        "locked_out": "Too many failed attempts — login is temporarily locked. Try again in a few minutes.",
-        "csrf_error_title": "Invalid request",
-        "csrf_error_message": "This form's security token is missing or expired. Please reload the page and try again.",
-        "total_users": "Total users",
-        "active_users": "Active users",
-        "total_inbounds": "Total inbounds",
-        "traffic_used": "Traffic used",
-        "active_today": "Active today",
-        "recent_users": "Recent users",
-        "protocol_distribution": "Protocol distribution",
-        "recent_activity": "Recent activity",
-        "view_all": "View all",
-        "refresh": "Refresh",
-        "search_inbounds": "Search inbounds…",
-        "all_protocols": "All protocols",
-        "all_statuses": "All states",
-        "no_matches": "No matches.",
-        "name": "Name",
-        "status": "Status",
-        "enabled": "Enabled",
-        "disabled": "Disabled",
-        "used": "Used",
-        "limit": "Limit",
-        "unlimited": "Unlimited",
-        "expires": "Expires",
-        "never": "Never",
-        "actions": "Actions",
-        "add_user": "Add user",
-        "add_inbound": "Add inbound",
-        "new_values": "New values",
-        "port_auto_hint": "Port and tag are auto-generated — just submit.",
-        "zedsecure_bundle": "ZedSecure export",
-        "zedsecure_hint": "One JSON file with all of this user's configs, made for the ZedSecure app.",
-        "file_exports": "Config files",
-        "file_exports_hint": "Ready-to-download files for the protocols without a share link (OpenVPN, OpenConnect, AmneziaWG, IKEv2).",
-        "note": "Note",
-        "traffic_limit_gb": "Traffic limit (GB, empty = unlimited)",
-        "expires_days": "Expiry (days, empty = never)",
-        "create": "Create",
-        "save": "Save",
-        "delete": "Delete",
-        "toggle": "Enable / disable",
-        "rotate_token": "Rotate subscription token",
-        "confirm_delete": "Are you sure? This cannot be undone.",
-        "tag": "Tag",
-        "core": "Core",
-        "protocol": "Protocol",
-        "port": "Port",
-        "remark": "Remark",
-        "sni": "SNI (for Reality / TLS)",
-        "path": "Path",
-        "network": "Network / transport",
-        "domain": "Domain (optional — empty means no domain)",
-        "subscription_host": "Subscription host (IP or domain; empty = automatic)",
-        "reality_sni": "Default Reality SNI",
-        "subscription_link": "Subscription link",
-        "user_page": "User page",
-        "copy": "Copy",
-        "copied": "Copied!",
-        "show_password": "Show password",
-        "hide_password": "Hide password",
-        "back_to_users": "Back to users",
-        "back_to_dashboard": "Back to dashboard",
-        "no_users": "No users yet.",
-        "no_inbounds": "No inbounds yet.",
-        "clients": "Clients",
-        "share_links": "Share links",
-        "qr_code": "QR code",
-        "sub_v2rayng": "v2rayNG subscription",
-        "sub_singbox": "sing-box subscription",
-        "user_not_found": "User not found.",
-        "user_unusable": "This subscription is disabled, expired or out of quota.",
-        "links_unavailable": "The link-builder module is not available yet.",
-        "rerender_failed": "Config re-render failed: ",
-        "port_in_use": "This port is already in use.",
-        "invalid_port": "Port must be between 1 and 65535.",
-        "port_reserved": "Ports 500 and 4500 are reserved for IKEv2 and cannot be assigned to an inbound.",
-        "invalid_name": "Name may only contain letters, digits, - and _.",
-        "name_exists": "A user with this name already exists.",
-        "tag_exists": "An inbound with this tag already exists.",
-        "traffic_today": "Traffic today",
-        "sub_token": "Subscription token",
-        "created_at": "Created",
-        "details": "Details",
-        "logs": "Logs",
-        "log_level": "Log level",
-        "log_level_hint": "DEBUG writes more detail (for debugging errors); applies without a restart.",
-        "log_download": "Download log",
-        "log_clear": "Clear log",
-        "log_search": "Search logs",
-        "log_search_ph": "Search text…",
-        "log_filter_level": "Level",
-        "log_empty": "No log lines yet.",
-        "log_file": "Log file",
-        "log_files": "Log files",
-        "log_cleared": "Log cleared.",
-        "log_time": "Time",
-        "log_message": "Message",
-        "logs_hint": "Newest lines first. Errors and restarts are recorded here with full detail.",
-        "confirm_clear_logs": "Clear the current log?",
-        "size": "Size",
-        "footer_note": "VPN Panel — Phase 1",
-        # Inbound editor (Phase 1 of the professional-panel expansion).
-        "edit": "Edit",
-        "edit_inbound": "Edit inbound",
-        "back_to_inbounds": "Back to inbounds",
-        "basic_settings": "Basic settings",
-        "security": "Security",
-        "security_none": "None",
-        "transport": "Transport",
-        "host_header": "Host header",
-        "service_name": "gRPC service name",
-        "xhttp_mode": "XHTTP mode",
-        "fingerprint": "Fingerprint",
-        "reality_settings": "Reality settings",
-        "reality_dest": "Destination (dest)",
-        "reality_server_names": "Server names (comma-separated)",
-        "short_id": "Short ID",
-        "private_key": "Private key",
-        "public_key": "Public key",
-        "regenerate": "Regenerate",
-        "regenerate_reality_hint": "A new keypair and short ID are generated — old links stop working.",
-        "tls_settings": "TLS settings",
-        "tls_sni": "TLS SNI",
-        "tls_alpn": "ALPN (comma-separated)",
-        "tls_cert_path": "Certificate path",
-        "tls_key_path": "Key path",
-        "tls_paths_hint": "Empty means the panel certificate (Let's Encrypt or self-signed) is used.",
-        "sniffing": "Sniffing",
-        "sniffing_hint": "Auto-detect the traffic protocol (HTTP/TLS/QUIC) for better routing.",
-        "fallbacks": "Fallbacks",
-        "fallbacks_hint": "One destination per line: host:port or host:port,xver — serve several protocols on one port.",
-        "up_mbps": "Upload cap (Mbps, empty = no cap)",
-        "down_mbps": "Download cap (Mbps, empty = no cap)",
-        "congestion_control": "Congestion control",
-        "zero_rtt": "0-RTT (faster reconnect)",
-        "strict_mode": "Strict mode",
-        "inner_port": "Inner port (inner SS)",
-        "shadowtls_password": "ShadowTLS password",
-        "method": "Cipher method",
-        "subnet": "Subnet",
-        "subnet_hint_wg": "The server takes the first address of this subnet; existing users keep their addresses.",
-        "mtu": "MTU",
-        "dns_servers": "DNS servers",
-        "dns_hint": "Comma-separated; at most two servers.",
-        "server_key": "Server key",
-        "regenerate_server_key": "Regenerate server key",
-        "regenerate_server_key_hint": "The server public key changes — all users must re-fetch their configs.",
-        "confirm_regenerate": "Are you sure? Current configs will stop working.",
-        "awg_params": "AmneziaWG obfuscation parameters",
-        "awg_params_hint": "These values must match on server and client; changing them means users must re-fetch their configs.",
-        "header_protection_key": "Header protection key",
-        "proto": "Transport protocol",
-        "max_clients": "Max simultaneous clients",
-        "listen": "Listen address",
-        "invalid_subnet": "Invalid subnet (e.g. 10.8.0.0/24).",
-        "invalid_dns": "Invalid DNS address.",
-        "invalid_mtu": "MTU must be between 576 and 9000.",
-        "invalid_fallbacks": "Invalid fallback format (host:port or host:port,xver).",
-        "invalid_short_id": "Short ID must be a hex string with even length.",
-        "invalid_reality_key": "Invalid Reality private key (43-char base64url).",
-        "invalid_awg_params": "Invalid AmneziaWG parameters: ",
-        "invalid_inner_port": "Inner port must be between 1 and 65535.",
-        "invalid_max_clients": "Max clients must be between 1 and 100000.",
-        "invalid_mbps": "Speed cap must be a positive number.",
-        "invalid_transport": "Invalid transport or security selection.",
-        "invalid_input": "Invalid input.",
-        "reality_key_failed": "Reality key generation failed.",
-        "invalid_mode": "Invalid XHTTP mode (auto / packet / stream).",
-        "invalid_fingerprint": "Invalid fingerprint.",
-        "invalid_congestion": "Invalid congestion control.",
-        "invalid_method": "Invalid encryption method.",
-        "reality_needs_tcp": "Reality only works over TCP — set the transport to TCP.",
-        "inbound_not_found": "Inbound not found.",
-        "inbound_updated": "Inbound updated.",
-        "reality_regenerated": "Reality keys regenerated.",
-        "awg_params_regenerated": "AmneziaWG parameters regenerated.",
-        "server_key_regenerated": "Server key regenerated — users must re-fetch their configs.",
-        # User editor (Phase 2 of the professional-panel expansion).
-        "edit_user": "Edit user",
-        "back_to_user": "Back to user",
-        "expiry_date": "Expiry date (empty = never)",
-        "expiry_date_hint": "The date is UTC; the user stays valid through the end of that day.",
-        "flow": "Flow (XTLS)",
-        "flow_none": "No flow",
-        "ip_limit": "Concurrent IP limit",
-        "ip_limit_hint": "Empty or 0 means unlimited. Stored and shown only for now — the panel has no way to see connected IPs, so the limit is not enforced.",
-        "frozen": "Frozen",
-        "freeze": "Freeze",
-        "unfreeze": "Unfreeze",
-        "freeze_hint": "A frozen user cannot connect, but keeps configs and traffic history.",
-        "move_to": "Move to inbound",
-        "keep_inbound": "— keep this inbound —",
-        "move_hint": "Only same-protocol inbounds without a client for this user. WireGuard/AmneziaWG get a fresh address from the target subnet.",
-        "per_client_settings": "Per-client settings",
-        "no_clients": "This user has no clients.",
-        "bulk_actions": "Bulk actions",
-        "bulk_enable": "Enable selected",
-        "bulk_disable": "Disable selected",
-        "bulk_delete": "Delete selected",
-        "bulk_reset_traffic": "Reset traffic of selected",
-        "bulk_extend_expiry": "Extend expiry",
-        "extend_days": "Extend (days)",
-        "extend_days_hint": "Added to the current expiry; for users without expiry it counts from today.",
-        "reset_traffic": "Reset traffic",
-        "no_users_selected": "No users selected.",
-        "invalid_action": "Invalid bulk action.",
-        "invalid_extend_days": "Extension days must be between 1 and 3650.",
-        "invalid_expiry_date": "Invalid expiry date (format: YYYY-MM-DD).",
-        "invalid_ip_limit": "IP limit must be between 1 and 1000 (empty = unlimited).",
-        "invalid_flow": "Invalid flow selection.",
-        "flow_needs_tls": "Flow only works with TLS or Reality.",
-        "flow_needs_vision": "A Reality inbound needs a Vision flow.",
-        "move_invalid_target": "Invalid move target inbound.",
-        "move_address_exhausted": "No free address in the target inbound's subnet.",
-        "user_updated": "User updated.",
-        "user_frozen": "User frozen — clients removed from configs.",
-        "user_unfrozen": "User unfrozen.",
-        "bulk_done": "Bulk action completed.",
-        "confirm_bulk_delete": "Delete the selected users? This cannot be undone.",
-        "select_all": "Select all",
-        "traffic_reset_hint": "Only the traffic counter is reset; daily history is kept.",
-        # Panel & server settings (Phase 3 of the professional-panel expansion).
-        "change_password": "Change password",
-        "current_password": "Current password",
-        "new_password": "New password",
-        "confirm_password": "Confirm new password",
-        "password_too_short": "The new password must be at least 8 characters.",
-        "password_mismatch": "The confirmation does not match the new password.",
-        "wrong_current_password": "The current password is wrong.",
-        "password_changed": "Password changed — other sessions were signed out.",
-        "password_change_hint": "After changing, the installer's login file (/root/sparky-manager-login.txt) still has the old password.",
-        "telegram_notifications": "Telegram notifications",
-        "telegram_bot_token": "Telegram bot token",
-        "telegram_bot_token_hint": "Leave blank to keep the current token. The token is never displayed.",
-        "telegram_configured": "Token configured",
-        "telegram_chat_id": "Telegram chat ID (number)",
-        "telegram_chat_id_hint": "The admin's numeric chat ID; you can get it from @userinfobot.",
-        "telegram_test": "Send test message",
-        "telegram_test_sent": "Test message sent.",
-        "telegram_test_failed": "Test message failed — check the token and chat ID.",
-        "telegram_not_configured": "Telegram is not configured — save a token and chat ID first.",
-        "invalid_chat_id": "Chat ID must be a number (e.g. 123456789, or starting with - for a group).",
-        "backup_restore": "Backup & restore",
-        "backup_download": "Download backup",
-        "backup_hint": "A ZIP with the panel database and version info. It contains every password, private key and the bot token — treat it like a private key and never share it.",
-        "restore_backup": "Restore from backup",
-        "restore_file": "Backup file (ZIP or .db)",
-        "restore_confirm": "I understand the current panel state will be replaced (it is backed up first).",
-        "restore": "Restore",
-        "restore_hint": "You may need to log in again after a restore.",
-        "restore_done": "Restore completed — configs were re-rendered.",
-        "restore_no_file": "No file selected.",
-        "restore_confirm_required": "Tick the confirmation box to restore.",
-        "restore_invalid": "Invalid backup file: ",
-        "restore_newer_schema": "This backup is from a newer version and is not compatible with this panel.",
-        "restore_failed": "Restore failed.",
-        "server_status": "Server status",
-        "cpu_load": "CPU load (1 / 5 / 15 min)",
-        "memory": "Memory (RAM)",
-        "disk": "Disk",
-        "uptime": "Server uptime",
-        "service": "Service",
-        "service_running": "Running",
-        "service_stopped": "Stopped",
-        "service_unknown": "Unknown",
-        "traffic_chart": "Traffic — last 14 days",
-        "traffic_chart_user": "This user's traffic — last 14 days",
-        "traffic_total_14d": "Total, last 14 days",
-        "no_traffic_data": "No traffic recorded yet.",
-        "tg_test": "🔔 sparky-manager: test message — Telegram notifications are working.",
-        "tg_user_created": "👤 New user created: {name}",
-        "tg_user_expiring": "⏰ User “{name}” expires in {hours} hours.",
-        "tg_rerender_failed": "⚠️ Config re-render failed: {errors}",
-        # Telegram management bot — webhook settings (Phase 4).
-        "telegram_webhook": "Telegram bot (full management)",
-        "telegram_webhook_hint": "Registering the webhook lets the bot manage the whole panel from Telegram: users, inbounds, links and server status. Only the admin chat ID above can use the bot.",
-        "telegram_webhook_register": "Register / update webhook",
-        "telegram_webhook_refresh": "Check webhook status",
-        "telegram_webhook_url": "Webhook URL",
-        "telegram_webhook_registered_at": "Registered at",
-        "telegram_webhook_pending": "Pending updates",
-        "telegram_webhook_last_error": "Last error",
-        "telegram_webhook_not_registered": "Webhook not registered.",
-        "telegram_webhook_registered": "Webhook registered — the bot is live on Telegram.",
-        "telegram_webhook_failed": "Webhook registration failed:",
-        "telegram_webhook_status_ok": "Webhook status refreshed.",
-        "telegram_webhook_status_failed": "Could not fetch webhook status — check the token and connection.",
-        "telegram_domain_required": "Set a domain in settings first — the webhook needs a public HTTPS URL.",
-        "telegram_webhook_port_warning": "Telegram only delivers webhooks on ports 443, 80, 88 and 8443; the panel's current port is not in that list (re-run the installer with --port 8443 or use a reverse proxy).",
-        # Telegram management bot — transport (polling, Phase 4 follow-up).
-        "telegram_transport": "How the bot receives updates",
-        "telegram_transport_webhook": "Webhook",
-        "telegram_transport_polling": "Polling",
-        "telegram_transport_hint": "Polling is the default and works on any port; webhooks only work on ports 443, 80, 88 and 8443. Switching takes effect immediately — no panel restart needed.",
-        "telegram_polling_active": "Polling active — the bot now fetches updates directly from Telegram.",
-        "telegram_polling_webhook_failed": "Could not remove the webhook from Telegram — polling receives nothing until the webhook is removed; save again to retry.",
-        # Telegram management bot — diagnostics + commands (upgrade Phase 3).
-        "telegram_diag": "Telegram connection",
-        "telegram_diag_mode": "Connection mode",
-        "telegram_diag_bot": "Bot",
-        "telegram_diag_chat": "Authorized chat",
-        "telegram_diag_commands_registered": "Commands registered at",
-        "telegram_diag_polling_last_poll": "Last successful poll",
-        "telegram_diag_polling_last_update": "Last update received",
-        "telegram_diag_polling_last_error": "Last polling error",
-        "telegram_diag_polling_offset": "Last update id",
-        "telegram_diag_never": "not yet",
-        "telegram_diag_identity_unknown": "Unknown — press “Check bot identity”.",
-        "telegram_commands_register": "Register bot commands",
-        "telegram_commands_registered": "Bot commands registered on Telegram.",
-        "telegram_commands_failed": "Registering the bot commands on Telegram failed:",
-        "telegram_identity_refresh": "Check bot identity",
-        "telegram_identity_ok": "Bot identity refreshed.",
-        "telegram_identity_failed": "Could not fetch the bot identity — check the token and the connection.",
-        # Telegram management bot — bot strings (Phase 4).
-        "bot_welcome": "🤖 sparky-manager management bot\n\nPick from the menu:",
-        "bot_help": "🤖 Bot help\n\n/start — main menu\n/help — this help\n/menu — main menu\n/status — server status and traffic\n/users — user list\n/inbounds — inbound list\n/cancel — abort the current operation\n\nFrom the menu you can list, search, edit and create users, freeze/delete/extend them, create, enable/disable and delete inbounds, get any user's links, restart services, get a backup, and check server status.",
-        "bot_menu_users": "👥 Users",
-        "bot_menu_inbounds": "📡 Inbounds",
-        "bot_menu_status": "📊 Server status",
-        "bot_menu_help": "❓ Help",
-        "bot_back_main": "🔙 Main menu",
-        "bot_back_users": "🔙 Users",
-        "bot_back_inbounds": "🔙 Inbounds",
-        "bot_back": "🔙 Back",
-        "bot_cancel": "❌ Cancel",
-        "bot_cancelled": "Cancelled.",
-        "bot_users_title": "👥 Users (page {page} of {pages})",
-        "bot_no_users": "No users yet.",
-        "bot_prev": "◀️ Previous",
-        "bot_next": "Next ▶️",
-        "bot_new_user": "➕ New user",
-        "bot_user_not_found": "User not found.",
-        "bot_inbound_not_found": "Inbound not found.",
-        "bot_status_enabled": "enabled",
-        "bot_status_disabled": "disabled",
-        "bot_status_expired": "expired",
-        "bot_status_over_quota": "out of traffic",
-        "bot_status_frozen": "frozen",
-        "bot_traffic": "Traffic",
-        "bot_expires": "Expires",
-        "bot_never": "never",
-        "bot_unlimited": "unlimited",
-        "bot_inbounds": "Inbounds",
-        "bot_days_left": "{days} days left",
-        "bot_links": "🔗 Links",
-        "bot_links_title": "🔗 Links for {name}",
-        "bot_sub_link": "Subscription",
-        "bot_no_links": "No links for this user (disabled, expired, or no clients).",
-        "bot_no_host": "Set a domain or subscription host in the panel settings first — links need a server address.",
-        "bot_freeze": "🧊 Freeze",
-        "bot_unfreeze": "❄️ Unfreeze",
-        "bot_frozen": "User frozen.",
-        "bot_unfrozen": "User unfrozen.",
-        "bot_extend": "⏰ Extend",
-        "bot_extend_prompt": "Extend “{name}” — by how many days?",
-        "bot_extend_days": "+{days} days",
-        "bot_extended": "User expiry extended by {days} days.",
-        "bot_reset_traffic": "🔄 Reset traffic",
-        "bot_reset_confirm": "Reset “{name}”'s traffic counter to zero? Daily history is kept.",
-        "bot_traffic_reset": "User traffic reset.",
-        "bot_delete": "🗑️ Delete",
-        "bot_delete_confirm": "Delete “{name}”? This cannot be undone.",
-        "bot_deleted": "User deleted.",
-        "bot_confirm_yes": "✅ Yes",
-        "bot_confirm_no": "❌ No",
-        "bot_create_name": "➕ New user\n\nSend the user name (letters, digits, - and _ only):",
-        "bot_create_name_invalid": "Invalid name — only letters, digits, - and _ are allowed. Send it again:",
-        "bot_create_name_exists": "A user with this name already exists. Send another name:",
-        "bot_create_pick_inbounds": "Pick this user's inbounds (tap to toggle; all enabled inbounds are selected by default):",
-        "bot_create_no_inbounds": "No enabled inbounds — create and enable one in the panel first.",
-        "bot_create_pick_one": "Pick at least one inbound.",
-        "bot_create_limit": "Traffic limit in GB? 0 or empty means unlimited:",
-        "bot_create_limit_invalid": "Not a valid number — send the limit in GB (e.g. 10) or 0 for unlimited:",
-        "bot_create_expiry": "Expiry in days? 0 or empty means never expires:",
-        "bot_create_expiry_invalid": "Not a valid number — send the days (e.g. 30) or 0 for no expiry:",
-        "bot_create_done": "✅ User “{name}” created.",
-        "bot_create_failed": "Could not create the user.",
-        "bot_create_confirm": "✅ Done",
-        "bot_use_buttons": "Please use the buttons (or /cancel to abort).",
-        "bot_flow_expired": "This operation expired — please start again.",
-        "bot_inbounds_title": "📡 Inbounds",
-        "bot_no_inbounds": "No inbounds yet.",
-        "bot_enable": "✅ Enable",
-        "bot_disable": "❌ Disable",
-        "bot_inbound_toggled": "Inbound {state}.",
-        "bot_status_title": "📊 Server status",
-        "bot_status_users": "👥 Users: {total} ({enabled} enabled, {expired} expired)",
-        "bot_traffic_today": "📈 Traffic today",
-        "bot_traffic_14d": "📈 Traffic, last 14 days",
-        "bot_unknown_command": "Unknown command — send /help or use the menu.",
-        "bot_rerender_failed": "Config re-render failed:",
-        "bot_action_failed": "The action failed.",
-        "bot_view_user": "👤 View user",
-        # Telegram management bot — upgrade Phase 3 (search, edit,
-        # inbound create/delete, services, backup, stale callbacks).
-        "bot_menu_services": "🛠️ Services",
-        "bot_menu_backup": "📦 Backup",
-        "bot_search": "🔍 Search",
-        "bot_search_prompt": "🔍 Search users\n\nSend the user's name or note (part of it is enough):",
-        "bot_search_title": "🔍 Results for “{query}” (page {page} of {pages})",
-        "bot_search_no_match": "No user matches that search.",
-        "bot_edit": "✏️ Edit",
-        "bot_edit_pick": "What should I edit?",
-        "bot_edit_name": "Name",
-        "bot_edit_limit": "Traffic limit",
-        "bot_edit_expiry": "Expiry",
-        "bot_edit_name_prompt": "Send the new name for “{name}” (letters, digits, - and _ only):",
-        "bot_edit_limit_prompt": "New limit in GB? 0 or empty means unlimited:",
-        "bot_edit_expiry_prompt": "New expiry in days from today? 0 or empty means never expires:",
-        "bot_edited": "✅ Edited.",
-        "bot_new_inbound": "➕ New inbound",
-        "bot_create_inbound_protocol": "Pick the protocol for the new inbound:",
-        "bot_create_inbound_port": "Port for the inbound? Empty means automatic:",
-        "bot_create_inbound_port_invalid": "Not a valid port — send a number between 1 and 65535, or empty for automatic:",
-        "bot_create_inbound_port_in_use": "That port is already used on the same transport — send another port, or empty for automatic:",
-        "bot_create_inbound_port_reserved": "That port is reserved (IKEv2) — send another port:",
-        "bot_create_inbound_sni": "SNI for {protocol}? Empty means the panel default ({sni}):",
-        "bot_create_inbound_done": "✅ Inbound “{tag}” created ({protocol}:{port}).",
-        "bot_create_inbound_failed": "Could not create the inbound.",
-        "bot_inbound_delete_confirm": "Delete inbound “{tag}”? All of its clients are deleted too. This cannot be undone.",
-        "bot_inbound_deleted": "Inbound deleted.",
-        "bot_services_title": "🛠️ Services",
-        "bot_service_running": "running",
-        "bot_service_stopped": "stopped",
-        "bot_service_unknown": "unknown",
-        "bot_service_restart": "🔄 Restart",
-        "bot_service_restart_confirm": "Restart service “{name}”?",
-        "bot_service_restarted": "✅ Service “{name}” restarted and is running.",
-        "bot_service_restart_failed": "❌ Restart of “{name}” failed:",
-        "bot_service_restart_unverified": "🔄 Service “{name}” was restarted, but its state could not be verified.",
-        "bot_services_awg_note": "AmneziaWG cannot be restarted from the bot (the installer does not grant the needed sudo access).",
-        "bot_backup_title": "📦 Backup",
-        "bot_backup_hint": "The backup contains the whole database and all keys — keep it like a private key. It is only sent to this chat.",
-        "bot_backup_send": "📦 Get backup",
-        "bot_backup_sent": "✅ Backup sent.",
-        "bot_backup_failed": "Creating or sending the backup failed.",
-        "bot_backup_too_large": "The backup is larger than Telegram's limit (50 MB) — download it from the panel settings page instead.",
-        "bot_stale_callback": "This button is no longer valid — continue from the menu.",
-        # -- Phase 4 (UI redesign) --
-        "nav_overview": "Overview",
-        "nav_management": "Management",
-        "nav_monitoring": "Monitoring",
-        "nav_system": "System",
-        "nav_collapse": "Collapse sidebar",
-        "nav_expand": "Expand sidebar",
-        "nav_menu": "Menu",
-        "nav_close": "Close",
-        "search_users": "Search users…",
-        "filter_expired": "Expired",
-        "expired": "Expired",
-        "sort_by": "Sort by",
-        "sort_newest": "Newest first",
-        "sort_name": "Name (A–Z)",
-        "sort_expiry": "Soonest expiry",
-        "sort_traffic": "Most traffic",
-        "filter_apply": "Apply",
-        "filter_clear": "Clear filters",
-        "page_of": "Page {page} of {pages}",
-        "page_prev": "Previous",
-        "page_next": "Next",
-        "users_showing": "Showing {shown} of {total} users",
-        "bulk_page_hint": "Bulk actions apply only to the users selected on this page.",
-        "settings_general": "General",
-        "settings_telegram": "Telegram",
-        "settings_security": "Security",
-        "settings_backup": "Backup",
-        "settings_services": "Services",
-        "settings_advanced": "Advanced",
-        "settings_general_desc": "The panel's public identity: domain, subscription host, and default SNI.",
-        "settings_telegram_desc": "Notifications and the Telegram management bot.",
-        "settings_security_desc": "The panel admin password.",
-        "settings_backup_desc": "Download and restore a backup.",
-        "settings_services_desc": "Live server and service status.",
-        "settings_advanced_desc": "Advanced settings; change only when needed.",
-        "domain_hint": "The panel's public domain; used in share links and the Telegram webhook.",
-        "subscription_host_hint": "Host used in subscription links; empty means the domain or server IP.",
-        "reality_sni_hint": "Default SNI for new Reality inbounds.",
-        "server_status_unavailable": "Server status is unavailable.",
-    },
-}
-
-
-def get_lang(request: Request) -> str:
-    """Language for this request: ``?lang=en|fa`` wins, else cookie, else fa."""
-    q = request.query_params.get("lang")
-    if q in ("fa", "en"):
-        return q
-    cookie = request.cookies.get("lang")
-    if cookie in ("fa", "en"):
-        return cookie
-    return "fa"
-
-
-def t_for(lang: str) -> dict[str, str]:
-    """Translation dict for ``lang`` (falls back to Persian)."""
-    return STRINGS.get(lang, STRINGS["fa"])
-
-
-# ---------------------------------------------------------------------------
-# Settings helpers
-# ---------------------------------------------------------------------------
-
-
-def get_settings(db: Session) -> dict[str, str]:
-    """All panel settings as a plain dict.
-
-    Base layer: ``app.config.get_settings_dict()`` (environment /
-    installer defaults). Overlay: the ``Setting`` table rows — the
-    settings page and ``ensure_defaults()`` write there, and a row
-    present in the DB always wins over the env default (an empty DB
-    value means "cleared", so it wins too). This is what makes the
-    domain / Reality-key / WireGuard-key settings actually take effect
-    instead of being shadowed by env defaults.
-    """
-    merged: dict[str, str] = {}
-    if panel_config is not None and hasattr(panel_config, "get_settings_dict"):
-        try:
-            result = panel_config.get_settings_dict()
-            if isinstance(result, dict):
-                merged = {
-                    str(k): ("" if v is None else str(v)) for k, v in result.items()
-                }
-        except Exception:  # noqa: BLE001
-            logger.exception("get_settings_dict() failed; reading Setting table")
-    for row in db.query(Setting).all():
-        merged[row.key] = row.value or ""
-    return merged
-
-
-def get_setting(db: Session, key: str, default: str = "") -> str:
-    """One setting value, ``default`` when unset/empty."""
-    value = get_settings(db).get(key, "")
-    return value if value else default
-
-
-def set_setting(db: Session, key: str, value: str) -> None:
-    """Upsert one setting row."""
-    row = db.query(Setting).filter(Setting.key == key).first()
-    if row is None:
-        db.add(Setting(key=key, value=value))
-    else:
-        row.value = value
-    db.commit()
-
-
-def _audit(db: Session, admin_id: Optional[int], action: str, detail: str = "") -> None:
-    """Best-effort audit-log write; never breaks the request."""
-    try:
-        db.add(AuditLog(admin_id=admin_id, action=action, detail=detail))
-        db.commit()
-    except Exception:  # noqa: BLE001
-        db.rollback()
-        logger.exception("audit log write failed for %s", action)
-
-
-# ---------------------------------------------------------------------------
-# Usability helpers (delegate to app.models when available)
-# ---------------------------------------------------------------------------
-
-
-def _user_usable(db: Session, user: Any, now: Optional[datetime] = None) -> bool:
-    if user_is_usable is not None:
-        try:
-            return bool(user_is_usable(user, now))
-        except TypeError:
-            return bool(user_is_usable(user))
-    now = now or datetime.now(timezone.utc)
-    if not getattr(user, "enabled", False):
-        return False
-    expires = getattr(user, "expires_at", None)
-    if expires is not None:
-        exp = expires if expires.tzinfo else expires.replace(tzinfo=timezone.utc)
-        if exp <= now:
-            return False
-    limit = getattr(user, "traffic_limit_bytes", None)
-    if limit is not None and getattr(user, "traffic_used_bytes", 0) >= limit:
-        return False
-    return True
-
-
-def _client_usable(db: Session, client: Any, user: Any, inbound: Any) -> bool:
-    if client_is_usable is not None:
-        try:
-            return bool(client_is_usable(client, user, inbound))
-        except TypeError:
-            return bool(client_is_usable(client, user, inbound, None))
-    if not getattr(client, "enabled", False):
-        return False
-    if not getattr(inbound, "enabled", False):
-        return False
-    return _user_usable(db, user)
-
-
-def _usable_clients(db: Session, user: Any) -> list[tuple[Any, Any]]:
-    """``(client, inbound)`` pairs usable for ``user`` (inbound order)."""
-    out: list[tuple[Any, Any]] = []
-    clients = (
-        db.query(Client)
-        .filter(Client.user_id == user.id)
-        .join(Inbound, Client.inbound_id == Inbound.id)
-        .order_by(Inbound.port)
-        .all()
-    )
-    for client in clients:
-        inbound = db.query(Inbound).filter(Inbound.id == client.inbound_id).first()
-        if inbound is not None and _client_usable(db, client, user, inbound):
-            out.append((client, inbound))
-    return out
-
-
-def _sub_host(request: Request, settings: dict[str, str]) -> str:
-    """Host used in share links / subscriptions.
-
-    Explicit ``subscription_host`` setting wins, then the configured
-    domain, then the host the request arrived on (bare IP works).
-    """
-    host = (settings.get("subscription_host") or "").strip()
-    if host:
-        return host
-    domain = (settings.get("domain") or "").strip()
-    if domain:
-        return domain
-    return request.url.hostname or "127.0.0.1"
-
-
-def _client_dict(client: Any, user: Any) -> dict[str, Any]:
-    """Plain dict for a client row, as the link builders expect."""
-    extra: dict[str, Any] = {}
-    raw_extra = getattr(client, "extra_json", None)
-    if raw_extra:
-        try:
-            extra = json.loads(raw_extra) if isinstance(raw_extra, str) else dict(raw_extra)
-        except (ValueError, TypeError):
-            extra = {}
-    return {
-        "id": client.id,
-        "user_id": client.user_id,
-        "user_name": getattr(user, "name", ""),
-        "uuid": getattr(client, "uuid", None),
-        "password": getattr(client, "password", None),
-        "method": getattr(client, "method", None),
-        "flow": getattr(client, "flow", None),
-        # Link builders / renderers read "extra_json" (dict or JSON str).
-        "extra_json": extra,
-        "extra": extra,
-    }
-
-
-def _inbound_dict(inbound: Any) -> dict[str, Any]:
-    """Plain dict for an inbound row, as the link builders expect."""
-    stream: dict[str, Any] = {}
-    raw = getattr(inbound, "stream_json", None)
-    if raw:
-        try:
-            stream = json.loads(raw) if isinstance(raw, str) else dict(raw)
-        except (ValueError, TypeError):
-            stream = {}
-    return {
-        "id": inbound.id,
-        "tag": inbound.tag,
-        "core": inbound.core,
-        "protocol": inbound.protocol,
-        "port": inbound.port,
-        "enabled": inbound.enabled,
-        "remark": getattr(inbound, "remark", "") or "",
-        # Link builders / renderers read "stream_json" (a dict here).
-        "stream_json": stream,
-        "stream": stream,
-    }
-
-
-def _links_for_user(
-    db: Session, user: Any, host: str, settings: dict[str, Any] | None = None
-) -> list[dict[str, Any]]:
-    """Share links for one user's usable clients (empty when unavailable)."""
-    if links_mod is None:
-        return []
-    links: list[dict[str, Any]] = []
-    for client, inbound in _usable_clients(db, user):
-        try:
-            inbound_dict = _inbound_dict(inbound)
-            if inbound.protocol == "amneziawg":
-                # The vpn:// link needs the server public key, which
-                # lives in settings (like WireGuard's) — hand it to
-                # the link builder through the inbound stream, where
-                # build_share_link looks for it.
-                stream = dict(inbound_dict.get("stream_json") or {})
-                stream.setdefault(
-                    "awg_server_public_key",
-                    (settings or {}).get("amneziawg_public_key") or "",
-                )
-                inbound_dict["stream_json"] = stream
-            link = links_mod.build_share_link(
-                inbound.protocol,
-                _client_dict(client, user),
-                inbound_dict,
-                host,
-                user.name,
-            )
-        except Exception:  # noqa: BLE001
-            logger.exception("build_share_link failed for %s", inbound.tag)
-            continue
-        if link:
-            links.append(
-                {"inbound": inbound, "client": client, "link": str(link)}
-            )
-    return links
+from app.i18n import STRINGS, get_lang, t_for  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -1758,8 +451,6 @@ def _apply_wireguard_config(
     interface is up, ``systemctl start`` when it is absent, restore
     on failure, full output in the error).
     """
-    if wgapply_mod is None:
-        return "app.wgapply is not available; config was not applied"
     try:
         Path(config_path).parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -1789,7 +480,7 @@ def _ikev2_server_id(settings: dict[str, Any]) -> str:
     Read from the server certificate itself when it exists (always
     matches), else the configured subscription host / domain.
     """
-    if ikev2_mod is not None and hasattr(ikev2_mod, "server_id_from_cert_pem"):
+    if hasattr(ikev2_mod, "server_id_from_cert_pem"):
         try:
             pem = Path(VPN_SERVER_CERT_PATH).read_text(encoding="utf-8")
             server_id = ikev2_mod.server_id_from_cert_pem(pem)
@@ -1839,6 +530,17 @@ def _apply_ikev2_config() -> Optional[str]:
     return None
 
 
+# Serializes config re-renders: the expiry sweeper, admin POSTs and
+# the Telegram bot all call rerender_configs(), and two concurrent
+# renders could interleave their writes/restarts. A threading.RLock
+# (not asyncio.Lock): rerender_configs is a SYNC function called
+# from sync routes (FastAPI threadpool), the bot polling thread and
+# the sweeper — an asyncio.Lock cannot be acquired from sync code,
+# and cannot serialize threads anyway. RLock (re-entrant) so a
+# render that itself triggers a re-render cannot deadlock.
+_RERENDER_LOCK = threading.RLock()
+
+
 def rerender_configs(db: Session) -> list[str]:
     """Re-render all server configs from the DB (Xray / sing-box /
     WireGuard / OpenVPN / ocserv / AmneziaWG / IKEv2).
@@ -1846,7 +548,17 @@ def rerender_configs(db: Session) -> list[str]:
     Returns a list of error strings (empty = all good). Each core is
     attempted independently; one core failing does not stop the others,
     and the old config / running service is left untouched on failure.
+
+    Concurrent calls serialize on :data:`_RERENDER_LOCK` (one waits
+    for the other); the lock is re-entrant, so a render that itself
+    calls this function cannot deadlock.
     """
+    with _RERENDER_LOCK:
+        return _rerender_configs_impl(db)
+
+
+def _rerender_configs_impl(db: Session) -> list[str]:
+    """The re-render itself (see :func:`rerender_configs`)."""
     errors: list[str] = []
     settings = get_settings(db)
     inbounds = db.query(Inbound).order_by(Inbound.id).all()
@@ -1860,7 +572,7 @@ def rerender_configs(db: Session) -> list[str]:
             user = db.query(User).filter(User.id == client.user_id).first()
             if user is None:
                 continue
-            if not _client_usable(db, client, user, inbound):
+            if not client_is_usable(client, user, inbound):
                 continue  # renderers omit unusable clients (DESIGN §4)
             rows.append(_client_dict(client, user))
         clients_by_tag[inbound.tag] = rows
@@ -1873,7 +585,7 @@ def rerender_configs(db: Session) -> list[str]:
     awg_inbounds = [i for i in inbounds if i.core == "amneziawg" and i.enabled]
     ikev2_inbounds = [i for i in inbounds if i.core == "ikev2" and i.enabled]
 
-    if xray_inbounds and xray_mod is not None:
+    if xray_inbounds:
         try:
             cfg = xray_mod.render_xray_config(
                 [_inbound_dict(i) for i in xray_inbounds], clients_by_tag, settings
@@ -1890,10 +602,8 @@ def rerender_configs(db: Session) -> list[str]:
         except Exception as exc:  # noqa: BLE001
             errors.append(f"xray render/restart failed: {exc}")
             logger.exception("xray re-render failed")
-    elif xray_inbounds:
-        errors.append("app.xray is not available; Xray config was not updated")
 
-    if singbox_inbounds and singbox_mod is not None:
+    if singbox_inbounds:
         try:
             result = singbox_mod.render_singbox_config(
                 [_inbound_dict(i) for i in singbox_inbounds], clients_by_tag, settings
@@ -1914,10 +624,8 @@ def rerender_configs(db: Session) -> list[str]:
         except Exception as exc:  # noqa: BLE001
             errors.append(f"sing-box render/restart failed: {exc}")
             logger.exception("sing-box re-render failed")
-    elif singbox_inbounds:
-        errors.append("app.singbox is not available; sing-box config was not updated")
 
-    if wg_inbounds and wireguard_mod is not None:
+    if wg_inbounds:
         try:
             # Real API: render_wg_config(server_private_key, peers, *,
             # address, listen_port, dns) -> str. Peers carry
@@ -1981,10 +689,8 @@ def rerender_configs(db: Session) -> list[str]:
         except Exception as exc:  # noqa: BLE001
             errors.append(f"wireguard render/restart failed: {exc}")
             logger.exception("wireguard re-render failed")
-    elif wg_inbounds:
-        errors.append("app.wireguard is not available; wg0.conf was not updated")
 
-    if ovpn_inbounds and openvpn_mod is not None:
+    if ovpn_inbounds:
         try:
             ovpn_inbound = ovpn_inbounds[0]
             stream = _inbound_dict(ovpn_inbound).get("stream_json") or {}
@@ -2020,10 +726,8 @@ def rerender_configs(db: Session) -> list[str]:
         except Exception as exc:  # noqa: BLE001
             errors.append(f"openvpn render/restart failed: {exc}")
             logger.exception("openvpn re-render failed")
-    elif ovpn_inbounds:
-        errors.append("app.openvpn is not available; openvpn config was not updated")
 
-    if ocserv_inbounds and openconnect_mod is not None:
+    if ocserv_inbounds:
         try:
             ocserv_inbound = ocserv_inbounds[0]
             stream = _inbound_dict(ocserv_inbound).get("stream_json") or {}
@@ -2085,10 +789,8 @@ def rerender_configs(db: Session) -> list[str]:
         except Exception as exc:  # noqa: BLE001
             errors.append(f"ocserv render/restart failed: {exc}")
             logger.exception("ocserv re-render failed")
-    elif ocserv_inbounds:
-        errors.append("app.openconnect is not available; ocserv config was not updated")
 
-    if awg_inbounds and amneziawg_mod is not None:
+    if awg_inbounds:
         try:
             awg_inbound = awg_inbounds[0]
             stream = _inbound_dict(awg_inbound).get("stream_json") or {}
@@ -2171,10 +873,8 @@ def rerender_configs(db: Session) -> list[str]:
         except Exception as exc:  # noqa: BLE001
             errors.append(f"amneziawg render/restart failed: {exc}")
             logger.exception("amneziawg re-render failed")
-    elif awg_inbounds:
-        errors.append("app.amneziawg is not available; awg0.conf was not updated")
 
-    if ikev2_inbounds and ikev2_mod is not None:
+    if ikev2_inbounds:
         try:
             ikev2_inbound = ikev2_inbounds[0]
             stream = _inbound_dict(ikev2_inbound).get("stream_json") or {}
@@ -2216,8 +916,6 @@ def rerender_configs(db: Session) -> list[str]:
         except Exception as exc:  # noqa: BLE001
             errors.append(f"ikev2 render/apply failed: {exc}")
             logger.exception("ikev2 re-render failed")
-    elif ikev2_inbounds:
-        errors.append("app.ikev2 is not available; swanctl.conf was not updated")
 
     if errors:
         logger.error(
@@ -2322,7 +1020,7 @@ def ensure_defaults(db: Session) -> Optional[str]:
             reality["public_key"] = env_public
             if env_short:
                 reality["short_id"] = env_short
-        elif xray_mod is not None and hasattr(xray_mod, "generate_reality_keypair"):
+        elif hasattr(xray_mod, "generate_reality_keypair"):
             try:
                 pair = xray_mod.generate_reality_keypair()
                 if isinstance(pair, dict):
@@ -2352,7 +1050,7 @@ def ensure_defaults(db: Session) -> Optional[str]:
             db.add(Setting(key="wireguard_private_key", value=env_wg_private))
             if env_wg_public:
                 db.add(Setting(key="wireguard_public_key", value=env_wg_public))
-        elif wireguard_mod is not None and hasattr(wireguard_mod, "generate_keypair"):
+        elif hasattr(wireguard_mod, "generate_keypair"):
             try:
                 pair = wireguard_mod.generate_keypair()
                 private, public = (pair[0], pair[1]) if isinstance(pair, (list, tuple)) else (str(pair), "")
@@ -2374,7 +1072,7 @@ def ensure_defaults(db: Session) -> Optional[str]:
             db.add(Setting(key="amneziawg_private_key", value=env_awg_private))
             if env_awg_public:
                 db.add(Setting(key="amneziawg_public_key", value=env_awg_public))
-        elif wireguard_mod is not None and hasattr(wireguard_mod, "generate_keypair"):
+        elif hasattr(wireguard_mod, "generate_keypair"):
             try:
                 pair = wireguard_mod.generate_keypair()
                 private, public = (pair[0], pair[1]) if isinstance(pair, (list, tuple)) else (str(pair), "")
@@ -2390,11 +1088,7 @@ def ensure_defaults(db: Session) -> Optional[str]:
     # panel. Missing means v1 (the first versioned release).
     version_now = {row.key: (row.value or "") for row in db.query(Setting).all()}
     if not version_now.get("schema_version"):
-        version = (
-            getattr(backup_mod, "SCHEMA_VERSION", 1)
-            if backup_mod is not None
-            else 1
-        )
+        version = getattr(backup_mod, "SCHEMA_VERSION", 1)
         db.add(Setting(key="schema_version", value=str(version)))
         db.commit()
 
@@ -2405,12 +1099,16 @@ def ensure_defaults(db: Session) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
+#: Seconds between traffic sync ticks (WireGuard counters + Xray
+#: Stats API). A named constant so tests can shrink it — same
+#: pattern as the Telegram polling loop's constants.
+TRAFFIC_SYNC_INTERVAL_SECONDS = 60
+
+
 async def _traffic_sync_loop() -> None:
     """Every 60 s: poll traffic sources and roll usage into the DB."""
     while True:
-        await asyncio.sleep(60)
-        if traffic_mod is None or SessionLocal is None:
-            continue
+        await asyncio.sleep(TRAFFIC_SYNC_INTERVAL_SECONDS)
         db = SessionLocal()
         try:
             wg_text: Optional[str] = None
@@ -2425,8 +1123,19 @@ async def _traffic_sync_loop() -> None:
                     wg_text = proc.stdout
             except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
                 wg_text = None
+            xray_stats: Optional[dict[int, tuple[int, int]]] = None
+            # Blocking gRPC call (up to the 5 s client timeout):
+            # run it off the event loop, like the Telegram
+            # long-poll. collect_xray_deltas never raises — a
+            # dead Stats API just means no Xray update this tick.
+            xray_stats = await asyncio.to_thread(
+                xray_stats_mod.collect_xray_deltas
+            )
             traffic_mod.sync_traffic(
-                db, wg_text=wg_text, wg_pubkey_to_user_id=_wg_pubkey_map(db)
+                db,
+                xray_stats=xray_stats,
+                wg_text=wg_text,
+                wg_pubkey_to_user_id=_wg_pubkey_map(db),
             )
         except Exception:  # noqa: BLE001
             logger.exception("traffic sync failed")
@@ -2439,8 +1148,6 @@ async def _expiry_sweeper_loop() -> None:
     out (the renderers omit unusable clients — DESIGN §4/§6.4)."""
     while True:
         await asyncio.sleep(300)
-        if SessionLocal is None:
-            continue
         db = SessionLocal()
         try:
             errors = rerender_configs(db)
@@ -2462,12 +1169,9 @@ def _telegram_polling_token() -> Optional[str]:
     the same gating the webhook route uses, plus the transport check.
     The setting is re-read every round (see ``_telegram_polling_loop``)
     so switching transports in the settings page takes effect without
-    a panel restart. Returns None (never raises) when the DB or the
-    telegram/bot modules are unavailable. The token is returned to
-    the caller, never logged.
+    a panel restart. Returns None (never raises) when the DB is
+    unavailable. The token is returned to the caller, never logged.
     """
-    if telegram_mod is None or bot_mod is None or SessionLocal is None:
-        return None
     db = SessionLocal()
     try:
         settings = get_settings(db)
@@ -2494,8 +1198,6 @@ def _load_polling_offset() -> Optional[int]:
     when unset or unparseable — a bad stored value re-fetches from
     scratch, and ``bot.py``'s dedup keeps that harmless. Never
     raises."""
-    if SessionLocal is None:
-        return None
     db = SessionLocal()
     try:
         raw = get_setting(db, TELEGRAM_POLLING_OFFSET_KEY, "")
@@ -2516,8 +1218,6 @@ def _record_polling_status(
     arrived); a failed round stamps ``telegram_polling_last_error``
     with the time and a short reason. Never raises.
     """
-    if SessionLocal is None:
-        return
     db = SessionLocal()
     try:
         now = datetime.now(timezone.utc).isoformat()
@@ -2629,8 +1329,6 @@ async def _telegram_polling_loop_inner() -> None:
                             if offset is None
                             else max(offset, update_id + 1)
                         )
-                if bot_mod is None or SessionLocal is None:
-                    continue
                 db = SessionLocal()
                 try:
                     bot_mod.handle_update(
@@ -2674,31 +1372,28 @@ async def _telegram_polling_loop_inner() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup: create tables, seed defaults, start background loops."""
-    if init_db is not None:
+    try:
+        # app.db has no module-level `engine` (use get_engine() /
+        # init_db() with no args — it binds the engine itself).
+        init_db()
+    except Exception:  # noqa: BLE001
+        logger.exception("init_db failed")
+    db = SessionLocal()
+    try:
+        ensure_defaults(db)
+        # Log level from the DB setting (Settings page); INFO
+        # when unset. Applied here so a restart honours it.
         try:
-            # app.db has no module-level `engine` (use get_engine() /
-            # init_db() with no args — it binds the engine itself).
-            init_db()
+            level = get_settings(db).get("log_level", "")
+            if level:
+                panel_log_mod.apply_log_level(level)
         except Exception:  # noqa: BLE001
-            logger.exception("init_db failed")
-    if SessionLocal is not None:
-        db = SessionLocal()
-        try:
-            ensure_defaults(db)
-            if panel_log_mod is not None:
-                # Log level from the DB setting (Settings page); INFO
-                # when unset. Applied here so a restart honours it.
-                try:
-                    level = get_settings(db).get("log_level", "")
-                    if level:
-                        panel_log_mod.apply_log_level(level)
-                except Exception:  # noqa: BLE001
-                    logger.exception("applying log level failed")
-            logger.info("sparky-manager started")
-        except Exception:  # noqa: BLE001
-            logger.exception("seeding defaults failed")
-        finally:
-            db.close()
+            logger.exception("applying log level failed")
+        logger.info("sparky-manager started")
+    except Exception:  # noqa: BLE001
+        logger.exception("seeding defaults failed")
+    finally:
+        db.close()
     tasks = [
         asyncio.create_task(_traffic_sync_loop()),
         asyncio.create_task(_expiry_sweeper_loop()),
@@ -2713,7 +1408,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="sparky-manager", lifespan=lifespan)
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
@@ -2747,56 +1441,8 @@ async def _security_headers_middleware(request: Request, call_next):
     return response
 
 
-def db_session():
-    """FastAPI dependency yielding a DB session.
-
-    ``app.db.get_session()`` is a ``@contextmanager`` (not a plain
-    generator), so ``yield from`` on it raises TypeError — enter it
-    with ``with`` instead.
-    """
-    if get_session is not None:
-        with get_session() as db:
-            yield db
-        return
-    if SessionLocal is None:
-        raise HTTPException(status_code=503, detail="database not initialised")
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-def _admin_from_request(request: Request, db: Session) -> Optional[Any]:
-    token = request.cookies.get(SESSION_COOKIE)
-    if not token or get_admin_from_token is None:
-        return None
-    try:
-        return get_admin_from_token(db, token)
-    except Exception:  # noqa: BLE001
-        logger.exception("session lookup failed")
-        return None
-
-
-def require_admin(request: Request, db: Session = Depends(db_session)) -> Any:
-    """HTML auth dependency: redirect to /login when not signed in."""
-    admin = _admin_from_request(request, db)
-    if admin is None:
-        lang = get_lang(request)
-        raise HTTPException(status_code=303, headers={"Location": f"/login?lang={lang}"})
-    return admin
-
-
-def require_admin_api(request: Request, db: Session = Depends(db_session)) -> Any:
-    """JSON API auth dependency: 401 when not signed in."""
-    admin = _admin_from_request(request, db)
-    if admin is None:
-        raise HTTPException(status_code=401, detail="not authenticated")
-    return admin
-
-
 # ---------------------------------------------------------------------------
-# CSRF protection (Phase 2, S1)
+# CSRF protection (Phase 2, S1) — helpers in app.webcommon
 #
 # Every state-changing POST (all HTML forms + the JSON API) requires a
 # per-session token: HMAC-SHA256 of the session token
@@ -2817,55 +1463,6 @@ def require_admin_api(request: Request, db: Session = Depends(db_session)) -> An
 # - All GET routes: read-only by design (logout moved to POST).
 # ---------------------------------------------------------------------------
 
-CSRF_FORM_FIELD = "csrf_token"
-CSRF_HEADER = "X-CSRF-Token"
-
-
-class CSRFError(Exception):
-    """Raised when CSRF validation fails (missing/wrong token)."""
-
-
-async def _check_csrf_token(request: Request) -> None:
-    """Validate the CSRF token for this request's session.
-
-    Fails closed: any missing piece (no session cookie, no submitted
-    token, unparseable form, unavailable auth helpers) raises
-    CSRFError. The session itself was already validated by the auth
-    dependency this runs under, so the cookie token here is a live
-    session's token.
-    """
-    session_token = request.cookies.get(SESSION_COOKIE)
-    submitted = request.headers.get(CSRF_HEADER)
-    if submitted is None:
-        try:
-            form = await request.form()
-        except Exception:  # noqa: BLE001 — malformed body: no token
-            form = None
-        if form is not None:
-            value = form.get(CSRF_FORM_FIELD)
-            submitted = value if isinstance(value, str) else None
-    if (
-        not session_token
-        or verify_csrf_token is None
-        or not submitted
-        or not verify_csrf_token(session_token, submitted)
-    ):
-        raise CSRFError()
-
-
-async def require_csrf(
-    request: Request, admin: Any = Depends(require_admin)
-) -> None:
-    """CSRF dependency for HTML form POSTs (auth: 303 redirect)."""
-    await _check_csrf_token(request)
-
-
-async def require_csrf_api(
-    request: Request, admin: Any = Depends(require_admin_api)
-) -> None:
-    """CSRF dependency for the JSON API (auth: 401, token via header)."""
-    await _check_csrf_token(request)
-
 
 @app.exception_handler(CSRFError)
 async def _csrf_error_handler(request: Request, exc: CSRFError):
@@ -2876,12 +1473,11 @@ async def _csrf_error_handler(request: Request, exc: CSRFError):
             content={"detail": "CSRF token missing or invalid"},
         )
     admin = None
-    if get_session is not None:
-        try:
-            with get_session() as db:
-                admin = _admin_from_request(request, db)
-        except Exception:  # noqa: BLE001 — error page without sidebar
-            admin = None
+    try:
+        with get_session() as db:
+            admin = _admin_from_request(request, db)
+    except Exception:  # noqa: BLE001 — error page without sidebar
+        admin = None
     t = t_for(get_lang(request))
     return templates.TemplateResponse(
         request,
@@ -2898,54 +1494,6 @@ async def _csrf_error_handler(request: Request, exc: CSRFError):
     )
 
 
-def _template_ctx(request: Request, extra: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    lang = get_lang(request)
-    # CSRF token for the session cookie ("" when logged out — the
-    # login form carries no token; see the S1 note above require_csrf).
-    # Deriving from an arbitrary cookie value is harmless: the POST
-    # check requires a *valid* session anyway.
-    session_token = request.cookies.get(SESSION_COOKIE)
-    csrf_token = (
-        csrf_token_for_session(session_token)
-        if session_token and csrf_token_for_session is not None
-        else ""
-    )
-    ctx: dict[str, Any] = {
-        "request": request,
-        "lang": lang,
-        "t": t_for(lang),
-        "base_path": WEB_PATH,
-        "msg": request.query_params.get("msg", ""),
-        "err": request.query_params.get("err", ""),
-        "csrf_token": csrf_token,
-    }
-    if extra:
-        ctx.update(extra)
-    return ctx
-
-
-def _redirect(url: str, request: Request, msg: str = "", err: str = "") -> RedirectResponse:
-    """303 redirect preserving ?lang= when English, plus ?msg=/?err=."""
-    sep = "&" if "?" in url else "?"
-    target = WEB_PATH + url
-    if get_lang(request) == "en":
-        target += f"{sep}lang=en"
-        sep = "&"
-    if msg:
-        from urllib.parse import quote
-
-        target += f"{sep}msg={quote(msg)}"
-        sep = "&"
-    if err:
-        from urllib.parse import quote
-
-        target += f"{sep}err={quote(err[:500])}"
-    response = RedirectResponse(url=target, status_code=303)
-    if request.query_params.get("lang") in ("fa", "en"):
-        response.set_cookie("lang", request.query_params["lang"], max_age=365 * 86400)
-    return response
-
-
 def _set_session_cookie(response: Response, request: Request, token: str) -> None:
     response.set_cookie(
         SESSION_COOKIE,
@@ -2957,178 +1505,6 @@ def _set_session_cookie(response: Response, request: Request, token: str) -> Non
         # or via a trusted TLS-terminating proxy (S4).
         secure=_is_secure_request(request),
         path=WEB_PATH or "/",
-    )
-
-
-def _ss2022_password() -> str:
-    """A valid Shadowsocks-2022 key: base64 of 16 random bytes for
-    ``2022-blake3-aes-128-gcm``. A random token string is NOT a valid
-    key — Xray rejects it at load (``bad key``) and sing-box does the
-    same, so SS/ShadowTLS clients must get a real key, not a password
-    (coordinator fix, 2026-11-11, verified against Xray 26.11.9)."""
-    return base64.b64encode(secrets.token_bytes(16)).decode()
-
-
-def _new_client_credentials(inbound: Any) -> dict[str, Any]:
-    """Fresh credentials for one client of ``inbound``'s protocol."""
-    protocol = inbound.protocol
-    creds: dict[str, Any] = {"enabled": True}
-    if protocol in ("vless", "vmess", "tuic"):
-        creds["uuid"] = str(uuid.uuid4())
-        creds["password"] = secrets.token_urlsafe(12)
-    elif protocol in ("trojan", "hysteria2", "anytls", "naive"):
-        creds["password"] = secrets.token_urlsafe(16)
-    elif protocol == "shadowsocks":
-        creds["password"] = _ss2022_password()
-        creds["method"] = "2022-blake3-aes-128-gcm"
-    elif protocol == "shadowtls":
-        # ShadowTLS detours to an inner Shadowsocks inbound, so the
-        # client needs the same cipher method or its share link is
-        # skipped from the v2rayNG feed (coordinator fix, 2026-11-11).
-        creds["password"] = _ss2022_password()
-        creds["method"] = "2022-blake3-aes-128-gcm"
-    elif protocol == "wireguard":
-        # generate_keypair() -> (private_key, public_key) tuple.
-        # Private key goes in `password`, public key in `uuid` (the
-        # field the WG renderer / traffic map read as the peer key).
-        if wireguard_mod is not None and hasattr(wireguard_mod, "generate_keypair"):
-            try:
-                pair = wireguard_mod.generate_keypair()
-                if isinstance(pair, dict):
-                    creds["password"] = pair.get("private_key") or pair.get("private")
-                    creds["uuid"] = pair.get("public_key") or pair.get("public")
-                elif isinstance(pair, (list, tuple)) and len(pair) >= 2:
-                    creds["password"], creds["uuid"] = str(pair[0]), str(pair[1])
-                else:
-                    creds["password"] = str(pair)
-            except Exception:  # noqa: BLE001
-                logger.exception("wireguard keypair generation failed")
-                creds["password"] = secrets.token_urlsafe(24)
-                creds["uuid"] = None
-        else:
-            creds["password"] = secrets.token_urlsafe(24)
-            creds["uuid"] = None
-    elif protocol == "amneziawg":
-        # Same key layout as WireGuard (private in `password`, public
-        # in `uuid`); the AWG renderer reads the same fields.
-        if wireguard_mod is not None and hasattr(wireguard_mod, "generate_keypair"):
-            try:
-                pair = wireguard_mod.generate_keypair()
-                if isinstance(pair, dict):
-                    creds["password"] = pair.get("private_key") or pair.get("private")
-                    creds["uuid"] = pair.get("public_key") or pair.get("public")
-                elif isinstance(pair, (list, tuple)) and len(pair) >= 2:
-                    creds["password"], creds["uuid"] = str(pair[0]), str(pair[1])
-                else:
-                    creds["password"] = str(pair)
-            except Exception:  # noqa: BLE001
-                logger.exception("amneziawg keypair generation failed")
-                creds["password"] = secrets.token_urlsafe(24)
-                creds["uuid"] = None
-        else:
-            creds["password"] = secrets.token_urlsafe(24)
-            creds["uuid"] = None
-    elif protocol in ("openvpn", "openconnect", "ikev2"):
-        # Username/password auth: the username is the panel user name
-        # (read from the client dict at render time), the password is
-        # stored here. OpenVPN checks it via scripts/ovpn-auth.py,
-        # ocserv via the ocpasswd file, IKEv2 via the EAP secrets in
-        # swanctl.conf.
-        creds["password"] = secrets.token_urlsafe(16)
-    else:
-        creds["uuid"] = str(uuid.uuid4())
-        creds["password"] = secrets.token_urlsafe(12)
-    if protocol == "vless":
-        creds["flow"] = "xtls-rprx-vision"
-    return creds
-
-
-def _next_pool_address(
-    db: Session,
-    *,
-    protocol: str,
-    subnet: str,
-    inbound_id: int | None = None,
-) -> str:
-    """Next free peer address inside ``subnet`` for ``protocol``.
-
-    Scans the ``allowed_ips`` stored in existing clients'
-    ``extra_json`` (of this inbound when ``inbound_id`` is given,
-    else of every inbound of the protocol) and returns the first
-    free host address as ``<ip>/32``. The server itself holds the
-    first host address (``.1`` — see :func:`_subnet_server_address`),
-    so allocation starts at the second host; the broadcast address
-    is never handed out. Raises ``ValueError`` when the pool is
-    exhausted.
-    """
-    net = ipaddress.ip_network(subnet, strict=False)
-    query = (
-        db.query(Client.extra_json)
-        .join(Inbound, Client.inbound_id == Inbound.id)
-        .filter(Inbound.protocol == protocol)
-    )
-    if inbound_id is not None:
-        query = query.filter(Inbound.id == inbound_id)
-    used: set[ipaddress.IPv4Address] = set()
-    for (raw,) in query.all():
-        if not raw:
-            continue
-        try:
-            extra = json.loads(raw) if isinstance(raw, str) else dict(raw)
-            allowed = str(extra.get("allowed_ips") or "")
-        except (ValueError, TypeError):
-            continue
-        for part in allowed.split(","):
-            part = part.strip()
-            if not part:
-                continue
-            try:
-                addr = ipaddress.ip_interface(part).ip
-            except ValueError:
-                continue
-            if addr in net:
-                used.add(addr)
-    for host in net.hosts():
-        # The first host is the server's own address.
-        if host == net.network_address + 1:
-            continue
-        if host not in used:
-            return f"{host}/32"
-    raise ValueError(f"{protocol} address pool ({subnet}) exhausted")
-
-
-def _next_wg_address(
-    db: Session,
-    subnet: str = "10.8.0.0/24",
-    inbound_id: int | None = None,
-) -> str:
-    """Next free WireGuard peer address (10.8.0.2/32 … 10.8.0.254/32
-    for the default subnet).
-
-    The subnet comes from the inbound's stream (editable since the
-    Phase 1 inbound editor); the default keeps the old behaviour
-    for inbounds created before the editor existed.
-    """
-    return _next_pool_address(
-        db, protocol="wireguard", subnet=subnet, inbound_id=inbound_id
-    )
-
-
-def _next_awg_address(
-    db: Session,
-    subnet: str = "10.8.1.0/24",
-    inbound_id: int | None = None,
-) -> str:
-    """Next free AmneziaWG peer address (10.8.1.2/32 … 10.8.1.254/32
-    for the default subnet).
-
-    A separate pool from WireGuard (10.8.0.0/24) — the two
-    interfaces (wg0 / awg0) must never hand out the same address.
-    The subnet comes from the inbound's stream (editable since the
-    Phase 1 inbound editor).
-    """
-    return _next_pool_address(
-        db, protocol="amneziawg", subnet=subnet, inbound_id=inbound_id
     )
 
 
@@ -3147,56 +1523,6 @@ def _wg_pubkey_map(db: Session) -> dict[str, int]:
         if public_key:
             mapping[public_key] = user_id
     return mapping
-
-
-def _create_clients_for_user(
-    db: Session, user: Any, inbound_ids: Optional[set] = None
-) -> None:
-    """One client row per enabled inbound for a new user.
-
-    ``inbound_ids`` (Phase 4, Telegram bot) restricts the clients to
-    the given inbounds — ``None`` keeps the web behaviour (every
-    enabled inbound). A listed inbound that is disabled or missing
-    gets no client.
-    """
-    query = db.query(Inbound).filter(Inbound.enabled.is_(True))
-    if inbound_ids is not None:
-        query = query.filter(Inbound.id.in_(sorted(inbound_ids)))
-    for inbound in query.all():
-        creds = _new_client_credentials(inbound)
-        extra_json: Optional[str] = None
-        if inbound.protocol == "wireguard":
-            # The WG renderer needs allowed_ips per peer; allocate
-            # one from the inbound's own subnet (editable in the
-            # inbound editor; 10.8.0.0/24 for older inbounds).
-            subnet = inbound.stream.get("subnet") or "10.8.0.0/24"
-            try:
-                address = _next_wg_address(db, subnet, inbound_id=inbound.id)
-                extra_json = json.dumps({"allowed_ips": address})
-            except ValueError:
-                logger.warning("no free WireGuard address for user %s", user.name)
-        if inbound.protocol == "amneziawg":
-            # Same idea, separate pool (10.8.1.0/24 — never the WG pool).
-            subnet = inbound.stream.get("subnet") or "10.8.1.0/24"
-            try:
-                address = _next_awg_address(db, subnet, inbound_id=inbound.id)
-                extra_json = json.dumps({"allowed_ips": address})
-            except ValueError:
-                logger.warning("no free AmneziaWG address for user %s", user.name)
-        db.add(
-            Client(
-                user_id=user.id,
-                inbound_id=inbound.id,
-                uuid=creds.get("uuid"),
-                password=creds.get("password"),
-                method=creds.get("method"),
-                flow=creds.get("flow"),
-                extra_json=extra_json,
-                enabled=True,
-            )
-        )
-        db.flush()  # so a second WireGuard inbound sees this peer's IP
-    db.commit()
 
 
 def _stream_transport(stream: dict[str, Any], protocol: str) -> str:
@@ -3552,14 +1878,14 @@ def _new_reality_keypair() -> dict[str, str]:
     (the renderer falls back to the settings keys).
     """
     try:
-        if xray_mod is not None and hasattr(xray_mod, "generate_reality_keypair"):
+        if hasattr(xray_mod, "generate_reality_keypair"):
             pair = xray_mod.generate_reality_keypair()
             if isinstance(pair, dict) and pair.get("private_key") and pair.get("public_key"):
                 return {"private_key": str(pair["private_key"]), "public_key": str(pair["public_key"])}
     except Exception:  # noqa: BLE001
         logger.exception("reality keypair generation failed")
     try:
-        if wireguard_mod is not None and hasattr(wireguard_mod, "generate_keypair"):
+        if hasattr(wireguard_mod, "generate_keypair"):
             private_b64, public_b64 = wireguard_mod.generate_keypair()
             encode = lambda k: base64.urlsafe_b64encode(base64.b64decode(k)).rstrip(b"=").decode("ascii")  # noqa: E731
             return {"private_key": encode(private_b64), "public_key": encode(public_b64)}
@@ -3754,9 +2080,7 @@ def _build_stream_from_form(
                 # The public key MUST match the private key, or
                 # clients cannot connect — derive it, never trust
                 # a pasted public key.
-                if xray_mod is not None and hasattr(
-                    xray_mod, "reality_public_key"
-                ):
+                if hasattr(xray_mod, "reality_public_key"):
                     public_key = xray_mod.reality_public_key(private_key)
                     if public_key:
                         reality["public_key"] = public_key
@@ -3857,9 +2181,7 @@ def _build_stream_from_form(
         for key in ("I1", "I2", "I3", "I4", "I5"):
             params[key] = _field(f"awg_{key.lower()}")
         params["HeaderProtectionKey"] = _field("awg_header_key")
-        if amneziawg_mod is not None and hasattr(
-            amneziawg_mod, "validate_awg_params"
-        ):
+        if hasattr(amneziawg_mod, "validate_awg_params"):
             problems = amneziawg_mod.validate_awg_params(params)
             if problems:
                 return None, t["invalid_awg_params"] + "; ".join(problems)
@@ -3944,9 +2266,7 @@ def _render_inbound_edit(
             # Same for the CSRF token (S1): this page's forms need
             # it, and _template_ctx is not used here.
             "csrf_token": (
-                csrf_token_for_session(session_token)
-                if session_token and csrf_token_for_session is not None
-                else ""
+                csrf_token_for_session(session_token) if session_token else ""
             ),
         },
     )
@@ -4128,7 +2448,7 @@ def regenerate_awg_params(
     inbound = db.get(Inbound, inbound_id)
     if inbound is None:
         raise HTTPException(status_code=404, detail="inbound not found")
-    if inbound.protocol != "amneziawg" or amneziawg_mod is None:
+    if inbound.protocol != "amneziawg":
         return _redirect(
             f"/inbounds/{inbound_id}/edit", request, err=t["invalid_transport"]
         )
@@ -4173,7 +2493,7 @@ def regenerate_server_key(
     inbound = db.get(Inbound, inbound_id)
     if inbound is None:
         raise HTTPException(status_code=404, detail="inbound not found")
-    if inbound.protocol not in ("wireguard", "amneziawg") or wireguard_mod is None:
+    if inbound.protocol not in ("wireguard", "amneziawg"):
         return _redirect(
             f"/inbounds/{inbound_id}/edit", request, err=t["invalid_transport"]
         )
@@ -4235,15 +2555,14 @@ def login_submit(
     lang = get_lang(request)
     t = t_for(lang)
     ip = request.client.host if request.client else "unknown"
-    if is_locked_out is not None and is_locked_out(ip):
+    if is_locked_out(ip):
         return templates.TemplateResponse(request, "login.html",
             _template_ctx(request, {"admin": None, "error": t["locked_out"]}),
             status_code=429,
         )
     admin = db.query(Admin).filter(Admin.username == username).first()
-    if admin is None or verify_password is None or not verify_password(password, admin.password_hash):
-        if record_failed_login is not None:
-            record_failed_login(ip)
+    if admin is None or not verify_password(password, admin.password_hash):
+        record_failed_login(ip)
         logger.warning("login failed for %r from %s", username, ip)
         return templates.TemplateResponse(request, "login.html",
             _template_ctx(request, {"admin": None, "error": t["wrong_credentials"]}),
@@ -4253,8 +2572,7 @@ def login_submit(
     db.commit()
     # Clear the failure counter (S2): without this, failed attempts
     # kept accumulating across successful logins within the window.
-    if record_successful_login is not None:
-        record_successful_login(ip)
+    record_successful_login(ip)
     logger.info("login ok for %r from %s", username, ip)
     token = create_session(db, admin, ip)
     response = _redirect("/dashboard", request)
@@ -4271,7 +2589,7 @@ def logout(
     # POST + CSRF token (S1): a GET logout is a logout-CSRF vector
     # (any site could sign the admin out with an <img> tag).
     token = request.cookies.get(SESSION_COOKIE)
-    if token and invalidate_session is not None:
+    if token:
         try:
             invalidate_session(db, token)
         except Exception:  # noqa: BLE001
@@ -4289,17 +2607,8 @@ def logout(
 
 
 # ---------------------------------------------------------------------------
-# Phase 4 (UI redesign): users-list options + settings tabs
+# Phase 4 (UI redesign): settings tabs
 # ---------------------------------------------------------------------------
-
-# Users list: server-side search / filter / sort / pagination.
-# Filtering and sorting run in Python over the user list (an admin
-# panel holds hundreds of users at most, and the page previously
-# loaded them all anyway) — the frozen filter needs per-client
-# state, which has no clean SQL expression.
-USERS_PAGE_SIZE = 25
-USER_SORTS = ("created", "name", "expiry", "traffic")
-USER_STATUSES = ("all", "enabled", "disabled", "frozen", "expired")
 
 # Settings tabs (Phase 4): the sections the settings page is split
 # into. There is deliberately no "network" tab — the only network-ish
@@ -4314,14 +2623,6 @@ SETTINGS_SECTIONS = (
     "advanced",
 )
 SETTINGS_SECTION_DEFAULT = "general"
-
-
-def _aware_dt(value: Optional[datetime]) -> Optional[datetime]:
-    """A stored datetime as timezone-aware UTC (SQLite returns naive
-    values for ``DateTime(timezone=True)`` columns)."""
-    if value is None:
-        return None
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 def _valid_settings_section(value: str) -> str:
@@ -4355,7 +2656,7 @@ def dashboard(
 ):
     users = db.query(User).order_by(User.created_at.desc()).limit(10).all()
     total_users = db.query(User).count()
-    active_users = sum(1 for u in db.query(User).all() if _user_usable(db, u))
+    active_users = sum(1 for u in db.query(User).all() if user_is_usable(u))
     total_inbounds = db.query(Inbound).count()
     traffic_used = sum(u.traffic_used_bytes or 0 for u in db.query(User).all())
     today = datetime.now(timezone.utc).date()
@@ -4374,11 +2675,10 @@ def dashboard(
     # settings page uses — never duplicated). A collection failure
     # yields None and the template shows "unavailable", never zero.
     server_status = None
-    if system_status_mod is not None:
-        try:
-            server_status = system_status_mod.collect_server_status(DATA_DIR)
-        except Exception:  # noqa: BLE001
-            server_status = None
+    try:
+        server_status = system_status_mod.collect_server_status(DATA_DIR)
+    except Exception:  # noqa: BLE001
+        server_status = None
     # Inbound node cards + protocol distribution (dashboard sections).
     inbounds = db.query(Inbound).order_by(Inbound.id).all()
     clients_by_inbound = {
@@ -4414,833 +2714,13 @@ def dashboard(
 
 
 # ---------------------------------------------------------------------------
-# User editor helpers (Phase 2 of the professional-panel expansion)
-# ---------------------------------------------------------------------------
-
-# XTLS flows Xray accepts for VLESS clients. Vision needs TLS or
-# Reality; the "-udp443" variant additionally serves QUIC on 443.
-VLESS_FLOWS = ("xtls-rprx-vision", "xtls-rprx-vision-udp443")
-
-# Bounds for the per-client IP limit and bulk expiry extension.
-IP_LIMIT_MAX = 1000
-EXTEND_DAYS_MAX = 3650
-
-
-def _parse_expiry_date(value: str) -> Optional[datetime]:
-    """``YYYY-MM-DD`` -> end of that day (23:59:59 UTC), or ``None``
-    for an empty value (never expires). Raises ``ValueError`` on a
-    malformed date. A past date is allowed — it expires the user
-    immediately, which is a legitimate admin action."""
-    text = (value or "").strip()
-    if not text:
-        return None
-    parsed = datetime.strptime(text, "%Y-%m-%d")
-    return parsed.replace(
-        hour=23, minute=59, second=59, tzinfo=timezone.utc
-    )
-
-
-def _parse_ip_limit(value: str) -> Optional[int]:
-    """Per-client IP limit: empty or ``0`` means unlimited (``None``);
-    otherwise an int in ``1..IP_LIMIT_MAX``. Raises ``ValueError``."""
-    text = (value or "").strip()
-    if not text:
-        return None
-    limit = int(text)
-    if limit == 0:
-        return None
-    if not 1 <= limit <= IP_LIMIT_MAX:
-        raise ValueError("ip limit out of range")
-    return limit
-
-
-def _set_client_extra(client: Any, key: str, value: Any) -> None:
-    """Set (or, for ``None``, remove) one key in a client's ``extra``
-    JSON. Read-modify-write through the model property so other keys
-    (e.g. ``allowed_ips``) are preserved."""
-    extra = dict(getattr(client, "extra", None) or {})
-    if value is None:
-        extra.pop(key, None)
-    else:
-        extra[key] = value
-    client.extra = extra
-
-
-def _set_client_frozen(client: Any, frozen: bool) -> None:
-    """Freeze/unfreeze one client (``extra.frozen``). A frozen client
-    is unusable (see :func:`app.models.client_is_frozen`) but keeps
-    its credentials, config and traffic history."""
-    _set_client_extra(client, "frozen", True if frozen else None)
-
-
-def _client_is_frozen(client: Any) -> bool:
-    """Frozen flag for one client (model helper when available, else
-    a direct ``extra`` read — same rule either way)."""
-    if client_is_frozen is not None:
-        try:
-            return bool(client_is_frozen(client))
-        except (TypeError, AttributeError, ValueError):
-            pass
-    extra = getattr(client, "extra", None) or {}
-    return bool(extra.get("frozen")) if isinstance(extra, dict) else False
-
-
-def _client_flow_options(inbound: Any) -> list[str]:
-    """Allowed ``flow`` values for a client of ``inbound``.
-
-    Flow is VLESS-only (VMess has no flow). Vision needs TLS or
-    Reality, so a security=``none`` inbound offers only ``""``
-    (no flow) — saving the edit page then clears any stale Vision
-    value a client picked up when the inbound had TLS/Reality.
-    A Reality inbound offers only the Vision variants: the Xray
-    renderer defaults an empty flow to ``xtls-rprx-vision`` for
-    Reality (``app/xray.py``), so offering "none" there would render
-    Vision on the server while the share link carried no flow — a
-    client that can never connect.
-    """
-    if getattr(inbound, "protocol", None) != "vless":
-        return []
-    stream = getattr(inbound, "stream", None) or {}
-    security = (stream.get("security") or "none") if isinstance(stream, dict) else "none"
-    if security == "reality":
-        return list(VLESS_FLOWS)
-    if security == "tls":
-        return ["", *VLESS_FLOWS]
-    return [""]
-
-
-def _move_targets(
-    db: Session, user: Any, client: Any
-) -> list[Any]:
-    """Inbounds a client may move to: same protocol as its current
-    inbound, enabled, not the current one, and without an existing
-    client for this user (``UNIQUE(user_id, inbound_id)``)."""
-    current = db.get(Inbound, client.inbound_id)
-    if current is None:
-        return []
-    taken = {
-        row[0]
-        for row in db.query(Client.inbound_id)
-        .filter(Client.user_id == user.id)
-        .all()
-    }
-    query = (
-        db.query(Inbound)
-        .filter(
-            Inbound.protocol == current.protocol,
-            Inbound.enabled.is_(True),
-            Inbound.id != current.id,
-        )
-    )
-    if taken:
-        query = query.filter(~Inbound.id.in_(taken))
-    return query.order_by(Inbound.tag).all()
-
-
-def _user_client_rows(
-    db: Session, user: Any, *, with_moves: bool = True
-) -> list[dict[str, Any]]:
-    """One row per client of ``user`` for the edit/detail pages:
-    the client, its inbound, its flow options, its move targets
-    (skipped when ``with_moves`` is False — the detail page does
-    not need them), and its frozen / IP-limit state (from ``extra``).
-    """
-    clients = (
-        db.query(Client)
-        .filter(Client.user_id == user.id)
-        .order_by(Client.inbound_id)
-        .all()
-    )
-    inbounds = {i.id: i for i in db.query(Inbound).all()}
-    rows: list[dict[str, Any]] = []
-    for client in clients:
-        inbound = inbounds.get(client.inbound_id)
-        if inbound is None:
-            continue
-        extra = getattr(client, "extra", None) or {}
-        rows.append(
-            {
-                "client": client,
-                "inbound": inbound,
-                "flow_options": _client_flow_options(inbound),
-                "move_targets": (
-                    _move_targets(db, user, client) if with_moves else []
-                ),
-                "frozen": _client_is_frozen(client),
-                "ip_limit": extra.get("ip_limit")
-                if isinstance(extra, dict)
-                else None,
-            }
-        )
-    return rows
-
-
-def _user_edit_values(
-    user: Any, rows: list[dict[str, Any]]
-) -> dict[str, Any]:
-    """Pre-filled values for the user edit form (user fields + one
-    set of per-client fields per row, keyed ``flow_<id>`` /
-    ``ip_limit_<id>`` / ``frozen_<id>`` / ``move_<id>``)."""
-    limit_gb = ""
-    if user.traffic_limit_bytes:
-        limit_gb = str(round(user.traffic_limit_bytes / 1024**3, 2))
-    values: dict[str, Any] = {
-        "name": user.name,
-        "note": user.note or "",
-        "traffic_limit_gb": limit_gb,
-        "expires_date": (
-            user.expires_at.strftime("%Y-%m-%d") if user.expires_at else ""
-        ),
-    }
-    for row in rows:
-        client = row["client"]
-        cid = client.id
-        flow = getattr(client, "flow", None) or ""
-        # The form only offers the flow options valid for this
-        # inbound; a stale value outside them shows as the first
-        # option (and is corrected on save).
-        if row["flow_options"] and flow not in row["flow_options"]:
-            flow = row["flow_options"][0]
-        values[f"flow_{cid}"] = flow
-        values[f"ip_limit_{cid}"] = (
-            "" if row["ip_limit"] is None else str(row["ip_limit"])
-        )
-        values[f"frozen_{cid}"] = bool(row["frozen"])
-        values[f"move_{cid}"] = ""
-    return values
-
-
-def _render_user_edit(
-    request: Request,
-    user: Any,
-    values: dict[str, Any],
-    rows: list[dict[str, Any]],
-    *,
-    error: str | None = None,
-    db: Session,
-) -> HTMLResponse:
-    """Render the user edit page (GET and POST-error re-render)."""
-    return templates.TemplateResponse(
-        request,
-        "user_edit.html",
-        _template_ctx(
-            request,
-            {
-                "user": user,
-                "values": values,
-                "rows": rows,
-                "error": error or "",
-            },
-        ),
-    )
-
-
-def _apply_client_move(
-    db: Session, client: Any, target: Any
-) -> Optional[str]:
-    """Move ``client`` to ``target`` (same protocol, pre-validated).
-
-    Credentials stay; WireGuard/AmneziaWG get a fresh address from
-    the target subnet (the old address belongs to the old subnet's
-    pool). Traffic history is per-user, so it is untouched. Returns
-    an error string, or ``None`` on success. Does not commit.
-    """
-    protocol = target.protocol
-    if protocol in ("wireguard", "amneziawg"):
-        subnet = (target.stream or {}).get("subnet") or (
-            "10.8.0.0/24" if protocol == "wireguard" else "10.8.1.0/24"
-        )
-        try:
-            if protocol == "wireguard":
-                address = _next_wg_address(db, subnet, inbound_id=target.id)
-            else:
-                address = _next_awg_address(db, subnet, inbound_id=target.id)
-        except ValueError:
-            return "move_address_exhausted"
-        _set_client_extra(client, "allowed_ips", address)
-    client.inbound_id = target.id
-    return None
-
-
-# ---------------------------------------------------------------------------
 # Users (HTML)
 # ---------------------------------------------------------------------------
 
 
-@app.get("/users", response_class=HTMLResponse)
-def users_page(
-    request: Request,
-    q: str = Query(""),
-    status: str = Query("all"),
-    sort: str = Query("created"),
-    page: str = Query("1"),
-    admin: Any = Depends(require_admin),
-    db: Session = Depends(db_session),
-):
-    """Users list with server-side search / filter / sort / pagination
-    (Phase 4). All params are bookmarkable GET params; a bad value
-    falls back to the default, never a 500 (``page`` is parsed by
-    hand for exactly that reason — an ``int`` Query param would 422
-    on ``?page=abc``)."""
-    now = datetime.now(timezone.utc)
-    users = db.query(User).all()
-    total_users = len(users)
-
-    # Search: name or note, case-insensitive substring.
-    needle = (q or "").strip().lower()
-    if needle:
-        users = [
-            u
-            for u in users
-            if needle in u.name.lower()
-            or (u.note and needle in u.note.lower())
-        ]
-
-    # Frozen is a per-user flag: all of the user's clients frozen
-    # (and at least one client) — same rule as the detail page.
-    # Computed for every render: the table shows the frozen badge.
-    clients_by_user: dict[int, list[Any]] = {}
-    for client in db.query(Client).all():
-        clients_by_user.setdefault(client.user_id, []).append(client)
-    frozen_ids = {
-        user_id
-        for user_id, clients in clients_by_user.items()
-        if clients and all(_client_is_frozen(c) for c in clients)
-    }
-    # Expired ids are precomputed here (with naive/aware handling) —
-    # the template must never compare datetimes itself.
-    expired_ids = {
-        u.id
-        for u in db.query(User).all()
-        if _aware_dt(u.expires_at) is not None
-        and _aware_dt(u.expires_at) <= now
-    }
-
-    status = (status or "").strip().lower()
-    if status not in USER_STATUSES:
-        status = "all"
-    if status == "enabled":
-        users = [u for u in users if u.enabled]
-    elif status == "disabled":
-        users = [u for u in users if not u.enabled]
-    elif status == "frozen":
-        users = [u for u in users if u.id in frozen_ids]
-    elif status == "expired":
-        users = [u for u in users if u.id in expired_ids]
-
-    sort = (sort or "").strip().lower()
-    if sort not in USER_SORTS:
-        sort = "created"
-    if sort == "name":
-        users.sort(key=lambda u: u.name.lower())
-    elif sort == "expiry":
-        # Never-expiring users sort last (no expiry to approach).
-        users.sort(
-            key=lambda u: _aware_dt(u.expires_at)
-            or datetime.max.replace(tzinfo=timezone.utc)
-        )
-    elif sort == "traffic":
-        users.sort(key=lambda u: u.traffic_used_bytes or 0, reverse=True)
-    else:
-        users.sort(
-            key=lambda u: _aware_dt(u.created_at)
-            or datetime.min.replace(tzinfo=timezone.utc),
-            reverse=True,
-        )
-
-    filtered_total = len(users)
-    try:
-        page_n = int((page or "1").strip())
-    except ValueError:
-        page_n = 1
-    total_pages = max(
-        1, (filtered_total + USERS_PAGE_SIZE - 1) // USERS_PAGE_SIZE
-    )
-    page_n = min(max(page_n, 1), total_pages)
-    start = (page_n - 1) * USERS_PAGE_SIZE
-    page_users = users[start : start + USERS_PAGE_SIZE]
-    return templates.TemplateResponse(request, "users.html",
-        _template_ctx(
-            request,
-            {
-                "admin": admin,
-                "users": page_users,
-                "total_users": total_users,
-                "filtered_total": filtered_total,
-                "frozen_ids": frozen_ids,
-                "expired_ids": expired_ids,
-                "q": q or "",
-                "status": status,
-                "sort": sort,
-                "page": page_n,
-                "total_pages": total_pages,
-                "page_size": USERS_PAGE_SIZE,
-            },
-        ),
-    )
-
-
-@app.post("/users")
-def create_user(
-    request: Request,
-    name: str = Form(...),
-    note: str = Form(""),
-    traffic_limit_gb: str = Form(""),
-    expires_days: str = Form(""),
-    admin: Any = Depends(require_admin),
-    csrf: None = Depends(require_csrf),
-    db: Session = Depends(db_session),
-):
-    lang = get_lang(request)
-    t = t_for(lang)
-    name = name.strip()
-    if not NAME_RE.match(name):
-        return _redirect("/users", request, err=t["invalid_name"])
-    if db.query(User).filter(User.name == name).first() is not None:
-        return _redirect("/users", request, err=t["name_exists"])
-    limit_bytes: Optional[int] = None
-    if traffic_limit_gb.strip():
-        try:
-            limit_bytes = int(float(traffic_limit_gb) * 1024**3)
-            if limit_bytes <= 0:
-                limit_bytes = None
-        except ValueError:
-            return _redirect("/users", request, err=t["traffic_limit_gb"])
-    expires_at: Optional[datetime] = None
-    if expires_days.strip():
-        try:
-            days = int(expires_days)
-            if days > 0:
-                expires_at = datetime.now(timezone.utc) + timedelta(days=days)
-        except ValueError:
-            return _redirect("/users", request, err=t["expires_days"])
-    user = User(
-        name=name,
-        note=note.strip() or None,
-        enabled=True,
-        traffic_limit_bytes=limit_bytes,
-        traffic_used_bytes=0,
-        expires_at=expires_at,
-        sub_token=secrets.token_urlsafe(24),
-    )
-    db.add(user)
-    db.commit()
-    _create_clients_for_user(db, user)
-    _audit(db, admin.id, "user.create", name)
-    logger.info("user created: %s", name)
-    _notify_telegram(db, t["tg_user_created"].format(name=name))
-    errors = rerender_configs(db)
-    err = "; ".join(errors) if errors else ""
-    if err:
-        err = t["rerender_failed"] + err
-    return _redirect(f"/users/{user.id}", request, err=err)
-
-
-@app.get("/users/{user_id}", response_class=HTMLResponse)
-def user_detail(
-    request: Request,
-    user_id: int,
-    admin: Any = Depends(require_admin),
-    db: Session = Depends(db_session),
-):
-    user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
-        raise HTTPException(status_code=404, detail="user not found")
-    settings = get_settings(db)
-    host = _sub_host(request, settings)
-    base = str(request.base_url).rstrip("/") + WEB_PATH
-    links = _links_for_user(db, user, host, settings)
-    clients = (
-        db.query(Client)
-        .filter(Client.user_id == user.id)
-        .order_by(Client.inbound_id)
-        .all()
-    )
-    inbounds = {i.id: i for i in db.query(Inbound).all()}
-    # Phase 2: frozen / IP-limit state per client (from `extra`) and
-    # the user-level frozen flag (all clients frozen).
-    rows = _user_client_rows(db, user, with_moves=False)
-    client_extra = {
-        row["client"].id: {
-            "frozen": row["frozen"],
-            "ip_limit": row["ip_limit"],
-        }
-        for row in rows
-    }
-    frozen = bool(rows) and all(row["frozen"] for row in rows)
-    # Phase 3: this user's 14-day traffic chart (admin view only —
-    # the public /u/<token> page does not pass this context).
-    user_traffic_chart, user_traffic_14d = _traffic_chart(db, user_id=user.id)
-    return templates.TemplateResponse(request, "user_detail.html",
-        _template_ctx(
-            request,
-            {
-                "admin": admin,
-                "user": user,
-                "clients": clients,
-                "inbounds": inbounds,
-                "client_extra": client_extra,
-                "frozen": frozen,
-                "links": links,
-                "links_available": links_mod is not None,
-                "sub_url": f"{base}/sub/{user.sub_token}",
-                "zedsecure_url": f"{base}/sub/{user.sub_token}/zedsecure.json",
-                "user_url": f"{base}/u/{user.sub_token}",
-                "file_urls": _file_export_urls(db, user, base),
-                "host": host,
-                "user_traffic_chart": user_traffic_chart,
-                "user_traffic_14d": user_traffic_14d,
-            },
-        ),
-    )
-
-
-@app.post("/users/{user_id}/toggle")
-def toggle_user(
-    request: Request,
-    user_id: int,
-    admin: Any = Depends(require_admin),
-    csrf: None = Depends(require_csrf),
-    db: Session = Depends(db_session),
-):
-    user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
-        raise HTTPException(status_code=404, detail="user not found")
-    user.enabled = not user.enabled
-    db.commit()
-    _audit(db, admin.id, "user.toggle", f"{user.name} enabled={user.enabled}")
-    logger.info("user toggled: %s enabled=%s", user.name, user.enabled)
-    errors = rerender_configs(db)
-    t = t_for(get_lang(request))
-    err = (t["rerender_failed"] + "; ".join(errors)) if errors else ""
-    return _redirect(f"/users/{user_id}", request, err=err)
-
-
-@app.post("/users/{user_id}/delete")
-def delete_user(
-    request: Request,
-    user_id: int,
-    admin: Any = Depends(require_admin),
-    csrf: None = Depends(require_csrf),
-    db: Session = Depends(db_session),
-):
-    user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
-        raise HTTPException(status_code=404, detail="user not found")
-    name = user.name
-    db.query(Client).filter(Client.user_id == user.id).delete()
-    db.delete(user)
-    db.commit()
-    _audit(db, admin.id, "user.delete", name)
-    logger.info("user deleted: %s", name)
-    errors = rerender_configs(db)
-    t = t_for(get_lang(request))
-    err = (t["rerender_failed"] + "; ".join(errors)) if errors else ""
-    return _redirect("/users", request, err=err)
-
-
-@app.post("/users/{user_id}/rotate-token")
-def rotate_token(
-    request: Request,
-    user_id: int,
-    admin: Any = Depends(require_admin),
-    csrf: None = Depends(require_csrf),
-    db: Session = Depends(db_session),
-):
-    user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
-        raise HTTPException(status_code=404, detail="user not found")
-    user.sub_token = secrets.token_urlsafe(24)
-    db.commit()
-    _audit(db, admin.id, "user.rotate_token", user.name)
-    logger.info("subscription token rotated for %s", user.name)
-    # No core re-render needed: the subscription token is not in core configs.
-    return _redirect(f"/users/{user_id}", request)
-
-
-@app.get("/users/{user_id}/edit", response_class=HTMLResponse)
-def edit_user_page(
-    request: Request,
-    user_id: int,
-    admin: Any = Depends(require_admin),
-    db: Session = Depends(db_session),
-):
-    """Pre-filled edit page for one user (Phase 2)."""
-    user = db.get(User, user_id)
-    if user is None:
-        raise HTTPException(status_code=404, detail="user not found")
-    rows = _user_client_rows(db, user)
-    return _render_user_edit(
-        request, user, _user_edit_values(user, rows), rows, db=db
-    )
-
-
-@app.post("/users/{user_id}/edit")
-async def edit_user_submit(
-    request: Request,
-    user_id: int,
-    admin: Any = Depends(require_admin),
-    csrf: None = Depends(require_csrf),
-    db: Session = Depends(db_session),
-):
-    """Validate, save, re-render — two passes so a bad per-client
-    field never leaves a half-saved user.
-
-    On a validation error the edit form is re-rendered (200) with
-    the submitted values preserved, like the inbound editor.
-    """
-    t = t_for(get_lang(request))
-    user = db.get(User, user_id)
-    if user is None:
-        raise HTTPException(status_code=404, detail="user not found")
-    form = await request.form()
-    data: dict[str, str] = {
-        str(key): str(value) for key, value in form.multi_items()
-        if isinstance(value, str)
-    }
-    rows = _user_client_rows(db, user)
-    values = _user_edit_values(user, rows)
-    # Merge the submitted values over the current ones so a
-    # validation error shows what the admin typed, not the old DB.
-    for key, value in data.items():
-        values[key] = value
-    for row in rows:
-        cid = row["client"].id
-        values[f"frozen_{cid}"] = data.get(f"frozen_{cid}") in ("on", "true", "1")
-
-    def _error(message: str) -> HTMLResponse:
-        return _render_user_edit(
-            request, user, values, rows, error=message, db=db
-        )
-
-    # --- pass 1: validate everything, apply nothing ---
-    name = (data.get("name") or "").strip()
-    if not NAME_RE.match(name):
-        return _error(t["invalid_name"])
-    clash = (
-        db.query(User)
-        .filter(User.name == name, User.id != user.id)
-        .first()
-    )
-    if clash is not None:
-        return _error(t["name_exists"])
-    limit_bytes: Optional[int] = None
-    if (data.get("traffic_limit_gb") or "").strip():
-        try:
-            limit_bytes = int(float(data["traffic_limit_gb"]) * 1024**3)
-            if limit_bytes <= 0:
-                limit_bytes = None
-        except ValueError:
-            return _error(t["traffic_limit_gb"])
-    try:
-        expires_at = _parse_expiry_date(data.get("expires_date") or "")
-    except ValueError:
-        return _error(t["invalid_expiry_date"])
-
-    planned: list[tuple[Any, str, Optional[int], bool, Any]] = []
-    planned_targets: set[int] = set()
-    for row in rows:
-        client = row["client"]
-        cid = client.id
-        # Flow (VLESS only; a field the form did not send leaves the
-        # stored value untouched).
-        flow = getattr(client, "flow", None) or ""
-        options = row["flow_options"]
-        if options and f"flow_{cid}" in data:
-            flow = data[f"flow_{cid}"]
-            if flow not in options:
-                return _error(t["invalid_flow"])
-        # IP limit (a field the form did not send keeps the value).
-        ip_limit: Optional[int] = row["ip_limit"]
-        if f"ip_limit_{cid}" in data:
-            try:
-                ip_limit = _parse_ip_limit(data[f"ip_limit_{cid}"])
-            except ValueError:
-                return _error(t["invalid_ip_limit"])
-        frozen = data.get(f"frozen_{cid}") in ("on", "true", "1")
-        # Move to another compatible inbound.
-        target = None
-        move_raw = (data.get(f"move_{cid}") or "").strip()
-        if move_raw:
-            try:
-                target_id = int(move_raw)
-            except ValueError:
-                return _error(t["move_invalid_target"])
-            allowed = {i.id for i in row["move_targets"]}
-            if target_id not in allowed or target_id in planned_targets:
-                return _error(t["move_invalid_target"])
-            planned_targets.add(target_id)
-            target = db.get(Inbound, target_id)
-            if target is None:  # pragma: no cover - allowed ids exist
-                return _error(t["move_invalid_target"])
-            # Pre-check the WG/AWG address pool so a full pool fails
-            # validation (no partial save) instead of mid-apply.
-            if target.protocol in ("wireguard", "amneziawg"):
-                subnet = (target.stream or {}).get("subnet") or (
-                    "10.8.0.0/24"
-                    if target.protocol == "wireguard"
-                    else "10.8.1.0/24"
-                )
-                try:
-                    if target.protocol == "wireguard":
-                        _next_wg_address(db, subnet, inbound_id=target.id)
-                    else:
-                        _next_awg_address(db, subnet, inbound_id=target.id)
-                except ValueError:
-                    return _error(t["move_address_exhausted"])
-        planned.append((client, flow, ip_limit, frozen, target))
-
-    # --- pass 2: apply ---
-    user.name = name
-    user.note = (data.get("note") or "").strip() or None
-    user.traffic_limit_bytes = limit_bytes
-    user.expires_at = expires_at
-    for client, flow, ip_limit, frozen, target in planned:
-        client.flow = flow or None
-        _set_client_extra(client, "ip_limit", ip_limit)
-        _set_client_frozen(client, frozen)
-        if target is not None:
-            move_err = _apply_client_move(db, client, target)
-            if move_err is not None:  # pre-checked; defence in depth
-                db.rollback()
-                return _error(t[move_err])
-    db.commit()
-    _audit(db, admin.id if admin is not None else None, "user.update", name)
-    logger.info("user updated: %s", name)
-    errors = rerender_configs(db)
-    if errors:
-        return _redirect(
-            f"/users/{user.id}",
-            request,
-            err=t["rerender_failed"] + "; ".join(errors),
-        )
-    return _redirect(f"/users/{user.id}", request, msg=t["user_updated"])
-
-
-@app.post("/users/{user_id}/freeze")
-def freeze_user(
-    request: Request,
-    user_id: int,
-    admin: Any = Depends(require_admin),
-    csrf: None = Depends(require_csrf),
-    db: Session = Depends(db_session),
-):
-    """Freeze every client of the user: they drop out of configs,
-    links and feeds, but keep credentials and traffic history."""
-    user = db.get(User, user_id)
-    if user is None:
-        raise HTTPException(status_code=404, detail="user not found")
-    count = 0
-    for client in db.query(Client).filter(Client.user_id == user.id).all():
-        if not _client_is_frozen(client):
-            _set_client_frozen(client, True)
-            count += 1
-    db.commit()
-    _audit(db, admin.id, "user.freeze", f"{user.name} ({count} clients)")
-    logger.info("user frozen: %s (%d clients)", user.name, count)
-    errors = rerender_configs(db)
-    t = t_for(get_lang(request))
-    err = (t["rerender_failed"] + "; ".join(errors)) if errors else ""
-    return _redirect(f"/users/{user_id}", request, msg=t["user_frozen"], err=err)
-
-
-@app.post("/users/{user_id}/unfreeze")
-def unfreeze_user(
-    request: Request,
-    user_id: int,
-    admin: Any = Depends(require_admin),
-    csrf: None = Depends(require_csrf),
-    db: Session = Depends(db_session),
-):
-    """Unfreeze every client of the user (restores the frozen state)."""
-    user = db.get(User, user_id)
-    if user is None:
-        raise HTTPException(status_code=404, detail="user not found")
-    count = 0
-    for client in db.query(Client).filter(Client.user_id == user.id).all():
-        if _client_is_frozen(client):
-            _set_client_frozen(client, False)
-            count += 1
-    db.commit()
-    _audit(db, admin.id, "user.unfreeze", f"{user.name} ({count} clients)")
-    logger.info("user unfrozen: %s (%d clients)", user.name, count)
-    errors = rerender_configs(db)
-    t = t_for(get_lang(request))
-    err = (t["rerender_failed"] + "; ".join(errors)) if errors else ""
-    return _redirect(
-        f"/users/{user_id}", request, msg=t["user_unfrozen"], err=err
-    )
-
-
-BULK_ACTIONS = ("enable", "disable", "delete", "reset-traffic", "extend-expiry")
-
-
-@app.post("/users/bulk")
-async def bulk_users(
-    request: Request,
-    admin: Any = Depends(require_admin),
-    csrf: None = Depends(require_csrf),
-    db: Session = Depends(db_session),
-):
-    """Bulk ops on the selected users (Phase 2).
-
-    ``action`` comes from the clicked submit button; ``extend-expiry``
-    also needs ``extend_days``. Every action can change usability
-    (a reset user is back under quota, an extended user un-expires),
-    so configs are re-rendered once at the end.
-    """
-    t = t_for(get_lang(request))
-    form = await request.form()
-    ids: set[int] = set()
-    for raw in form.getlist("user_ids"):
-        try:
-            ids.add(int(raw))
-        except (TypeError, ValueError):
-            continue
-    if not ids:
-        return _redirect("/users", request, err=t["no_users_selected"])
-    action = (form.get("action") or "").strip()
-    if action not in BULK_ACTIONS:
-        return _redirect("/users", request, err=t["invalid_action"])
-    users = db.query(User).filter(User.id.in_(ids)).all()
-    if not users:
-        return _redirect("/users", request, err=t["no_users_selected"])
-    extend_days: Optional[int] = None
-    if action == "extend-expiry":
-        try:
-            extend_days = int((form.get("extend_days") or "").strip())
-        except ValueError:
-            return _redirect("/users", request, err=t["invalid_extend_days"])
-        if not 1 <= extend_days <= EXTEND_DAYS_MAX:
-            return _redirect("/users", request, err=t["invalid_extend_days"])
-    now = datetime.now(timezone.utc)
-    for user in users:
-        if action == "enable":
-            user.enabled = True
-        elif action == "disable":
-            user.enabled = False
-        elif action == "delete":
-            db.query(Client).filter(Client.user_id == user.id).delete()
-            db.delete(user)
-        elif action == "reset-traffic":
-            user.traffic_used_bytes = 0
-        elif action == "extend-expiry":
-            assert extend_days is not None  # validated above
-            base = user.expires_at
-            if base is not None and base.tzinfo is None:
-                base = base.replace(tzinfo=timezone.utc)
-            # Extend from the current expiry when it is still in the
-            # future, else from now (an expired user must not stay
-            # expired after an extension); never-expiring users get
-            # now + N days.
-            base = max(base, now) if base is not None else now
-            user.expires_at = base + timedelta(days=extend_days)
-    db.commit()
-    _audit(db, admin.id, "user.bulk", f"{action} x{len(users)}")
-    logger.info("bulk users: %s x%d", action, len(users))
-    errors = rerender_configs(db)
-    err = (t["rerender_failed"] + "; ".join(errors)) if errors else ""
-    return _redirect("/users", request, msg=t["bulk_done"], err=err)
+# Users (HTML) — routes live in app/routes/users.py (Phase 5 split).
+# Mounted here, in the same position, so route precedence is unchanged.
+app.include_router(users_router)
 
 
 # ---------------------------------------------------------------------------
@@ -5380,27 +2860,14 @@ def create_inbound(
     if protocol == "wireguard":
         stream["subnet"] = "10.8.0.0/24"
     if protocol == "openvpn":
-        stream["subnet"] = (
-            openvpn_mod.DEFAULT_NETWORK if openvpn_mod is not None else "10.9.0.0/24"
-        )
+        stream["subnet"] = openvpn_mod.DEFAULT_NETWORK
     elif protocol == "openconnect":
-        stream["subnet"] = (
-            openconnect_mod.DEFAULT_NETWORK
-            if openconnect_mod is not None
-            else "10.10.10.0/24"
-        )
+        stream["subnet"] = openconnect_mod.DEFAULT_NETWORK
     elif protocol == "amneziawg":
-        stream["subnet"] = (
-            amneziawg_mod.DEFAULT_NETWORK
-            if amneziawg_mod is not None
-            else "10.8.1.0/24"
-        )
-        if amneziawg_mod is not None:
-            stream["awg_params"] = amneziawg_mod.generate_awg_params()
+        stream["subnet"] = amneziawg_mod.DEFAULT_NETWORK
+        stream["awg_params"] = amneziawg_mod.generate_awg_params()
     elif protocol == "ikev2":
-        stream["subnet"] = (
-            ikev2_mod.DEFAULT_NETWORK if ikev2_mod is not None else "10.20.0.0/24"
-        )
+        stream["subnet"] = ikev2_mod.DEFAULT_NETWORK
     if sni.strip() and core in ("xray", "singbox"):
         reality_block: dict[str, Any] = {"sni": sni.strip(), "dest": f"{sni.strip()}:443"}
         if protocol == "vless":
@@ -5549,8 +3016,6 @@ def _change_admin_password(
     other devices are signed out while this one stays logged in. No
     password value is ever logged.
     """
-    if verify_password is None or hash_password is None:
-        return False, "invalid_input"
     if not verify_password(current_password, admin.password_hash):
         return False, "wrong_current_password"
     if len(new_password) < PASSWORD_MIN_LENGTH:
@@ -5559,11 +3024,10 @@ def _change_admin_password(
         return False, "password_mismatch"
     admin.password_hash = hash_password(new_password)
     db.commit()
-    if invalidate_other_sessions is not None:
-        try:
+    try:
             invalidate_other_sessions(db, admin.id, keep_token=keep_token)
-        except Exception:  # noqa: BLE001
-            logger.warning("invalidating other sessions failed")
+    except Exception:  # noqa: BLE001
+        logger.warning("invalidating other sessions failed")
     return True, "password_changed"
 
 
@@ -5631,28 +3095,6 @@ def _mask_webhook_url(url: str) -> str:
     return f"{head}/••••{tail[-4:]}"
 
 
-def _notify_telegram(db: Session, text: str) -> bool:
-    """Send a Telegram notification if configured. Never raises.
-
-    The token is read from settings and passed straight to the
-    sender — it is never logged (not even on failure: the warning
-    below carries no exception text, because HTTP errors can echo
-    the request URL, which contains the token).
-    """
-    if telegram_mod is None or not text:
-        return False
-    try:
-        settings = get_settings(db)
-        token = settings.get("telegram_bot_token", "")
-        chat_id = settings.get("telegram_chat_id", "")
-        if not token or not chat_id:
-            return False
-        return bool(telegram_mod.send_message(token, chat_id, text))
-    except Exception:  # noqa: BLE001
-        logger.warning("telegram notification failed")
-        return False
-
-
 def _notify_expiring_users(db: Session, now: Optional[datetime] = None) -> int:
     """Notify about users expiring within 24h (once per user per day).
 
@@ -5662,8 +3104,6 @@ def _notify_expiring_users(db: Session, now: Optional[datetime] = None) -> int:
     Background task, so the message uses Persian (panel default).
     Never raises.
     """
-    if telegram_mod is None:
-        return 0
     try:
         now = now or datetime.now(timezone.utc)
         today = now.date().isoformat()
@@ -5713,7 +3153,7 @@ def _notify_rerender_failure(db: Session, errors: list[str]) -> bool:
     lives in the ``telegram_rerender_notified_at`` setting. Never
     raises.
     """
-    if telegram_mod is None or not errors:
+    if not errors:
         return False
     try:
         now = datetime.now(timezone.utc)
@@ -5737,36 +3177,6 @@ def _notify_rerender_failure(db: Session, errors: list[str]) -> bool:
     except Exception:  # noqa: BLE001
         logger.warning("re-render failure notification failed")
         return False
-
-
-def _traffic_chart(
-    db: Session, user_id: Optional[int] = None, today: Any = None
-) -> tuple[str, int]:
-    """``(svg, total_bytes)`` for the last 14 days of ``traffic_daily``.
-
-    ``user_id=None`` charts all users (dashboard); a user id charts
-    one user (user detail). Days with no recorded traffic are zero
-    bars, never invented values. Returns ``("", 0)`` when the charts
-    module is unavailable. Never raises.
-    """
-    if charts_mod is None:
-        return "", 0
-    try:
-        query = db.query(TrafficDaily)
-        if user_id is not None:
-            query = query.filter(TrafficDaily.user_id == user_id)
-        rows = [
-            (row.date, (row.up_bytes or 0) + (row.down_bytes or 0))
-            for row in query.all()
-        ]
-        series = charts_mod.daily_traffic_series(rows, today=today)
-        return (
-            charts_mod.traffic_chart_svg(series),
-            sum(total for _day, total in series),
-        )
-    except Exception:  # noqa: BLE001
-        logger.warning("traffic chart failed")
-        return "", 0
 
 
 def _db_file_path(db: Session) -> Optional[Path]:
@@ -5810,11 +3220,10 @@ def settings_page(
         not in ("telegram_bot_token", "telegram_webhook_secret", "telegram_webhook_url")
     }
     server_status = None
-    if system_status_mod is not None:
-        try:
-            server_status = system_status_mod.collect_server_status(DATA_DIR)
-        except Exception:  # noqa: BLE001
-            server_status = None
+    try:
+        server_status = system_status_mod.collect_server_status(DATA_DIR)
+    except Exception:  # noqa: BLE001
+        server_status = None
     webhook_info = None
     raw_info = settings.get("telegram_webhook_info", "")
     if raw_info:
@@ -5926,20 +3335,19 @@ def save_settings(
         # fatal (the settings still save; the admin can retry from
         # the "Register commands" button). A failed registration on
         # a fresh token is also the first sign the token is wrong.
-        if telegram_mod is not None and bot_mod is not None:
-            ok, error = telegram_mod.set_my_commands(
-                new_token, list(bot_mod.BOT_COMMANDS)
+        ok, error = telegram_mod.set_my_commands(
+            new_token, list(bot_mod.BOT_COMMANDS)
+        )
+        if ok:
+            set_setting(
+                db,
+                "telegram_commands_registered_at",
+                datetime.now(timezone.utc).isoformat(),
             )
-            if ok:
-                set_setting(
-                    db,
-                    "telegram_commands_registered_at",
-                    datetime.now(timezone.utc).isoformat(),
-                )
-            else:
-                commands_err = t["telegram_commands_failed"] + (
-                    f" {error}" if error else ""
-                )
+        else:
+            commands_err = t["telegram_commands_failed"] + (
+                f" {error}" if error else ""
+            )
     if telegram_chat_id is not None:
         set_setting(db, "telegram_chat_id", chat_id)
     if telegram_transport is not None:
@@ -5949,11 +3357,7 @@ def save_settings(
             db, admin.id, "telegram.transport_change",
             f"{previous_transport} -> {transport}",
         )
-    if (
-        log_level is not None
-        and log_level.strip()
-        and panel_log_mod is not None
-    ):
+    if log_level is not None and log_level.strip():
         # Applies immediately (no restart); the value is validated
         # against the known levels inside apply_log_level.
         applied = panel_log_mod.apply_log_level(log_level.strip())
@@ -5961,7 +3365,7 @@ def save_settings(
         logger.info("log level set to %s by %s", applied, admin.username)
     msg = ""
     polling_err = ""
-    if transport == "polling" and telegram_mod is not None:
+    if transport == "polling":
         # A webhook set on Telegram's side suppresses getUpdates
         # delivery, so polling receives nothing until the webhook is
         # gone. The call runs on every save with transport=polling
@@ -6069,7 +3473,7 @@ def register_telegram_webhook(
     warning appended so the admin knows why it failed.
     """
     t = t_for(get_lang(request))
-    if telegram_mod is None or not _telegram_configured(db):
+    if not _telegram_configured(db):
         return _settings_redirect(request, section, err=t["telegram_not_configured"])
     settings = get_settings(db)
     secret = _ensure_webhook_secret(db)
@@ -6112,7 +3516,7 @@ def refresh_telegram_webhook_status(
     useful fields are stored; the URL is masked at render time.
     """
     t = t_for(get_lang(request))
-    if telegram_mod is None or not _telegram_configured(db):
+    if not _telegram_configured(db):
         return _settings_redirect(request, section, err=t["telegram_not_configured"])
     settings = get_settings(db)
     info = telegram_mod.get_webhook_info(settings.get("telegram_bot_token", ""))
@@ -6150,7 +3554,7 @@ def register_telegram_commands(
     time is stored for the diagnostics section.
     """
     t = t_for(get_lang(request))
-    if telegram_mod is None or bot_mod is None or not _telegram_configured(db):
+    if not _telegram_configured(db):
         return _settings_redirect(request, section, err=t["telegram_not_configured"])
     settings = get_settings(db)
     ok, error = telegram_mod.set_my_commands(
@@ -6183,7 +3587,7 @@ def refresh_telegram_identity(
     (id, username, first name) is stored — never the token.
     """
     t = t_for(get_lang(request))
-    if telegram_mod is None or not _telegram_configured(db):
+    if not _telegram_configured(db):
         return _settings_redirect(request, section, err=t["telegram_not_configured"])
     settings = get_settings(db)
     info = telegram_mod.get_me(settings.get("telegram_bot_token", ""))
@@ -6214,8 +3618,6 @@ async def telegram_webhook(
     A malformed body still gets 200: Telegram retries non-2xx
     responses, and retrying garbage helps nobody.
     """
-    if bot_mod is None:
-        raise HTTPException(status_code=404, detail="not found")
     settings = get_settings(db)
     token = settings.get("telegram_bot_token", "")
     stored = settings.get("telegram_webhook_secret", "")
@@ -6242,8 +3644,6 @@ def download_backup(
     admin: Any = Depends(require_admin),
     db: Session = Depends(db_session),
 ):
-    if backup_mod is None:
-        raise HTTPException(status_code=503, detail="backup unavailable")
     db_path = _db_file_path(db)
     if db_path is None or not db_path.exists():
         raise HTTPException(status_code=503, detail="database path unknown")
@@ -6279,8 +3679,7 @@ async def restore_backup(
     # session (rollback expires its objects), so `admin` is detached
     # by the time the post-restore audit runs.
     admin_id = admin.id
-    if backup_mod is None or reset_engine is None or dispose_engine is None:
-        return _settings_redirect(request, section, err=t["restore_failed"])
+
     if not confirm_restore:
         return _settings_redirect(request, section, err=t["restore_confirm_required"])
     if backup_file is None or not backup_file.filename:
@@ -6377,18 +3776,15 @@ def logs_page(
     admin: Any = Depends(require_admin),
     db: Session = Depends(db_session),
 ):
-    if panel_log_mod is None:
-        lines, total, files, log_path = [], 0, [], ""
-    else:
-        log_path = panel_log_mod.get_log_path()
-        try:
-            limit_n = max(50, min(int(limit), 2000))
-        except (TypeError, ValueError):
-            limit_n = 500
-        lines, total = panel_log_mod.read_log_lines(
-            log_path, level=level or None, query=q or None, limit=limit_n
-        )
-        files = panel_log_mod.list_log_files()
+    log_path = panel_log_mod.get_log_path()
+    try:
+        limit_n = max(50, min(int(limit), 2000))
+    except (TypeError, ValueError):
+        limit_n = 500
+    lines, total = panel_log_mod.read_log_lines(
+        log_path, level=level or None, query=q or None, limit=limit_n
+    )
+    files = panel_log_mod.list_log_files()
     return templates.TemplateResponse(request, "logs.html",
         _template_ctx(
             request,
@@ -6411,8 +3807,6 @@ def logs_download(
     request: Request,
     admin: Any = Depends(require_admin),
 ):
-    if panel_log_mod is None:
-        raise HTTPException(status_code=503, detail="logging unavailable")
     path = panel_log_mod.get_log_path()
     if not path.exists():
         raise HTTPException(status_code=404, detail="log file not found")
@@ -6427,13 +3821,11 @@ def logs_clear(
     db: Session = Depends(db_session),
 ):
     t = t_for(get_lang(request))
-    if panel_log_mod is not None:
-        if panel_log_mod.clear_log():
-            logger.info("log cleared by admin %s", admin.username)
-            _audit(db, admin.id, "logs.clear", "")
-            return _redirect("/logs", request, msg=t["log_cleared"])
-        logger.exception("clearing the log file failed")
-        return _redirect("/logs", request, err=t["log_clear"])
+    if panel_log_mod.clear_log():
+        logger.info("log cleared by admin %s", admin.username)
+        _audit(db, admin.id, "logs.clear", "")
+        return _redirect("/logs", request, msg=t["log_cleared"])
+    logger.exception("clearing the log file failed")
     return _redirect("/logs", request, err=t["log_clear"])
 
 
@@ -6462,7 +3854,7 @@ def user_page(request: Request, token: str, db: Session = Depends(db_session)):
     settings = get_settings(db)
     host = _sub_host(request, settings)
     base = str(request.base_url).rstrip("/") + WEB_PATH
-    usable = _user_usable(db, user)
+    usable = user_is_usable(user)
     links = _links_for_user(db, user, host, settings) if usable else []
     return templates.TemplateResponse(request, "user_detail.html",
         _template_ctx(
@@ -6474,7 +3866,7 @@ def user_page(request: Request, token: str, db: Session = Depends(db_session)):
                 "clients": [],
                 "inbounds": {},
                 "links": links,
-                "links_available": links_mod is not None,
+                "links_available": True,
                 "sub_url": f"{base}/sub/{user.sub_token}",
                 "zedsecure_url": f"{base}/sub/{user.sub_token}/zedsecure.json",
                 "user_url": f"{base}/u/{user.sub_token}",
@@ -6488,15 +3880,11 @@ def user_page(request: Request, token: str, db: Session = Depends(db_session)):
 
 def _token_fp(token: str) -> str:
     """Short fingerprint for a subscription token (never the token)."""
-    if panel_log_mod is not None:
-        return panel_log_mod.token_fingerprint(token)
-    return "?"
+    return panel_log_mod.token_fingerprint(token)
 
 
 def _userinfo_header(user: Any) -> str:
     """``Subscription-Userinfo`` header value for ``user`` ("" on error)."""
-    if subscription_mod is None:
-        return ""
     expires_unix = 0
     if user.expires_at is not None:
         exp = user.expires_at
@@ -6529,8 +3917,6 @@ def _singbox_outbounds_for(
     looks for it. ShadowTLS contributes two objects (outer outbound
     + inner SS detour outbound), so the feed must use this one.
     """
-    if subscription_mod is None:
-        return []
     try:
         inbound_dict = _inbound_dict(inbound)
         if inbound.protocol == "wireguard":
@@ -6557,8 +3943,6 @@ def _wireguard_conf_for(
     client: Any, inbound: Any, host: str, settings: dict[str, Any]
 ) -> Optional[str]:
     """Rendered WireGuard ``.conf`` for one client (None when unavailable)."""
-    if wireguard_mod is None:
-        return None
     try:
         client_dict = _client_dict(client, None)
         extra = client_dict.get("extra_json") or {}
@@ -6600,8 +3984,6 @@ def _openvpn_config_for(
     user: Any, client: Any, inbound: Any, host: str, settings: dict[str, Any]
 ) -> Optional[str]:
     """Rendered client ``.ovpn`` for one user (None when unavailable)."""
-    if openvpn_mod is None:
-        return None
     ca_pem = _ca_cert_pem()
     if not ca_pem:
         return None
@@ -6618,8 +4000,6 @@ def _openconnect_profile_for(
     user: Any, client: Any, inbound: Any, host: str, settings: dict[str, Any]
 ) -> Optional[str]:
     """Rendered AnyConnect profile XML for one user (None when unavailable)."""
-    if openconnect_mod is None:
-        return None
     return openconnect_mod.render_profile_xml(host=host, port=int(inbound.port))
 
 
@@ -6627,8 +4007,6 @@ def _amneziawg_conf_for(
     user: Any, client: Any, inbound: Any, host: str, settings: dict[str, Any]
 ) -> Optional[str]:
     """Rendered AmneziaWG client ``.conf`` for one user (None when unavailable)."""
-    if amneziawg_mod is None:
-        return None
     client_dict = _client_dict(client, user)
     extra = client_dict.get("extra_json") or {}
     if not isinstance(extra, dict):
@@ -6659,8 +4037,6 @@ def _ikev2_mobileconfig_for(
     user: Any, client: Any, inbound: Any, host: str, settings: dict[str, Any]
 ) -> Optional[str]:
     """Rendered ``.mobileconfig`` profile for one user (None when unavailable)."""
-    if ikev2_mod is None:
-        return None
     client_dict = _client_dict(client, user)
     user_name = client_dict.get("user_name") or ""
     password = (client_dict.get("password") or "").strip()
@@ -6732,7 +4108,7 @@ def _user_file_response(
 ) -> Response:
     """Token-gated file export (same 403 rules as the feeds)."""
     user = db.query(User).filter(User.sub_token == token).first()
-    if user is None or not _user_usable(db, user):
+    if user is None or not user_is_usable(user):
         logger.warning(
             "file export 403 for token %s (%s)", _token_fp(token), protocol
         )
@@ -6845,11 +4221,10 @@ def _build_zedsecure_bundle(
                 entry["ikev2_mobileconfig"] = mobileconfig
         configs.append(entry)
     feed = {"outbounds": singbox_outbounds}
-    if subscription_mod is not None:
-        try:
-            feed = subscription_mod.build_singbox_feed(singbox_outbounds)
-        except Exception:  # noqa: BLE001
-            logger.exception("build_singbox_feed failed for bundle")
+    try:
+        feed = subscription_mod.build_singbox_feed(singbox_outbounds)
+    except Exception:  # noqa: BLE001
+        logger.exception("build_singbox_feed failed for bundle")
     return {
         "format": "zedsecure-bundle",
         "version": 1,
@@ -6870,12 +4245,10 @@ def _build_zedsecure_bundle(
 
 def _subscription_response(request: Request, token: str, db: Session) -> Response:
     user = db.query(User).filter(User.sub_token == token).first()
-    if user is None or not _user_usable(db, user):
+    if user is None or not user_is_usable(user):
         # Disabled / expired / over-quota / unknown: 403 with an EMPTY body.
         logger.warning("subscription 403 for token %s", _token_fp(token))
         return Response(content=b"", status_code=403)
-    if subscription_mod is None:
-        return Response(content=b"", status_code=503)
     settings = get_settings(db)
     host = _sub_host(request, settings)
     ua = request.headers.get("user-agent", "")
@@ -6937,7 +4310,7 @@ def zedsecure_bundle(request: Request, token: str, db: Session = Depends(db_sess
     over-quota user → 403 with an empty body. Rotating the token
     invalidates the old bundle URL."""
     user = db.query(User).filter(User.sub_token == token).first()
-    if user is None or not _user_usable(db, user):
+    if user is None or not user_is_usable(user):
         logger.warning("zedsecure bundle 403 for token %s", _token_fp(token))
         return Response(content=b"", status_code=403)
     settings = get_settings(db)
@@ -6997,9 +4370,9 @@ def subscription_qr(
 ):
     """QR PNG for one share link, gated by the user's subscription token."""
     user = db.query(User).filter(User.sub_token == token).first()
-    if user is None or not _user_usable(db, user):
+    if user is None or not user_is_usable(user):
         return Response(content=b"", status_code=403)
-    if links_mod is None or not hasattr(links_mod, "make_qr_png"):
+    if not hasattr(links_mod, "make_qr_png"):
         raise HTTPException(status_code=503, detail="QR generation unavailable")
     png = links_mod.make_qr_png(link)
     return Response(content=png, media_type="image/png")

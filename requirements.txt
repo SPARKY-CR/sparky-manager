@@ -1,13 +1,20 @@
-# sparky-manager Python dependencies.
-# Minimum versions only (">="), all of which exist on PyPI — no exact
-# patch pins are invented here. The installer does `pip install -r
-# requirements.txt` into /opt/sparky-manager/venv.
-fastapi>=0.110
-uvicorn[standard]>=0.29
-sqlalchemy>=2.0
-jinja2>=3.1
-qrcode[pil]>=7.4
-python-multipart>=0.0.9
-httpx>=0.27
-argon2-cffi>=23.1
-cryptography>=42.0
+# sparky-manager Python dependencies — PINNED to exact versions.
+#
+# Every version below is the version proven working in the project's
+# test venv (Phase 5): pinning is about reproducible installs, not
+# upgrading. The installer does `pip install -r requirements.txt`
+# into /opt/sparky-manager/venv, and CI installs the same file on
+# Python 3.11 / 3.12 / 3.14 — every pin here must have wheels for
+# all three (verified for grpcio 1.75.1, the newest pin).
+#
+# Deliberately absent: argon2-cffi. Auth uses stdlib PBKDF2
+# (app/auth.py); nothing in the codebase imports argon2.
+fastapi==0.163.0
+uvicorn[standard]==0.54.0
+sqlalchemy==2.1.8
+jinja2==3.1.6
+qrcode[pil]==8.2
+python-multipart==0.0.33
+httpx==0.28.1
+cryptography==50.0.2
+grpcio==1.75.1

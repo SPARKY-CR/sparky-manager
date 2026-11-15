@@ -21,7 +21,9 @@ Input shapes (see DESIGN.md §4/§5):
   ``mode`` / ``sniffing`` / ``sniffing_dest_override`` /
   ``fallbacks``), ``remark``.
 - client dict: ``uuid``, ``password``, ``method``, ``flow``,
-  ``extra_json`` (dict).
+  ``extra_json`` (dict), ``user_id`` (int — rendered as the client's
+  ``email`` so the Stats API can attribute traffic per user; see
+  :func:`client_email`).
 - settings dict: ``domain``, ``subscription_host``, ``hysteria2_core``
   (``"xray"`` by default), ``reality_sni``, ``reality_private_key``,
   ``cert_path`` / ``key_path`` (or ``tls_cert_path`` / ``tls_key_path``,
@@ -39,6 +41,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -46,7 +49,11 @@ from pathlib import Path
 from typing import Any
 
 __all__ = [
+    "API_LISTEN",
+    "API_PORT",
+    "client_email",
     "generate_reality_keypair",
+    "parse_user_email",
     "reality_public_key",
     "render_xray_config",
     "validate_xray_config",
@@ -76,6 +83,62 @@ _CERT_KEY_PAIRS = (
 
 #: Protocols this renderer knows how to build (Xray side, Phase 1).
 _XRAY_PROTOCOLS = ("vless", "vmess", "trojan", "shadowsocks", "hysteria2")
+
+#: Email domain for per-user Xray stats. Every rendered client gets
+#: ``user-<user_id>@sparky.local`` as its ``email`` so the Stats API
+#: reports per-user traffic under
+#: ``user>>>user-<id>@sparky.local>>>traffic>>>(uplink|downlink)``.
+#: :mod:`app.xray_stats` parses the same format back to a user id —
+#: the format lives here, in exactly one place. The domain is
+#: synthetic (never resolved); Xray treats ``email`` as an opaque
+#: label. A client dict without a usable ``user_id`` gets no email
+#: and therefore no per-user stats (see :func:`client_email`).
+STATS_EMAIL_DOMAIN = "sparky.local"
+
+_USER_EMAIL_RE = re.compile(r"^user-(\d+)@sparky\.local$")
+
+
+def client_email(user_id: Any) -> str | None:
+    """The Xray ``email`` for a panel user id, or ``None``.
+
+    ``None`` for a missing / non-integer / non-positive id — the
+    builders then omit ``email`` (the client still works, it just
+    has no per-user stats). Never raises.
+    """
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    if uid <= 0:
+        return None
+    return f"user-{uid}@{STATS_EMAIL_DOMAIN}"
+
+
+def parse_user_email(email: Any) -> int | None:
+    """The panel user id encoded in a stats ``email``, or ``None``.
+
+    The inverse of :func:`client_email` — used by
+    :mod:`app.xray_stats` to attribute a stat name to a user.
+    Foreign emails (anything not in our format) return ``None`` and
+    are never attributed. Never raises.
+    """
+    if not isinstance(email, str):
+        return None
+    match = _USER_EMAIL_RE.match(email.strip())
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _with_email(entry: dict[str, Any], client: dict[str, Any]) -> dict[str, Any]:
+    """Attach the stats ``email`` to a rendered client entry, in place.
+
+    A no-op when the client dict carries no usable ``user_id``.
+    """
+    email = client_email(client.get("user_id"))
+    if email is not None:
+        entry["email"] = email
+    return entry
 
 
 def generate_reality_keypair() -> dict[str, str]:
@@ -535,7 +598,7 @@ def _build_vless(
             flow = "xtls-rprx-vision"
         if flow:
             entry["flow"] = flow
-        entries.append(entry)
+        entries.append(_with_email(entry, client))
     built: dict[str, Any] = {
         "tag": inbound["tag"],
         "port": inbound["port"],
@@ -562,7 +625,7 @@ def _build_vmess(
     if not usable:
         return None
     entries = [
-        {"id": client["uuid"], "alterId": 0, "security": "auto"}
+        _with_email({"id": client["uuid"], "alterId": 0, "security": "auto"}, client)
         for client in usable
     ]
     stream = _as_dict(inbound.get("stream_json"))
@@ -591,7 +654,10 @@ def _build_trojan(
     usable = _usable_clients(clients, need=("password",))
     if not usable:
         return None
-    entries = [{"password": client["password"]} for client in usable]
+    entries = [
+        _with_email({"password": client["password"]}, client)
+        for client in usable
+    ]
     stream = _as_dict(inbound.get("stream_json"))
     built: dict[str, Any] = {
         "tag": inbound["tag"],
@@ -644,8 +710,13 @@ def _build_shadowsocks(
     }
     if len(usable) > 1:
         inbound_settings["clients"] = [
-            {"password": client["password"]} for client in usable
+            _with_email({"password": client["password"]}, client)
+            for client in usable
         ]
+    # Single-client form has no ``clients`` list, so its one user
+    # gets no per-user stats (the Stats API keys on client email).
+    # The whole inbound IS that user, so nothing is misattributed —
+    # the traffic is simply uncollected (DESIGN.md §6.4).
     return {
         "tag": inbound["tag"],
         "port": inbound["port"],
@@ -686,7 +757,10 @@ def _build_hysteria2(
     stream = _as_dict(inbound.get("stream_json"))
     inbound_settings: dict[str, Any] = {
         "version": 2,
-        "clients": [{"password": client["password"]} for client in usable],
+        "clients": [
+            _with_email({"password": client["password"]}, client)
+            for client in usable
+        ],
     }
     for key in ("upMbps", "downMbps"):
         value = _as_int(stream.get(key)) or _as_int(
@@ -732,8 +806,14 @@ def render_xray_config(
 
     Always present: ``log``, the ``api`` inbound on ``127.0.0.1:10085``
     (loopback-only stats API), ``stats: {}``, per-user stats policy,
+    a ``routing`` rule sending the ``api`` inbound to the ``api``
+    handler (without it the Stats API is unreachable — the
+    dokodemo-door traffic would fall through to ``freedom``),
     ``routing`` blocking private IPs to ``blackhole``, and
-    ``outbounds`` ``[freedom, blackhole]``. One inbound object per
+    ``outbounds`` ``[freedom, blackhole]``. Every rendered client
+    carries an ``email`` (``user-<id>@sparky.local``) when its dict
+    has a ``user_id``, so the Stats API attributes traffic per user.
+    One inbound object per
     enabled row with ``core == "xray"`` and a known protocol; rows
     with an invalid port, a port clash on the same transport
     (first wins — but a UDP-only inbound such as Hysteria2 may share
@@ -763,6 +843,17 @@ def render_xray_config(
         },
         "routing": {
             "rules": [
+                # The API rule MUST come first: Xray routes on first
+                # match, and API traffic targets 127.0.0.1 (a
+                # private IP), so the geoip rule below would
+                # blackhole it. Without this rule the dokodemo-door
+                # ``api`` inbound falls through to ``freedom`` and
+                # the Stats API is unreachable.
+                {
+                    "type": "field",
+                    "inboundTag": ["api"],
+                    "outboundTag": "api",
+                },
                 {
                     "type": "field",
                     "ip": ["geoip:private"],
@@ -953,82 +1044,19 @@ def validate_xray_config(cfg: dict) -> tuple[bool, list[str]]:
 def write_and_validate(
     cfg: dict, path: str | Path, binary: str = "/usr/local/bin/xray"
 ) -> tuple[bool, list[str]]:
-    """Write ``cfg`` to ``path`` after validation, atomically.
+    """Write ``cfg`` to ``path`` after validation, atomically (see
+    :func:`app.config_io.write_and_validate_config`). Runs
+    ``xray run -test -c <tmp>`` when the binary exists (10 s timeout);
+    when it is absent only the JSON structure is validated and the
+    file is still written."""
+    from app.config_io import write_and_validate_config
 
-    Writes ``path + ".tmp.json"``, runs ``xray run -test -c <tmp>`` when
-    the binary exists (10 s timeout), and atomically renames the temp
-    file into place only on success — a rejected config never
-    replaces the live one. When the binary is absent (panel not
-    installed yet, or this machine is not the server) only the JSON
-    structure is validated and the file is still written, returning
-    ``(True, ["binary not present — JSON validated only"])``. Never
-    raises for a missing binary, a failed validation or a bad path:
-    those come back as ``(False, errors)``.
-    """
-    target = Path(path)
-    tmp = Path(str(target) + ".tmp.json")
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(
-            json.dumps(cfg, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-    except (OSError, TypeError, ValueError) as exc:
-        return False, [f"cannot write temp config {tmp}: {exc}"]
-
-    ok, errors = validate_xray_config(cfg)
-    if not ok:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-        return False, errors
-
-    binary_path = binary
-    if not (os.path.isfile(binary_path) and os.access(binary_path, os.X_OK)):
-        resolved = shutil.which(binary)
-        binary_path = resolved or ""
-    if not binary_path:
-        try:
-            os.replace(tmp, target)
-        except OSError as exc:
-            return False, [f"cannot move temp config into place: {exc}"]
-        return True, ["binary not present — JSON validated only"]
-
-    try:
-        proc = subprocess.run(
-            [binary_path, "run", "-test", "-c", str(tmp)],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except subprocess.TimeoutExpired:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-        return False, ["xray validation timed out after 10s"]
-    except OSError as exc:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-        return False, [f"could not run xray binary: {exc}"]
-
-    if proc.returncode == 0:
-        try:
-            os.replace(tmp, target)
-        except OSError as exc:
-            return False, [f"cannot move temp config into place: {exc}"]
-        return True, []
-
-    detail = (proc.stderr or proc.stdout or "").strip()
-    lines = detail.splitlines()[-10:] if detail else []
-    try:
-        tmp.unlink(missing_ok=True)
-    except OSError:
-        pass
-    message = f"xray -test failed (exit {proc.returncode})"
-    if lines:
-        message += ": " + " | ".join(line.strip() for line in lines if line.strip())
-    return False, [message]
+    return write_and_validate_config(
+        cfg,
+        path,
+        binary=binary,
+        name="xray",
+        check_label="-test",
+        check_cmd=lambda b, t: [b, "run", "-test", "-c", t],
+        validate=validate_xray_config,
+    )

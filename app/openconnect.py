@@ -34,6 +34,7 @@ import re
 import secrets
 import string
 import subprocess
+import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Callable, Optional, Sequence
@@ -69,7 +70,16 @@ _SALT_ALPHABET = string.ascii_letters + string.digits + "./"
 
 
 def _crypt_module_hash(password: str) -> Optional[str]:
-    """SHA-512 crypt hash via the stdlib ``crypt`` module (or None)."""
+    """SHA-512 crypt hash via the stdlib ``crypt`` module (or None).
+
+    The ``crypt`` module was removed in Python 3.13 (the server runs
+    3.14), so it is never even attempted there — the ``openssl
+    passwd`` fallback in :func:`hash_password` is the live path on
+    3.13+. The ``ImportError`` guard stays as belt-and-braces for
+    builds without the module.
+    """
+    if sys.version_info >= (3, 13):
+        return None
     try:
         import crypt
     except ImportError:

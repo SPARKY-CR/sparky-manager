@@ -178,7 +178,7 @@ recommended first pair: no domain, no certificate, maximum compatibility.
 
 ```sql
 -- admins: exactly one row in MVP (username 'admin'); Phase 2 may add more.
-admins(id PK, username UNIQUE, password_hash TEXT /* argon2id */,
+admins(id PK, username UNIQUE, password_hash TEXT /* PBKDF2-HMAC-SHA256, 600k iters */,
        created_at, last_login_at)
 
 -- settings: single-row key/value (panel port, domain, subscription host,
@@ -609,11 +609,26 @@ feature done (see §10, Q5).
 
 | Source | How | Granularity |
 |---|---|---|
-| Xray inbounds | gRPC Stats API on `127.0.0.1:10085` (`QueryStats` per `user>>>…>>>traffic>>>uplink/downlink` + `inbound>>>…`). Poll every 60 s. | Per user, per inbound. Accurate. |
+| Xray inbounds | gRPC Stats API on `127.0.0.1:10085` — `app/xray_stats.py` calls `QueryStats` with pattern `user>>>traffic>>>` every 60 s and diffs the cumulative counters into per-user deltas. Every rendered Xray client carries an `email` (`user-<id>@sparky.local`, see `app/xray.client_email`) so the API attributes traffic per user. | Per user. Accurate. |
 | WireGuard | `wg show wg0 transfer` (bytes per peer public key → map to client). Poll every 60 s. | Per peer. Accurate. |
-| sing-box inbounds | **No stats API.** Per-user dedicated port + nftables counter per port (`nft add rule … counter`), polled every 60 s. | Per user *only if* the user has a dedicated port for that protocol. Shared-port sing-box inbounds cannot be attributed per user — the UI must say "traffic: n/a (shared port)" rather than invent a number. |
+| sing-box inbounds | **Uncollected — no stats API.** sing-box exposes no per-user traffic API, and the panel does not run `nft list` (the `nft_text` parameter of `sync_traffic` exists for a future nftables-counter implementation, but nothing feeds it today). Shared-port sing-box inbounds cannot be attributed per user at all — the UI must say "traffic: n/a (shared port)" rather than invent a number. | None today. |
 | IKEv2 | Native since v1.2.0; no per-user traffic API yet (same gap as OpenVPN/ocserv — `swanctl --list-sas` / occtl exist but are not wired into the panel yet). | — |
 | Online status | Xray: a user with non-zero traffic delta in the last 60–120 s, or present in `QueryStats` with recent activity → "online". WireGuard: `latest handshake < 3 min ago`. sing-box: no live sessions API — show "last seen" from traffic deltas only, never fake "online". | Best-effort, labelled as such. |
+
+Xray collection details (`app/xray_stats.py`, Phase 5 F1 fix): the
+renderer enables the Stats API (`api` + `stats` + `policy.levels`
+blocks, loopback-only `api` inbound on port 10085, and a routing
+rule sending the `api` inbound to the `api` handler — the rule must
+precede the geoip:private rule, which would otherwise blackhole the
+loopback API traffic). The client is fail-soft: a dead API, a
+timeout (5 s), or a malformed response means "no Xray update this
+tick", never a crash or an invented number. Known gaps, stated
+honestly: a **single-client Shadowsocks inbound** has no
+`clients` list in its Xray shape, so its one user gets no
+per-user stats (the whole inbound *is* that user, so nothing is
+misattributed — the traffic is simply uncollected); **inbound-level**
+stats (`inbound>>>…>>>traffic>>>…`) are not collected either, so
+traffic cannot be broken down per inbound.
 
 Enforcement runs in the sweeper (every 5 min): expired or over-quota
 users are removed from the rendered configs (so the core drops them)
@@ -823,19 +838,35 @@ sparky-manager/
 ├── app/
 │   ├── __init__.py
 │   ├── main.py                # FastAPI app, routes, startup (sweeper, syncer)
+│   ├── webcommon.py           # shared web plumbing: session/auth/CSRF,
+│   │                          #   settings/audit, templates/redirects (§13)
+│   ├── routes/
+│   │   └── users.py           # /users* routes (APIRouter, §13)
 │   ├── config.py              # settings, paths, versions.env
 │   ├── db.py                  # SQLAlchemy engine/session, init
 │   ├── models.py              # admins, settings, inbounds, users, clients,
 │   │                          #   traffic_daily, audit_log (§4)
-│   ├── auth.py                # argon2id, sessions, rate limit
+│   ├── auth.py                # PBKDF2, sessions, rate limit
 │   ├── i18n.py                # fa (default) / en strings
 │   ├── xray.py                # render /usr/local/etc/xray/config.json + validate
+│   ├── xray_stats.py          # Xray gRPC Stats client (§6.4)
 │   ├── singbox.py             # render /etc/sing-box/config.json + validate
+│   ├── config_io.py           # shared validated-atomic config writer (§13)
 │   ├── wireguard.py           # render wg0.conf, wg show parsing
-│   ├── ikev2.py               # Phase 1: status/deep-link only (§5.4)
+│   ├── wgapply.py             # validate + apply wg/awg configs (syncconf)
+│   ├── openvpn.py             # render server/client OpenVPN configs
+│   ├── openconnect.py         # render ocserv config + ocpasswd
+│   ├── amneziawg.py           # render awg0.conf, AWG params
+│   ├── ikev2.py               # render swanctl.conf + mobileconfig (§5.4)
 │   ├── links.py               # share-link builders (§6.2) + QR (qrcode)
 │   ├── subscription.py        # /sub/ dual format + UA sniffing (§6.1/6.3)
-│   ├── traffic.py             # Xray gRPC client, wg/nftables pollers, sweeper
+│   ├── traffic.py             # sync_traffic, wg/nftables pollers (§6.4)
+│   ├── telegram.py            # Bot API sender + getUpdates (§5.9)
+│   ├── bot.py                 # Telegram management bot (§5.9)
+│   ├── charts.py              # traffic chart SVG + daily series
+│   ├── backup.py              # backup ZIP / restore (§5.8)
+│   ├── system_status.py       # server status collector (§12)
+│   ├── panel_log.py           # rotating file log + redaction
 │   ├── panel_cli.py           # `sparky-manager info/status/restart/update-cores/backup`
 │   ├── templates/             # Jinja2, RTL, Persian-first
 │   │   ├── base.html  dashboard.html  inbounds.html
@@ -951,6 +982,77 @@ the UI works offline and with JS disabled (progressive enhancement).
   this environment, so the responsive/drawer behavior is verified by
   rendered-HTML and route tests only (`tests/test_ui_phase4.py`);
   visual layout still needs a manual check (Phase 6).
+
+---
+
+## 13. Architecture + reliability (professional upgrade, Phase 5, 2026-11-15)
+
+- **Xray traffic collection (§6.4).** The sync loop now feeds real
+  Xray per-user traffic into `sync_traffic` via a hand-rolled gRPC
+  Stats client (`app/xray_stats.py`, `grpcio`); the renderer enables
+  the Stats API on 127.0.0.1:10085 and tags every client with an
+  email (`user-<id>@sparky.local`). sing-box traffic remains
+  uncollected (no stats API) — documented, not faked.
+- **Dependency pinning.** `requirements.txt` pins every dependency to
+  exact versions (the versions proven in the dev venv);
+  `grpcio==1.75.1` (first release with Python 3.14 wheels);
+  `argon2-cffi` removed (auth is stdlib PBKDF2). CI tests Python
+  3.11 / 3.12 / 3.14 (the server runs 3.14);
+  `app/openconnect.py` guards the removed `crypt` module (the
+  `openssl passwd` fallback is the live path on 3.13+).
+- **main.py split (first increment).** `main.py` was 6,262 lines.
+  The i18n dicts moved to `app/i18n.py`, the shared web plumbing
+  (session/auth/CSRF, settings/audit, template/redirect helpers,
+  link builders, client credential/address helpers, Telegram
+  notifications, traffic charts) to `app/webcommon.py`, and the
+  `/users*` routes to `app/routes/users.py` (an `APIRouter`, mounted
+  in the same position so route precedence is unchanged). `main.py`
+  re-exports every moved name, so `main_mod.<name>` references
+  (remaining routes, bot, tests) keep working. Two lazy seams remain
+  in the router (`rerender_configs`, `_file_export_urls` — both live
+  in `main` until their owners split); they read `main`'s attribute
+  at call time, so tests patching `main_mod.rerender_configs` still
+  take effect.
+- **Remaining split plan (not started).** Next increments, in order:
+  settings routes (`/settings*`, backup/restore, logs), inbounds
+  routes (`/inbounds*`), then `rerender_configs` + the config-apply
+  helpers last (most entangled: every route and the sweeper call
+  them). Each increment keeps route paths identical and runs the
+  full suite after the move.
+- **Re-render lock.** `rerender_configs()` serializes on a
+  `threading.RLock` (`_RERENDER_LOCK`): the expiry sweeper, admin
+  POSTs (FastAPI threadpool) and the Telegram bot polling thread all
+  call it. Deliberate deviation from the spec's `asyncio.Lock`:
+  `rerender_configs` is a SYNC function called from multiple
+  threads — an `asyncio.Lock` cannot be acquired from sync code and
+  cannot serialize threads. RLock is re-entrant, so a render that
+  itself triggers a re-render cannot deadlock.
+- **Defensive-import cleanup.** The try/except sibling-import pattern
+  with `None` fallbacks ("not written yet") is gone: every sibling
+  module is a plain import, and a failed import fails loudly at
+  startup instead of degrading silently into a half-working panel.
+  The ~90 `None` checks that guarded the fallbacks are removed; the
+  `_user_usable` / `_client_usable` wrappers collapsed to direct
+  `app.models` calls (`user_is_usable` / `client_is_usable`).
+  Genuinely optional behaviour (a missing binary, an unconfigured
+  bot) is still handled at the call site, not at import time.
+- **Validated config writes.** The near-identical
+  `write_and_validate` copies in `xray.py` / `singbox.py` are one
+  shared helper now (`app/config_io.write_and_validate_config`:
+  temp file → structural validation → binary check → atomic
+  rename); both modules keep thin wrappers with identical
+  signatures and error messages.
+- **Subprocess timeouts (audit).** Every subprocess call in
+  request / re-render paths already carried an explicit timeout
+  (verified 2026-11-15: `_run_privileged` 30 s default, `wg show
+  transfer` 10 s, `openssl passwd` 15 s, `ocserv -t` 30 s, Xray /
+  sing-box validation 10 s, systemctl queries 5–10 s) — no change
+  needed.
+- **Known limitation: re-render blocks the request.** Re-rendering
+  runs synchronously inside the POST that triggered it (the reply
+  reports its result), so a slow core restart delays the response.
+  It is NOT moved to a background task — that needs a UX decision
+  (progress reporting), not a silent behaviour change.
 
 ---
 

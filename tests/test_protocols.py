@@ -289,6 +289,25 @@ def test_ocpasswd_crypt_round_trip():
         openconnect.render_ocpasswd([("bad:name", "pw")])
 
 
+def test_ocpasswd_hash_skips_crypt_on_python_3_13_plus(monkeypatch):
+    """On Python 3.13+ (``crypt`` removed) the module never attempts
+    the import and the ``openssl passwd`` fallback is the live path
+    (Phase 5: the server runs 3.14, CI tests 3.14). Simulated here
+    by patching ``sys.version_info`` — on this 3.12 VM the unguarded
+    code would return a hash from ``crypt`` instead of None."""
+    from types import SimpleNamespace
+
+    # Patch only the `sys` name inside app.openconnect (a namespace
+    # with a 3.14 version tuple) — the global sys is untouched.
+    monkeypatch.setattr(
+        openconnect, "sys", SimpleNamespace(version_info=(3, 14, 0))
+    )
+    assert openconnect._crypt_module_hash("secret-pw") is None
+    hashed = openconnect.hash_password("secret-pw")
+    assert hashed.startswith("$6$")
+    assert openconnect.verify_password("secret-pw", hashed)
+
+
 def test_openconnect_profile_xml_parses():
     text = openconnect.render_profile_xml(host=HOST, port=4433)
     root = ET.fromstring(text)

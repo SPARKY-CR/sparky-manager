@@ -820,81 +820,19 @@ def _check_users(
 def write_and_validate(
     cfg: dict, path: str | Path, binary: str = "/usr/local/bin/sing-box"
 ) -> tuple[bool, list[str]]:
-    """Write ``cfg`` to ``path`` after validation, atomically.
+    """Write ``cfg`` to ``path`` after validation, atomically (see
+    :func:`app.config_io.write_and_validate_config`). Runs
+    ``sing-box check -c <tmp>`` when the binary exists (10 s timeout);
+    when it is absent only the JSON structure is validated and the
+    file is still written."""
+    from app.config_io import write_and_validate_config
 
-    Writes ``path + ".tmp.json"``, runs ``sing-box check -c <tmp>`` when
-    the binary exists (10 s timeout), and atomically renames the temp
-    file into place only on success — a rejected config never
-    replaces the live one. When the binary is absent only the JSON
-    structure is validated and the file is still written, returning
-    ``(True, ["binary not present — JSON validated only"])``. Never
-    raises for a missing binary, a failed validation or a bad path:
-    those come back as ``(False, errors)``.
-    """
-    target = Path(path)
-    tmp = Path(str(target) + ".tmp.json")
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(
-            json.dumps(cfg, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-    except (OSError, TypeError, ValueError) as exc:
-        return False, [f"cannot write temp config {tmp}: {exc}"]
-
-    ok, errors = validate_singbox_config(cfg)
-    if not ok:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-        return False, errors
-
-    binary_path = binary
-    if not (os.path.isfile(binary_path) and os.access(binary_path, os.X_OK)):
-        resolved = shutil.which(binary)
-        binary_path = resolved or ""
-    if not binary_path:
-        try:
-            os.replace(tmp, target)
-        except OSError as exc:
-            return False, [f"cannot move temp config into place: {exc}"]
-        return True, ["binary not present — JSON validated only"]
-
-    try:
-        proc = subprocess.run(
-            [binary_path, "check", "-c", str(tmp)],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except subprocess.TimeoutExpired:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-        return False, ["sing-box validation timed out after 10s"]
-    except OSError as exc:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-        return False, [f"could not run sing-box binary: {exc}"]
-
-    if proc.returncode == 0:
-        try:
-            os.replace(tmp, target)
-        except OSError as exc:
-            return False, [f"cannot move temp config into place: {exc}"]
-        return True, []
-
-    detail = (proc.stderr or proc.stdout or "").strip()
-    lines = detail.splitlines()[-10:] if detail else []
-    try:
-        tmp.unlink(missing_ok=True)
-    except OSError:
-        pass
-    message = f"sing-box check failed (exit {proc.returncode})"
-    if lines:
-        message += ": " + " | ".join(line.strip() for line in lines if line.strip())
-    return False, [message]
+    return write_and_validate_config(
+        cfg,
+        path,
+        binary=binary,
+        name="sing-box",
+        check_label="check",
+        check_cmd=lambda b, t: [b, "check", "-c", t],
+        validate=validate_singbox_config,
+    )

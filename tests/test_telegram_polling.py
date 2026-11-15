@@ -416,13 +416,10 @@ def test_polling_token_gating(db, monkeypatch):
     # Polling without a token: no polling.
     main_mod.set_setting(db, "telegram_bot_token", "")
     assert main_mod._telegram_polling_token() is None
-    # Missing modules: no polling.
-    main_mod.set_setting(db, "telegram_bot_token", TOKEN)
-    monkeypatch.setattr(main_mod, "bot_mod", None)
-    assert main_mod._telegram_polling_token() is None
-    monkeypatch.setattr(main_mod, "bot_mod", bot_mod)
-    monkeypatch.setattr(main_mod, "telegram_mod", None)
-    assert main_mod._telegram_polling_token() is None
+    # (No "missing modules" case: since the Phase 5 import cleanup
+    # the telegram/bot modules are plain imports — a failed import
+    # fails the panel at startup instead of silently disabling
+    # polling.)
 
 
 # ---------------------------------------------------------------------------

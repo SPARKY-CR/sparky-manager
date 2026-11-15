@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 from app import bot as bot_mod
 from app import main as main_mod
 from app import telegram as telegram_mod
+from app import webcommon
 from app.models import AuditLog, Client, Inbound, Setting, TrafficDaily, User
 from tests.conftest import HOST, ensure_defaults
 
@@ -1147,13 +1148,9 @@ def test_webhook_wrong_secret_404(test_client, db):
     assert resp.status_code == 404
 
 
-def test_webhook_bot_module_missing_404(test_client, db, monkeypatch):
-    _configure_bot(db)
-    monkeypatch.setattr(main_mod, "bot_mod", None)
-    resp = test_client.post(f"/telegram/webhook/{SECRET}", json=_message("/start"))
-    assert resp.status_code == 404
-
-
+# (No "bot module missing" webhook test: since the Phase 5 import
+# cleanup app.bot is a plain import — a failed import fails the
+# panel at startup instead of 404ing the webhook.)
 def test_webhook_admin_start_delivers(test_client, db, webhook_calls):
     _configure_bot(db)
     resp = test_client.post(f"/telegram/webhook/{SECRET}", json=_message("/start"))
@@ -1209,7 +1206,9 @@ def mounted_client(db, tmp_path, monkeypatch):
     monkeypatch.setattr(main_mod, "_restart_service", lambda name: None)
     ensure_defaults(db)
     main_mod.set_setting(db, "subscription_host", HOST)
-    monkeypatch.setattr(main_mod, "WEB_PATH", "/k7x9q2")
+    # WEB_PATH lives in app.webcommon now (Phase 5 split); patch the
+    # canonical location so templates/redirects render the prefix.
+    monkeypatch.setattr(webcommon, "WEB_PATH", "/k7x9q2")
     mounted = main_mod._mount_web_path(main_mod.app, "/k7x9q2")
     return TestClient(mounted)
 
