@@ -47,6 +47,20 @@
   </div>
 </div>
 
+<div class="card">
+  <div class="page-head">
+    <h2>{{ t.traffic_chart }}</h2>
+    <span class="spacer"></span>
+    <span class="muted">{{ t.traffic_total_14d }}: <b dir="ltr">{{ (traffic_14d / 1073741824) | round(2) }} GB</b></span>
+  </div>
+  {% if traffic_chart %}
+  <div class="chart-wrap">{{ traffic_chart | safe }}</div>
+  {% if not traffic_14d %}<p class="muted">{{ t.no_traffic_data }}</p>{% endif %}
+  {% else %}
+  <p class="muted">{{ t.no_traffic_data }}</p>
+  {% endif %}
+</div>
+
 <div class="dash-grid">
   <section class="dash-col">
     <div class="section-head">

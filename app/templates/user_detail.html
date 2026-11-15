@@ -51,6 +51,18 @@
   </div>
   {% endif %}
 
+  {% if not public and user_traffic_chart is defined and user_traffic_chart %}
+  <div class="card">
+    <div class="page-head">
+      <h2>{{ t.traffic_chart_user }}</h2>
+      <span class="spacer"></span>
+      <span class="muted">{{ t.traffic_total_14d }}: <b dir="ltr">{{ (user_traffic_14d / 1073741824) | round(2) }} GB</b></span>
+    </div>
+    <div class="chart-wrap">{{ user_traffic_chart | safe }}</div>
+    {% if not user_traffic_14d %}<p class="muted">{{ t.no_traffic_data }}</p>{% endif %}
+  </div>
+  {% endif %}
+
   <div class="card">
     <h2>{{ t.subscription_link }}</h2>
     <div class="copy-row">

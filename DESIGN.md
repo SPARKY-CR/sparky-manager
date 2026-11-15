@@ -467,6 +467,21 @@ never-expiring users get now + N days). Every bulk action re-renders
 configs once at the end. No DB schema change: all new per-client
 state lives in the existing `extra` JSON.
 
+### 5.8 Panel & server settings (Phase 3, 2026-11-15)
+
+The settings page (`/settings`) now covers the panel itself:
+
+| Feature | How it works |
+|---|---|
+| Password change (`POST /settings/password`) | Current + new + confirm; the admin's stored PBKDF2 hash is replaced (`app.auth.hash_password`), so the new password survives restarts (`ensure_defaults` only seeds a password when no admin exists). All OTHER sessions are invalidated (`auth.invalidate_other_sessions`); the session that made the change stays alive. Audited as `admin.password_change`. The installer's login file (`/root/sparky-manager-login.txt`, root-only) still holds the OLD password — the panel cannot rewrite it. |
+| Telegram notifications | Bot token + admin chat ID in settings (`telegram_bot_token`, `telegram_chat_id`); the token is never rendered back into the page (a blank field keeps the current value; clearing the chat ID disables notifications) and never logged. `app/telegram.py` is a reusable sender (`send_message`, httpx, 10 s timeout, failure → `False`, never raises) built for the Phase 4 management bot to reuse. Hooks: user created, user expiring within 24 h (checked by the expiry sweeper, once per user per day — dedup in the `telegram_expiry_notified` setting), re-render failure in the sweeper (throttled to once per hour via `telegram_rerender_notified_at`), plus a "send test message" button. Background messages are Persian (no request to take a language from). |
+| Backup / restore | `GET /settings/backup` downloads a ZIP (`panel.db` snapshot via the SQLite backup API, `settings.json`, `meta.json` with schema version + counts). `POST /settings/restore` accepts the ZIP or a bare `.db` file; validation is integrity check + required tables + schema-version guard (a backup from a NEWER schema version is refused — the schema is versioned through the `schema_version` setting row, written by `ensure_defaults`; a backup without one is v1). A bare `.db` must come from a checkpointed database (a stopped panel): a raw copy of the live WAL file can be missing tables. Restore needs a confirmation checkbox, backs the current DB up first (`data/backups/panel.db.<timestamp>.bak`, last 5 kept), then disposes the engine, swaps the file, rebinds (`app.db.reset_engine`), audits, and re-renders configs. The admin may need to log in again afterwards (the restored DB has its own sessions). |
+| Server status | On the settings page: load averages, RAM, disk (data dir), uptime, and per-service state for xray, sing-box, WireGuard, AmneziaWG, OpenVPN, OpenConnect, IKEv2. All unprivileged: `/proc` + `shutil.disk_usage` + ONE unprivileged `systemctl is-active` call for all units (querying unit state needs no privilege; no new sudoers rule). Fallback when systemd is unavailable: a `/proc` process scan, or `/sys/class/net/<iface>` for wg/awg. A service whose state cannot be determined shows "unknown", never "stopped". |
+| Traffic charts | Dashboard: total traffic, last 14 days; user detail: that user's last 14 days — both from `traffic_daily`, zero-filled. Inline SVG generated server-side (`app/charts.py`); no CDN, no JS library. Days with no recorded traffic are zero bars, never invented values. |
+
+No DB schema change: new state (Telegram config, notification dedup,
+schema version) lives in the existing `settings` table.
+
 ---
 
 ## 6. Subscriptions, links, QR — dual format (mandatory)

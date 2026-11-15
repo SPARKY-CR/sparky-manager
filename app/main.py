@@ -102,7 +102,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -142,11 +142,19 @@ except ImportError:  # pragma: no cover - sibling module not written yet
     logger.warning("app.config not available yet; using built-in defaults")
 
 try:
-    from app.db import SessionLocal, get_session, init_db
+    from app.db import (
+        SessionLocal,
+        dispose_engine,
+        get_session,
+        init_db,
+        reset_engine,
+    )
 except ImportError:  # pragma: no cover
     SessionLocal = None  # type: ignore[assignment]
     get_session = None  # type: ignore[assignment]
     init_db = None  # type: ignore[assignment]
+    dispose_engine = None  # type: ignore[assignment]
+    reset_engine = None  # type: ignore[assignment]
     logger.warning("app.db not available yet")
 
 try:
@@ -184,6 +192,7 @@ try:
         create_session,
         get_admin_from_token,
         hash_password,
+        invalidate_other_sessions,
         invalidate_session,
         is_locked_out,
         record_failed_login,
@@ -192,7 +201,8 @@ try:
 except ImportError:  # pragma: no cover
     auth_mod = None  # type: ignore[assignment]
     create_session = get_admin_from_token = hash_password = None  # type: ignore[assignment]
-    invalidate_session = is_locked_out = record_failed_login = None  # type: ignore[assignment]
+    invalidate_session = invalidate_other_sessions = None  # type: ignore[assignment]
+    is_locked_out = record_failed_login = None  # type: ignore[assignment]
     verify_password = None  # type: ignore[assignment]
     logger.warning("app.auth not available yet")
 
@@ -267,6 +277,30 @@ try:
 except ImportError:
     panel_log_mod = None
     logger.warning("app.panel_log not available yet; file logging disabled")
+
+try:
+    from app import telegram as telegram_mod
+except ImportError:
+    telegram_mod = None
+    logger.warning("app.telegram not available yet; notifications disabled")
+
+try:
+    from app import system_status as system_status_mod
+except ImportError:
+    system_status_mod = None
+    logger.warning("app.system_status not available yet; server status disabled")
+
+try:
+    from app import charts as charts_mod
+except ImportError:
+    charts_mod = None
+    logger.warning("app.charts not available yet; traffic charts disabled")
+
+try:
+    from app import backup as backup_mod
+except ImportError:
+    backup_mod = None
+    logger.warning("app.backup not available yet; backup/restore disabled")
 
 if panel_log_mod is not None:
     # Rotating file log (data/logs/panel.log) + console (systemd
@@ -575,6 +609,58 @@ STRINGS: dict[str, dict[str, str]] = {
         "confirm_bulk_delete": "کاربران انتخاب‌شده حذف شوند؟ این عمل قابل بازگشت نیست.",
         "select_all": "انتخاب همه",
         "traffic_reset_hint": "فقط شمارندهٔ ترافیک صفر می‌شود؛ سابقهٔ روزانه حفظ می‌شود.",
+        # Panel & server settings (Phase 3 of the professional-panel expansion).
+        "change_password": "تغییر رمز عبور",
+        "current_password": "رمز عبور فعلی",
+        "new_password": "رمز عبور جدید",
+        "confirm_password": "تکرار رمز عبور جدید",
+        "password_too_short": "رمز عبور جدید باید حداقل ۸ کاراکتر باشد.",
+        "password_mismatch": "تکرار رمز عبور با رمز جدید یکی نیست.",
+        "wrong_current_password": "رمز عبور فعلی اشتباه است.",
+        "password_changed": "رمز عبور عوض شد — نشست‌های دیگر خارج شدند.",
+        "password_change_hint": "بعد از تغییر، فایل ورود نصب‌کننده (/root/sparky-manager-login.txt) هنوز رمز قدیمی را دارد.",
+        "telegram_notifications": "اعلان‌های تلگرام",
+        "telegram_bot_token": "توکن ربات تلگرام",
+        "telegram_bot_token_hint": "خالی بگذارید تا توکن فعلی حفظ شود. توکن هیچ‌وقت نمایش داده نمی‌شود.",
+        "telegram_configured": "توکن تنظیم شده",
+        "telegram_chat_id": "آیدی چت تلگرام (عدد)",
+        "telegram_chat_id_hint": "آیدی عددی چت مدیر؛ می‌توانید از ربات @userinfobot بگیرید.",
+        "telegram_test": "ارسال پیام آزمایشی",
+        "telegram_test_sent": "پیام آزمایشی ارسال شد.",
+        "telegram_test_failed": "ارسال پیام آزمایشی ناموفق بود — توکن و آیدی چت را بررسی کنید.",
+        "telegram_not_configured": "تلگرام تنظیم نشده است — اول توکن و آیدی چت را ذخیره کنید.",
+        "invalid_chat_id": "آیدی چت باید عدد باشد (مثلاً 123456789 یا برای گروه با - شروع می‌شود).",
+        "backup_restore": "پشتیبان‌گیری و بازیابی",
+        "backup_download": "دانلود پشتیبان",
+        "backup_hint": "فایل ZIP شامل دیتابیس پنل، خروجی تنظیمات و اطلاعات نسخه است.",
+        "restore_backup": "بازیابی از پشتیبان",
+        "restore_file": "فایل پشتیبان (ZIP یا .db)",
+        "restore_confirm": "می‌دانم که وضعیت فعلی پنل جایگزین می‌شود (از وضعیت فعلی اول پشتیبان گرفته می‌شود).",
+        "restore": "بازیابی",
+        "restore_hint": "بعد از بازیابی ممکن است لازم باشد دوباره وارد شوید.",
+        "restore_done": "بازیابی انجام شد — کانفیگ‌ها بازسازی شدند.",
+        "restore_no_file": "فایلی انتخاب نشده است.",
+        "restore_confirm_required": "برای بازیابی باید تأیید کنید.",
+        "restore_invalid": "فایل پشتیبان معتبر نیست: ",
+        "restore_newer_schema": "این پشتیبان از نسخهٔ جدیدتری است و با این پنل سازگار نیست.",
+        "restore_failed": "بازیابی ناموفق بود.",
+        "server_status": "وضعیت سرور",
+        "cpu_load": "بار پردازنده (۱ / ۵ / ۱۵ دقیقه)",
+        "memory": "حافظه (RAM)",
+        "disk": "دیسک",
+        "uptime": "مدت روشن بودن سرور",
+        "service": "سرویس",
+        "service_running": "در حال اجرا",
+        "service_stopped": "متوقف",
+        "service_unknown": "نامشخص",
+        "traffic_chart": "ترافیک ۱۴ روز گذشته",
+        "traffic_chart_user": "ترافیک این کاربر — ۱۴ روز گذشته",
+        "traffic_total_14d": "مجموع ۱۴ روز گذشته",
+        "no_traffic_data": "هنوز ترافیکی ثبت نشده است.",
+        "tg_test": "🔔 sparky-manager: پیام آزمایشی — اعلان‌های تلگرام فعال‌اند.",
+        "tg_user_created": "👤 کاربر جدید ساخته شد: {name}",
+        "tg_user_expiring": "⏰ کاربر «{name}» تا {hours} ساعت دیگر منقضی می‌شود.",
+        "tg_rerender_failed": "⚠️ بازسازی کانفیگ‌ها ناموفق بود: {errors}",
     },
     "en": {
         "app_name": "Sparky Manager",
@@ -809,6 +895,58 @@ STRINGS: dict[str, dict[str, str]] = {
         "confirm_bulk_delete": "Delete the selected users? This cannot be undone.",
         "select_all": "Select all",
         "traffic_reset_hint": "Only the traffic counter is reset; daily history is kept.",
+        # Panel & server settings (Phase 3 of the professional-panel expansion).
+        "change_password": "Change password",
+        "current_password": "Current password",
+        "new_password": "New password",
+        "confirm_password": "Confirm new password",
+        "password_too_short": "The new password must be at least 8 characters.",
+        "password_mismatch": "The confirmation does not match the new password.",
+        "wrong_current_password": "The current password is wrong.",
+        "password_changed": "Password changed — other sessions were signed out.",
+        "password_change_hint": "After changing, the installer's login file (/root/sparky-manager-login.txt) still has the old password.",
+        "telegram_notifications": "Telegram notifications",
+        "telegram_bot_token": "Telegram bot token",
+        "telegram_bot_token_hint": "Leave blank to keep the current token. The token is never displayed.",
+        "telegram_configured": "Token configured",
+        "telegram_chat_id": "Telegram chat ID (number)",
+        "telegram_chat_id_hint": "The admin's numeric chat ID; you can get it from @userinfobot.",
+        "telegram_test": "Send test message",
+        "telegram_test_sent": "Test message sent.",
+        "telegram_test_failed": "Test message failed — check the token and chat ID.",
+        "telegram_not_configured": "Telegram is not configured — save a token and chat ID first.",
+        "invalid_chat_id": "Chat ID must be a number (e.g. 123456789, or starting with - for a group).",
+        "backup_restore": "Backup & restore",
+        "backup_download": "Download backup",
+        "backup_hint": "A ZIP with the panel database, a settings export and version info.",
+        "restore_backup": "Restore from backup",
+        "restore_file": "Backup file (ZIP or .db)",
+        "restore_confirm": "I understand the current panel state will be replaced (it is backed up first).",
+        "restore": "Restore",
+        "restore_hint": "You may need to log in again after a restore.",
+        "restore_done": "Restore completed — configs were re-rendered.",
+        "restore_no_file": "No file selected.",
+        "restore_confirm_required": "Tick the confirmation box to restore.",
+        "restore_invalid": "Invalid backup file: ",
+        "restore_newer_schema": "This backup is from a newer version and is not compatible with this panel.",
+        "restore_failed": "Restore failed.",
+        "server_status": "Server status",
+        "cpu_load": "CPU load (1 / 5 / 15 min)",
+        "memory": "Memory (RAM)",
+        "disk": "Disk",
+        "uptime": "Server uptime",
+        "service": "Service",
+        "service_running": "Running",
+        "service_stopped": "Stopped",
+        "service_unknown": "Unknown",
+        "traffic_chart": "Traffic — last 14 days",
+        "traffic_chart_user": "This user's traffic — last 14 days",
+        "traffic_total_14d": "Total, last 14 days",
+        "no_traffic_data": "No traffic recorded yet.",
+        "tg_test": "🔔 sparky-manager: test message — Telegram notifications are working.",
+        "tg_user_created": "👤 New user created: {name}",
+        "tg_user_expiring": "⏰ User “{name}” expires in {hours} hours.",
+        "tg_rerender_failed": "⚠️ Config re-render failed: {errors}",
     },
 }
 
@@ -1799,6 +1937,19 @@ def ensure_defaults(db: Session) -> Optional[str]:
                 logger.exception("amneziawg keypair generation failed")
         db.commit()
 
+    # Schema version (Phase 3): a setting row, not a schema change —
+    # backups carry it so restore can refuse a backup from a newer
+    # panel. Missing means v1 (the first versioned release).
+    version_now = {row.key: (row.value or "") for row in db.query(Setting).all()}
+    if not version_now.get("schema_version"):
+        version = (
+            getattr(backup_mod, "SCHEMA_VERSION", 1)
+            if backup_mod is not None
+            else 1
+        )
+        db.add(Setting(key="schema_version", value=str(version)))
+        db.commit()
+
     return generated_password
 
 # ---------------------------------------------------------------------------
@@ -1847,6 +1998,8 @@ async def _expiry_sweeper_loop() -> None:
             errors = rerender_configs(db)
             if errors:
                 logger.warning("expiry sweeper re-render errors: %s", errors)
+                _notify_rerender_failure(db, errors)
+            _notify_expiring_users(db)
         except Exception:  # noqa: BLE001
             logger.exception("expiry sweeper failed")
         finally:
@@ -3312,6 +3465,8 @@ def dashboard(
     recent_audit = (
         db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(6).all()
     )
+    # Phase 3: 14-day total-traffic chart (inline SVG, no JS library).
+    traffic_chart, traffic_14d = _traffic_chart(db)
     return templates.TemplateResponse(request, "dashboard.html",
         _template_ctx(
             request,
@@ -3327,6 +3482,8 @@ def dashboard(
                 "clients_by_inbound": clients_by_inbound,
                 "today": today,
                 "recent_audit": recent_audit,
+                "traffic_chart": traffic_chart,
+                "traffic_14d": traffic_14d,
             },
         ),
     )
@@ -3644,6 +3801,7 @@ def create_user(
     _create_clients_for_user(db, user)
     _audit(db, admin.id, "user.create", name)
     logger.info("user created: %s", name)
+    _notify_telegram(db, t["tg_user_created"].format(name=name))
     errors = rerender_configs(db)
     err = "; ".join(errors) if errors else ""
     if err:
@@ -3683,6 +3841,9 @@ def user_detail(
         for row in rows
     }
     frozen = bool(rows) and all(row["frozen"] for row in rows)
+    # Phase 3: this user's 14-day traffic chart (admin view only —
+    # the public /u/<token> page does not pass this context).
+    user_traffic_chart, user_traffic_14d = _traffic_chart(db, user_id=user.id)
     return templates.TemplateResponse(request, "user_detail.html",
         _template_ctx(
             request,
@@ -3700,6 +3861,8 @@ def user_detail(
                 "user_url": f"{base}/u/{user.sub_token}",
                 "file_urls": _file_export_urls(db, user, base),
                 "host": host,
+                "user_traffic_chart": user_traffic_chart,
+                "user_traffic_14d": user_traffic_14d,
             },
         ),
     )
@@ -4254,6 +4417,222 @@ def delete_inbound(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Panel & server settings helpers (Phase 3 of the professional-panel expansion)
+# ---------------------------------------------------------------------------
+
+PASSWORD_MIN_LENGTH = 8
+TELEGRAM_EXPIRY_HOURS = 24
+TELEGRAM_RERENDER_NOTIFY_MIN_GAP = timedelta(hours=1)
+CHAT_ID_RE = re.compile(r"^-?\d+$")
+
+# BackupError.code -> STRINGS key for the restore error message.
+_RESTORE_ERROR_KEYS = {
+    "not_a_backup": "restore_invalid",
+    "corrupt": "restore_invalid",
+    "missing_tables": "restore_invalid",
+    "too_large": "restore_invalid",
+    "newer_schema": "restore_newer_schema",
+}
+
+
+def _change_admin_password(
+    db: Session,
+    admin: Any,
+    current_password: str,
+    new_password: str,
+    confirm_password: str,
+    keep_token: Optional[str] = None,
+) -> tuple[bool, str]:
+    """Validate and apply an admin password change.
+
+    Returns ``(ok, message_key)``. On success the stored hash is
+    replaced (PBKDF2 via :mod:`app.auth`, so the new password
+    survives restarts — ``ensure_defaults`` only seeds a password
+    when no admin exists) and every OTHER session is invalidated, so
+    other devices are signed out while this one stays logged in. No
+    password value is ever logged.
+    """
+    if verify_password is None or hash_password is None:
+        return False, "invalid_input"
+    if not verify_password(current_password, admin.password_hash):
+        return False, "wrong_current_password"
+    if len(new_password) < PASSWORD_MIN_LENGTH:
+        return False, "password_too_short"
+    if new_password != confirm_password:
+        return False, "password_mismatch"
+    admin.password_hash = hash_password(new_password)
+    db.commit()
+    if invalidate_other_sessions is not None:
+        try:
+            invalidate_other_sessions(db, admin.id, keep_token=keep_token)
+        except Exception:  # noqa: BLE001
+            logger.warning("invalidating other sessions failed")
+    return True, "password_changed"
+
+
+def _telegram_configured(db: Session) -> bool:
+    """True when both a bot token and a chat ID are stored."""
+    settings = get_settings(db)
+    return bool(
+        settings.get("telegram_bot_token") and settings.get("telegram_chat_id")
+    )
+
+
+def _notify_telegram(db: Session, text: str) -> bool:
+    """Send a Telegram notification if configured. Never raises.
+
+    The token is read from settings and passed straight to the
+    sender — it is never logged (not even on failure: the warning
+    below carries no exception text, because HTTP errors can echo
+    the request URL, which contains the token).
+    """
+    if telegram_mod is None or not text:
+        return False
+    try:
+        settings = get_settings(db)
+        token = settings.get("telegram_bot_token", "")
+        chat_id = settings.get("telegram_chat_id", "")
+        if not token or not chat_id:
+            return False
+        return bool(telegram_mod.send_message(token, chat_id, text))
+    except Exception:  # noqa: BLE001
+        logger.warning("telegram notification failed")
+        return False
+
+
+def _notify_expiring_users(db: Session, now: Optional[datetime] = None) -> int:
+    """Notify about users expiring within 24h (once per user per day).
+
+    Runs from the expiry sweeper. Dedup state lives in the
+    ``telegram_expiry_notified`` setting (``{user_id: "YYYY-MM-DD"}``)
+    — no schema change. Returns the number of notifications sent.
+    Background task, so the message uses Persian (panel default).
+    Never raises.
+    """
+    if telegram_mod is None:
+        return 0
+    try:
+        now = now or datetime.now(timezone.utc)
+        today = now.date().isoformat()
+        settings = get_settings(db)
+        try:
+            notified = json.loads(settings.get("telegram_expiry_notified", "") or "{}")
+            if not isinstance(notified, dict):
+                notified = {}
+        except ValueError:
+            notified = {}
+        pruned = {k: v for k, v in notified.items() if v == today}
+        changed = len(pruned) != len(notified)
+        notified = pruned
+        t = t_for("fa")
+        sent = 0
+        horizon = now + timedelta(hours=TELEGRAM_EXPIRY_HOURS)
+        for user in db.query(User).filter(User.enabled.is_(True)).all():
+            if user.expires_at is None:
+                continue
+            expires = user.expires_at
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            if not (now < expires <= horizon):
+                continue
+            if notified.get(str(user.id)) == today:
+                continue
+            hours = max(1, int((expires - now).total_seconds() // 3600))
+            if _notify_telegram(
+                db, t["tg_user_expiring"].format(name=user.name, hours=hours)
+            ):
+                notified[str(user.id)] = today
+                changed = True
+                sent += 1
+        if changed:
+            set_setting(db, "telegram_expiry_notified", json.dumps(notified))
+        return sent
+    except Exception:  # noqa: BLE001
+        logger.warning("expiry notification check failed")
+        return 0
+
+
+def _notify_rerender_failure(db: Session, errors: list[str]) -> bool:
+    """Notify about a re-render failure, at most once per hour.
+
+    The sweeper runs every 5 minutes, so an unthrottled hook would
+    spam the admin while a failure persists. The last-notify time
+    lives in the ``telegram_rerender_notified_at`` setting. Never
+    raises.
+    """
+    if telegram_mod is None or not errors:
+        return False
+    try:
+        now = datetime.now(timezone.utc)
+        settings = get_settings(db)
+        last = settings.get("telegram_rerender_notified_at", "")
+        if last:
+            try:
+                last_dt = datetime.fromisoformat(last)
+                if last_dt.tzinfo is None:
+                    last_dt = last_dt.replace(tzinfo=timezone.utc)
+                if now - last_dt < TELEGRAM_RERENDER_NOTIFY_MIN_GAP:
+                    return False
+            except ValueError:
+                pass
+        t = t_for("fa")
+        detail = "; ".join(str(e) for e in errors)[:200]
+        if _notify_telegram(db, t["tg_rerender_failed"].format(errors=detail)):
+            set_setting(db, "telegram_rerender_notified_at", now.isoformat())
+            return True
+        return False
+    except Exception:  # noqa: BLE001
+        logger.warning("re-render failure notification failed")
+        return False
+
+
+def _traffic_chart(
+    db: Session, user_id: Optional[int] = None, today: Any = None
+) -> tuple[str, int]:
+    """``(svg, total_bytes)`` for the last 14 days of ``traffic_daily``.
+
+    ``user_id=None`` charts all users (dashboard); a user id charts
+    one user (user detail). Days with no recorded traffic are zero
+    bars, never invented values. Returns ``("", 0)`` when the charts
+    module is unavailable. Never raises.
+    """
+    if charts_mod is None:
+        return "", 0
+    try:
+        query = db.query(TrafficDaily)
+        if user_id is not None:
+            query = query.filter(TrafficDaily.user_id == user_id)
+        rows = [
+            (row.date, (row.up_bytes or 0) + (row.down_bytes or 0))
+            for row in query.all()
+        ]
+        series = charts_mod.daily_traffic_series(rows, today=today)
+        return (
+            charts_mod.traffic_chart_svg(series),
+            sum(total for _day, total in series),
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("traffic chart failed")
+        return "", 0
+
+
+def _db_file_path(db: Session) -> Optional[Path]:
+    """The SQLite file the current session's engine uses (None if unknown)."""
+    try:
+        bind = db.get_bind()
+        database = getattr(getattr(bind, "url", None), "database", None)
+        if database and database != ":memory:":
+            return Path(database)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        configured = _cfg_attr("DB_PATH", "")
+        return Path(configured) if configured else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(
     request: Request,
@@ -4261,8 +4640,23 @@ def settings_page(
     db: Session = Depends(db_session),
 ):
     settings = get_settings(db)
+    # The bot token never reaches the template context: the form only
+    # ever shows a "configured" badge, never the value.
+    settings_view = {k: v for k, v in settings.items() if k != "telegram_bot_token"}
+    server_status = None
+    if system_status_mod is not None:
+        try:
+            server_status = system_status_mod.collect_server_status(DATA_DIR)
+        except Exception:  # noqa: BLE001
+            server_status = None
     return templates.TemplateResponse(request, "settings.html",
-        _template_ctx(request, {"admin": admin, "settings": settings}),
+        _template_ctx(request, {
+            "admin": admin,
+            "settings": settings_view,
+            "server_status": server_status,
+            "telegram_configured": _telegram_configured(db),
+            "telegram_token_set": bool(settings.get("telegram_bot_token")),
+        }),
     )
 
 
@@ -4273,12 +4667,24 @@ def save_settings(
     subscription_host: str = Form(""),
     reality_sni: str = Form(""),
     log_level: str = Form(""),
+    telegram_bot_token: str = Form(""),
+    telegram_chat_id: str = Form(""),
     admin: Any = Depends(require_admin),
     db: Session = Depends(db_session),
 ):
+    t = t_for(get_lang(request))
+    chat_id = telegram_chat_id.strip()
+    if chat_id and not CHAT_ID_RE.match(chat_id):
+        return _redirect("/settings", request, err=t["invalid_chat_id"])
     set_setting(db, "domain", domain.strip())
     set_setting(db, "subscription_host", subscription_host.strip())
     set_setting(db, "reality_sni", reality_sni.strip() or "www.microsoft.com")
+    if telegram_bot_token.strip():
+        # A blank token field keeps the current token (the form never
+        # shows it, so a submit without a new value must not clear it).
+        # Clearing the chat ID disables notifications.
+        set_setting(db, "telegram_bot_token", telegram_bot_token.strip())
+    set_setting(db, "telegram_chat_id", chat_id)
     if log_level.strip() and panel_log_mod is not None:
         # Applies immediately (no restart); the value is validated
         # against the known levels inside apply_log_level.
@@ -4287,9 +4693,169 @@ def save_settings(
         logger.info("log level set to %s by %s", applied, admin.username)
     _audit(db, admin.id, "settings.update", f"domain={domain.strip()!r}")
     errors = rerender_configs(db)
-    t = t_for(get_lang(request))
     err = (t["rerender_failed"] + "; ".join(errors)) if errors else ""
     return _redirect("/settings", request, err=err)
+
+
+@app.post("/settings/password")
+def change_password(
+    request: Request,
+    current_password: str = Form(""),
+    new_password: str = Form(""),
+    confirm_password: str = Form(""),
+    admin: Any = Depends(require_admin),
+    db: Session = Depends(db_session),
+):
+    t = t_for(get_lang(request))
+    token = request.cookies.get(SESSION_COOKIE)
+    ok, key = _change_admin_password(
+        db, admin, current_password, new_password, confirm_password,
+        keep_token=token,
+    )
+    if not ok:
+        return _redirect("/settings", request, err=t[key])
+    _audit(db, admin.id, "admin.password_change", admin.username)
+    logger.info("admin password changed by %s", admin.username)
+    return _redirect("/settings", request, msg=t[key])
+
+
+@app.post("/settings/telegram-test")
+def telegram_test(
+    request: Request,
+    admin: Any = Depends(require_admin),
+    db: Session = Depends(db_session),
+):
+    t = t_for(get_lang(request))
+    if not _telegram_configured(db):
+        return _redirect("/settings", request, err=t["telegram_not_configured"])
+    if _notify_telegram(db, t["tg_test"]):
+        _audit(db, admin.id, "telegram.test", "")
+        return _redirect("/settings", request, msg=t["telegram_test_sent"])
+    return _redirect("/settings", request, err=t["telegram_test_failed"])
+
+
+@app.get("/settings/backup")
+def download_backup(
+    request: Request,
+    admin: Any = Depends(require_admin),
+    db: Session = Depends(db_session),
+):
+    if backup_mod is None:
+        raise HTTPException(status_code=503, detail="backup unavailable")
+    db_path = _db_file_path(db)
+    if db_path is None or not db_path.exists():
+        raise HTTPException(status_code=503, detail="database path unknown")
+    try:
+        data = backup_mod.create_backup_zip(db_path)
+    except Exception:  # noqa: BLE001
+        logger.exception("backup creation failed")
+        raise HTTPException(status_code=500, detail="backup failed")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    _audit(db, admin.id, "settings.backup", f"{len(data)} bytes")
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="sparky-manager-backup-{stamp}.zip"'
+        },
+    )
+
+
+@app.post("/settings/restore")
+async def restore_backup(
+    request: Request,
+    backup_file: UploadFile = File(None),
+    confirm_restore: str = Form(""),
+    admin: Any = Depends(require_admin),
+    db: Session = Depends(db_session),
+):
+    t = t_for(get_lang(request))
+    # Capture the admin id up front: the restore closes this request's
+    # session (rollback expires its objects), so `admin` is detached
+    # by the time the post-restore audit runs.
+    admin_id = admin.id
+    if backup_mod is None or reset_engine is None or dispose_engine is None:
+        return _redirect("/settings", request, err=t["restore_failed"])
+    if not confirm_restore:
+        return _redirect("/settings", request, err=t["restore_confirm_required"])
+    if backup_file is None or not backup_file.filename:
+        return _redirect("/settings", request, err=t["restore_no_file"])
+    # Read the upload with a size cap (chunked, so an oversized file
+    # is refused without ever being fully buffered).
+    chunks: list[bytes] = []
+    total = 0
+    cap = backup_mod.BACKUP_MAX_BYTES
+    while True:
+        chunk = await backup_file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > cap:
+            return _redirect("/settings", request, err=t["restore_invalid"])
+        chunks.append(chunk)
+    data = b"".join(chunks)
+    db_path = _db_file_path(db)
+    if db_path is None or not db_path.exists():
+        return _redirect("/settings", request, err=t["restore_failed"])
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="sparky-restore-") as tmp:
+        try:
+            info = backup_mod.validate_backup_bytes(data, tmp)
+        except backup_mod.BackupError as exc:
+            key = _RESTORE_ERROR_KEYS.get(exc.code, "restore_invalid")
+            if key == "restore_newer_schema":
+                message = t[key]
+            else:
+                message = t[key] + (exc.detail or exc.code)
+            return _redirect("/settings", request, err=message)
+        # Validation passed: back up the current DB first, then swap.
+        try:
+            backup_mod.backup_current_db(db_path, DATA_DIR / "backups")
+        except Exception:  # noqa: BLE001
+            logger.exception("pre-restore backup failed")
+            return _redirect("/settings", request, err=t["restore_failed"])
+        # Close this request's session and dispose the engine BEFORE
+        # the file is replaced (the old engine's connections point at
+        # the old file). The session is rolled back first so the
+        # dependency's exit-commit has nothing to write.
+        try:
+            db.rollback()
+            db.close()
+        except Exception:  # noqa: BLE001
+            pass
+        dispose_engine()
+        try:
+            backup_mod.swap_db_file(db_path, info.db_file)
+        except Exception:  # noqa: BLE001
+            logger.exception("restore file swap failed")
+            return _redirect("/settings", request, err=t["restore_failed"])
+        try:
+            reset_engine()
+        except Exception:  # noqa: BLE001
+            logger.exception("engine reset after restore failed")
+            return _redirect("/settings", request, err=t["restore_failed"])
+    # Fresh session on the restored DB: audit + re-render configs.
+    # (SessionLocal directly — get_session() would rebind to the
+    # configured path if the singleton were ever unset.)
+    errors: list[str] = []
+    fresh = SessionLocal()
+    try:
+        _audit(fresh, admin_id, "settings.restore",
+               f"{info.users} users, {info.inbounds} inbounds")
+        errors = rerender_configs(fresh)
+    except Exception:  # noqa: BLE001
+        logger.exception("post-restore re-render failed")
+        errors = ["post-restore re-render failed"]
+    finally:
+        fresh.close()
+    if errors:
+        return _redirect(
+            "/settings", request,
+            err=t["rerender_failed"] + "; ".join(errors),
+        )
+    return _redirect("/settings", request, msg=t["restore_done"])
 
 
 # ---------------------------------------------------------------------------

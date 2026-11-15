@@ -67,6 +67,45 @@ def init_db(engine: Engine | None = None) -> None:
     SessionLocal.configure(bind=engine)
 
 
+def dispose_engine() -> None:
+    """Dispose the current engine (and the singleton) without rebinding.
+
+    Used by a restore before the DB file is swapped: pooled
+    connections must be closed before the file is replaced, and the
+    rebind happens afterwards via :func:`reset_engine`. The caller
+    must have closed its sessions first.
+    """
+    global _engine
+    bind = SessionLocal.kw.get("bind")
+    for engine in {e for e in (bind, _engine) if e is not None}:
+        engine.dispose()
+    _engine = None
+
+
+def reset_engine(db_path: Path | str | None = None) -> Engine:
+    """Dispose the current engine and rebind to a fresh one.
+
+    Used after a restore swaps the DB file on disk: the old engine's
+    pooled connections point at the replaced file and must be closed
+    before the new file is opened. ``db_path`` defaults to the path
+    of the engine ``SessionLocal`` is currently bound to (the
+    configured ``DB_PATH`` when nothing is bound yet). The caller must
+    have closed its sessions first. Returns the new engine.
+    """
+    global _engine
+    bind = SessionLocal.kw.get("bind")
+    if db_path is None and bind is not None:
+        try:
+            db_path = bind.url.database
+        except (AttributeError, ValueError):
+            db_path = None
+    dispose_engine()
+    engine = get_engine(db_path)
+    SessionLocal.configure(bind=engine)
+    _engine = engine
+    return engine
+
+
 @contextmanager
 def get_session() -> Iterator[Session]:
     """Yield a session; commit on success, roll back on error, always close.
@@ -89,4 +128,12 @@ def get_session() -> Iterator[Session]:
         db.close()
 
 
-__all__ = ["get_engine", "init_db", "get_session", "SessionLocal", "Base"]
+__all__ = [
+    "get_engine",
+    "init_db",
+    "dispose_engine",
+    "reset_engine",
+    "get_session",
+    "SessionLocal",
+    "Base",
+]

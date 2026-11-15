@@ -148,6 +148,25 @@ def invalidate_session(db: DbSession, token: str) -> bool:
     return True
 
 
+def invalidate_other_sessions(
+    db: DbSession, admin_id: int, keep_token: Optional[str] = None
+) -> int:
+    """Delete all of ``admin_id``'s sessions except ``keep_token``'s.
+
+    Used after a password change: other devices are signed out while
+    the session that made the change stays alive. Returns the number
+    of sessions deleted. ``keep_token=None`` deletes all of them.
+    """
+    query = db.query(LoginSession).filter(LoginSession.admin_id == admin_id)
+    if keep_token:
+        query = query.filter(
+            LoginSession.token_hash != _hash_token(keep_token)
+        )
+    deleted = query.delete(synchronize_session=False)
+    db.commit()
+    return int(deleted)
+
+
 # ---------------------------------------------------------------------------
 # Login rate limiting (in-memory, per IP)
 # ---------------------------------------------------------------------------
@@ -194,6 +213,7 @@ __all__ = [
     "create_session",
     "get_admin_from_token",
     "invalidate_session",
+    "invalidate_other_sessions",
     "record_failed_login",
     "record_successful_login",
     "is_locked_out",

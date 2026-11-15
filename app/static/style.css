@@ -801,3 +801,11 @@ body.auth-page .container { max-width: 440px; padding-top: 2rem; }
   .filter-strip { flex-direction: column; align-items: stretch; }
   .filter-select select { flex: 1 1 auto; width: 100%; }
 }
+
+/* ---- Phase 3: traffic charts (inline SVG, server-rendered) ---- */
+.chart-wrap { overflow-x: auto; }
+.chart-svg { max-width: 100%; height: auto; display: block; }
+.chart-svg text { font-family: var(--mono); }
+.chart-max { fill: var(--muted); font-size: 12px; }
+.chart-base { stroke: var(--line); stroke-width: 1; }
+.chart-label { fill: var(--muted-2); font-size: 11px; }

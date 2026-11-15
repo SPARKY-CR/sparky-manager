@@ -125,6 +125,18 @@ history is kept), and expiry extension. The IP limit is stored and
 shown but not enforced: the panel cannot see connected IPs, so it
 does not pretend to limit them.
 
+The settings page covers the panel itself: change the admin password
+in-panel (other sessions are signed out; the installer's login file
+still holds the old password), Telegram notifications (bot token +
+chat ID, with a test button — notified on user creation, users
+expiring within 24h, and config re-render failures), backup/restore
+(download a ZIP with the database + settings export; restore
+validates the upload, backs the current database up first, and
+re-renders configs), server status (CPU load, RAM, disk, uptime,
+and per-service state for every core), and 14-day traffic charts on
+the dashboard and each user page (server-rendered SVG, no external
+libraries; days without traffic show as zero).
+
 ## FAQ
 
 **Do I need a domain?**
