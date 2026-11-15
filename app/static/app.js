@@ -92,4 +92,35 @@
       btn.textContent = showing ? btn.dataset.originalLabel : "•••";
     });
   });
+
+  // Inbound editor: show only the sections that apply to the chosen
+  // security / transport. Progressive enhancement only — without JS
+  // every section stays visible and the form still submits.
+  var editForm = document.getElementById("edit-inbound-form");
+  if (editForm) {
+    var security = document.getElementById("edit-security");
+    var network = document.getElementById("edit-network");
+    var realitySection = document.getElementById("section-reality");
+    var tlsSection = document.getElementById("section-tls");
+    var applyEditVisibility = function () {
+      var sec = security ? security.value : "";
+      if (realitySection) realitySection.hidden = sec !== "reality";
+      // The TLS section is also shown (without the security select)
+      // for the always-TLS protocols — there security is absent and
+      // the section must stay visible.
+      if (tlsSection && security) tlsSection.hidden = sec !== "tls";
+      var net = network ? network.value : "tcp";
+      var show = function (id, visible) {
+        var el = document.getElementById(id);
+        if (el) el.hidden = !visible;
+      };
+      show("field-path", net === "ws" || net === "xhttp" || net === "httpupgrade");
+      show("field-host", net === "ws" || net === "httpupgrade");
+      show("field-service-name", net === "grpc");
+      show("field-mode", net === "xhttp");
+    };
+    if (security) security.addEventListener("change", applyEditVisibility);
+    if (network) network.addEventListener("change", applyEditVisibility);
+    applyEditVisibility();
+  }
 })();

@@ -404,7 +404,32 @@ Port plan note: strongSwan/IKEv2 uses UDP 500/4500 — the panel never
 assigns those ports to its own inbounds (the inbound form rejects
 them, except an IKEv2 inbound itself, which uses 500).
 
-### 5.5 What the panel does NOT run (by design)
+### 5.5 Inbound editor — `stream_json` keys (Phase 1, 2026-11-15)
+
+Every per-inbound option lives in the inbound's `stream_json` blob —
+no DB migration. The edit page (`GET/POST /inbounds/{id}/edit`, plus
+`POST /inbounds/{id}/regenerate-reality|regenerate-awg-params|regenerate-server-key`)
+validates, saves, and re-renders through the same pipeline as §5.
+Validation errors re-render the form (200) with the submitted values;
+a re-render failure redirects to `/inbounds` with the error.
+
+| Family | Keys (all optional unless noted) |
+|---|---|
+| Xray vless/vmess/trojan | `network` (tcp/ws/grpc/xhttp/httpupgrade), `security` (none/tls/reality), `path`, `host`, `service_name`, `mode` (xhttp: auto/packet/stream), `fp`, `sniffing` (bool), `sniffing_dest_override`, `fallbacks` ([{dest, xver}] — rendered in `streamSettings`, TCP only), `reality` {dest, sni, server_names, private_key, public_key, short_id}, `tls` {sni, alpn, cert_path, key_path} |
+| Hysteria2 (both cores) | `up_mbps`, `down_mbps` (Xray emits `upMbps`/`downMbps`) |
+| TUIC | `congestion_control` (bbr/cubic/new_reno), `zero_rtt_handshake` |
+| ShadowTLS | `method`, `password`, `strict_mode`, `inner_port` |
+| WireGuard / AmneziaWG | `subnet` (server Address = first host; existing peers keep their addresses — changing the subnet does NOT re-allocate), `mtu`, `dns` (list, ≤ 2); AmneziaWG adds `awg_params` (Jc/Jmin/Jmax, S1–S4, H1–H4, I1–I5 tags, `HeaderProtectionKey`) |
+| OpenVPN / OpenConnect / IKEv2 | `subnet`, `dns` (list, ≤ 2); OpenVPN adds `transport` (udp/tcp); OpenConnect adds `max_clients` |
+
+Notes: Reality only works over TCP (the editor rejects Reality+WS/gRPC).
+The WG/AWG server keypair is shared per protocol (settings keys
+`wireguard_private_key`/`amneziawg_private_key`); regenerating it forces
+every client of that protocol to re-fetch. The Shadowsocks method is
+NOT editable per inbound — it lives per client (`clients.method` is
+authoritative). XTLS is not offered (no renderer support).
+
+### 5.6 What the panel does NOT run (by design)
 
 | ZedSecure engine | Panel provides? | Why not |
 |---|---|---|
@@ -663,7 +688,7 @@ first): `sparky-manager info | status | restart | update-cores | backup | restor
 - Multi-node support.
 - Reseller / billing.
 
-### Will NOT provide (and why) — §5.5 in short
+### Will NOT provide (and why) — §5.6 in short
 Psiphon, Tor, DNS tunnels, SSH-as-VPN: client-side or third-party
 networks, not things a server panel runs. ZedSecure already bundles
 them; the panel's job is to give ZedSecure clean server-side configs.

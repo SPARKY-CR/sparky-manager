@@ -100,6 +100,13 @@ AnyConnect)، AmneziaWG (UDP 51821، لینک `vpn://` — به ماژول کر�
 نیاز دارد) و IKEv2 (UDP 500+4500، فایل `.mobileconfig`). چک‌لیست
 وارد کردن در ZedSecure در [docs/ZEDSECURE.md](docs/ZEDSECURE.md) است.
 
+هر اینباند بعد از ساختن قابل ویرایش است (اینباندها ← ✏️ ویرایش):
+ترنسپورت و امنیت (TLS/Reality، ‏WS/gRPC/XHTTP/HTTPUpgrade، اسنیفینگ،
+فالبک)، زیرشبکه/MTU/DNS و پارامترهای آمنزیای WireGuard/AmneziaWG،
+زیرشبکه/DNS ‏OpenVPN/OpenConnect/IKEv2 — با دکمه‌های ساخت دوباره برای
+کلیدهای Reality، پارامترهای آمنزیا و کلید سرور WG/AWG. لینک‌های اشتراک
+و سابسکریپشن خودکار با تنظیمات ویرایش‌شده هماهنگ می‌شوند.
+
 ## پرسش‌های متداول
 
 **آیا دامنه لازم است؟**

@@ -135,14 +135,18 @@ def render_wg_config(
     address: str = "10.8.0.1/24",
     listen_port: int = 51820,
     dns: str = "1.1.1.1",
+    mtu: int | None = None,
 ) -> str:
     """Render a server ``wg0.conf`` as a string.
 
-    One ``[Interface]`` (private key, address, listen port, DNS)
-    followed by one ``[Peer]`` per peer dict with ``public_key`` and
-    ``allowed_ips`` (``preshared_key`` is included when present).
-    Peers missing ``public_key`` or ``allowed_ips`` are skipped —
-    a peer without either cannot work and must not break the file.
+    One ``[Interface]`` (private key, address, listen port, DNS,
+    MTU) followed by one ``[Peer]`` per peer dict with
+    ``public_key`` and ``allowed_ips`` (``preshared_key`` is
+    included when present). Peers missing ``public_key`` or
+    ``allowed_ips`` are skipped — a peer without either cannot
+    work and must not break the file. ``mtu`` is omitted when
+    ``None`` (the kernel default applies); the panel writes it
+    from the inbound's stream when the admin sets one.
     """
     lines = [
         "[Interface]",
@@ -152,6 +156,8 @@ def render_wg_config(
     ]
     if dns:
         lines.append(f"DNS = {dns}")
+    if mtu:
+        lines.append(f"MTU = {int(mtu)}")
     for peer in peers or []:
         if not isinstance(peer, dict):
             continue

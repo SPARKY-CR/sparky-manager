@@ -17,7 +17,9 @@ Input shapes (see DESIGN.md §4/§5):
 
 - inbound dict: ``tag``, ``core``, ``protocol``, ``port``, ``enabled``,
   ``stream_json`` (dict, may contain ``network`` / ``security`` /
-  ``reality`` / ``tls`` / ``path`` / ``service_name``), ``remark``.
+  ``reality`` / ``tls`` / ``path`` / ``host`` / ``service_name`` /
+  ``mode`` / ``sniffing`` / ``sniffing_dest_override`` /
+  ``fallbacks``), ``remark``.
 - client dict: ``uuid``, ``password``, ``method``, ``flow``,
   ``extra_json`` (dict).
 - settings dict: ``domain``, ``subscription_host``, ``hysteria2_core``
@@ -45,6 +47,7 @@ from typing import Any
 
 __all__ = [
     "generate_reality_keypair",
+    "reality_public_key",
     "render_xray_config",
     "validate_xray_config",
     "write_and_validate",
@@ -93,6 +96,30 @@ def generate_reality_keypair() -> dict[str, str]:
     public_raw = _wg._x25519(private_raw, _wg._BASE_POINT)
     encode = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")  # noqa: E731
     return {"private_key": encode(private_raw), "public_key": encode(public_raw)}
+
+
+def reality_public_key(private_key: str) -> str | None:
+    """Derive the Reality public key from a base64url private key.
+
+    The inbound editor needs this when the admin pastes a private
+    key by hand: the public key in the share links must match it,
+    or clients cannot connect. Returns ``None`` when the key is
+    not 43-char base64url of 32 bytes.
+    """
+    from app import wireguard as _wg
+
+    text = (private_key or "").strip()
+    if not text:
+        return None
+    padded = text + "=" * (-len(text) % 4)
+    try:
+        private_raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+    except Exception:  # noqa: BLE001
+        return None
+    if len(private_raw) != 32:
+        return None
+    public_raw = _wg._x25519(private_raw, _wg._BASE_POINT)
+    return base64.urlsafe_b64encode(public_raw).rstrip(b"=").decode("ascii")
 
 
 # ---------------------------------------------------------------------------
@@ -289,11 +316,12 @@ def _stream_settings(
     """Build ``streamSettings`` from an inbound's ``stream_json``.
 
     ``stream_json`` keys honoured: ``network`` (``tcp``/``ws``/``xhttp``/
-    ``grpc``), ``security`` (``reality``/``tls``/``none``), ``reality``
-    (dict, see :func:`_reality_settings`), ``tls`` (dict with ``sni`` /
-    ``alpn`` / cert paths), ``path`` (WS/XHTTP path), ``host`` (WS Host
-    header), ``service_name`` (gRPC service name), ``mode`` (XHTTP mode).
-    A missing ``path`` for WebSocket defaults to ``/<tag>``.
+    ``grpc``/``httpupgrade``), ``security`` (``reality``/``tls``/
+    ``none``), ``reality`` (dict, see :func:`_reality_settings`),
+    ``tls`` (dict with ``sni`` / ``alpn`` / cert paths), ``path``
+    (WS/XHTTP/HTTPUpgrade path), ``host`` (WS/HTTPUpgrade Host
+    header), ``service_name`` (gRPC service name), ``mode`` (XHTTP
+    mode). A missing ``path`` for WebSocket defaults to ``/<tag>``.
     """
     stream = _as_dict(inbound.get("stream_json"))
     tag = _clean_str(inbound.get("tag")) or ""
@@ -348,8 +376,92 @@ def _stream_settings(
         )
         grpc_settings.setdefault("serviceName", service_name)
         result["grpcSettings"] = grpc_settings
+    elif network == "httpupgrade":
+        # HTTPUpgrade: an HTTP upgrade handshake, then the raw
+        # protocol — Xray's `httpupgradeSettings` takes the same
+        # `path` / `host` pair as WebSocket (no `headers` wrapper).
+        upgrade_settings: dict[str, Any] = dict(
+            _as_dict(stream.get("httpupgradeSettings"))
+        )
+        path = _clean_str(stream.get("path")) or f"/{tag}"
+        upgrade_settings.setdefault("path", path)
+        host = _clean_str(stream.get("host"))
+        if host:
+            upgrade_settings.setdefault("host", host)
+        result["httpupgradeSettings"] = upgrade_settings
+
+    # Fallbacks live in streamSettings (Xray ignores them anywhere
+    # else) and only apply to raw TCP: the fallback decision is made
+    # on the first bytes of the TCP stream, before any HTTP upgrade
+    # — with WS/gRPC/XHTTP the handshake has already happened, so a
+    # fallback could never trigger. Reality is TCP, so it keeps its
+    # fallbacks (the classic "serve a real site on 443" setup).
+    if network == "tcp":
+        fallbacks = _fallback_list(stream)
+        if fallbacks is not None:
+            result["fallbacks"] = fallbacks
 
     return result
+
+
+def _sniffing_settings(stream: dict[str, Any]) -> dict[str, Any] | None:
+    """Build the inbound-level ``sniffing`` object, or ``None``.
+
+    ``stream_json["sniffing"]`` (bool) enables it; the destination
+    overrides default to ``["http", "tls", "quic"]`` and may be
+    narrowed with ``stream_json["sniffing_dest_override"]`` (a list
+    or a comma-separated string). Only the TCP-based builders
+    (VLESS / VMess / Trojan) attach it — sniffing is meaningless
+    for Shadowsocks / Hysteria2 inbounds, which have no
+    ``streamSettings`` to sniff through.
+    """
+    if not _as_bool(stream.get("sniffing"), False):
+        return None
+    override = stream.get("sniffing_dest_override")
+    if isinstance(override, str):
+        override = [item.strip() for item in override.split(",") if item.strip()]
+    if not isinstance(override, list) or not override:
+        override = ["http", "tls", "quic"]
+    return {"enabled": True, "destOverride": [str(item) for item in override]}
+
+
+def _fallback_list(stream: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Build the streamSettings-level ``fallbacks`` list, or ``None``.
+
+    ``stream_json["fallbacks"]`` is a list of ``{"dest": ..., "xver":
+    0|1}`` (``dest`` is ``"host:port"`` or a bare port number) — the
+    panel's edit form writes it from one ``host:port[,xver]`` line
+    per fallback. Fallbacks let one port serve several protocols
+    (e.g. VLESS + Trojan on 443): Xray tries the inbound's own
+    protocol first and forwards the rest to the fallback dests.
+    Entries without a ``dest`` are dropped; ``xver`` defaults to 0
+    (the PROXY protocol header is only sent when the fallback
+    target expects it).
+    """
+    raw = stream.get("fallbacks")
+    if not isinstance(raw, list) or not raw:
+        return None
+    fallbacks: list[dict[str, Any]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        dest = entry.get("dest")
+        if isinstance(dest, str):
+            dest = dest.strip()
+            if not dest:
+                continue
+        elif isinstance(dest, int) and not isinstance(dest, bool):
+            if not 1 <= dest <= 65535:
+                continue
+        else:
+            continue
+        xver = entry.get("xver", 0)
+        try:
+            xver = int(xver)
+        except (TypeError, ValueError):
+            xver = 0
+        fallbacks.append({"dest": dest, "xver": 1 if xver else 0})
+    return fallbacks or None
 
 
 def _transport_class(protocol: str) -> str:
@@ -424,7 +536,7 @@ def _build_vless(
         if flow:
             entry["flow"] = flow
         entries.append(entry)
-    return {
+    built: dict[str, Any] = {
         "tag": inbound["tag"],
         "port": inbound["port"],
         "protocol": "vless",
@@ -433,6 +545,11 @@ def _build_vless(
             inbound, settings, default_network="tcp", default_security="none"
         ),
     }
+    sniffing = _sniffing_settings(stream)
+    if sniffing is not None:
+        built["sniffing"] = sniffing
+    # Fallbacks ride inside streamSettings (see _stream_settings).
+    return built
 
 
 def _build_vmess(
@@ -448,7 +565,8 @@ def _build_vmess(
         {"id": client["uuid"], "alterId": 0, "security": "auto"}
         for client in usable
     ]
-    return {
+    stream = _as_dict(inbound.get("stream_json"))
+    built: dict[str, Any] = {
         "tag": inbound["tag"],
         "port": inbound["port"],
         "protocol": "vmess",
@@ -457,6 +575,11 @@ def _build_vmess(
             inbound, settings, default_network="tcp", default_security="none"
         ),
     }
+    sniffing = _sniffing_settings(stream)
+    if sniffing is not None:
+        built["sniffing"] = sniffing
+    # Fallbacks ride inside streamSettings (see _stream_settings).
+    return built
 
 
 def _build_trojan(
@@ -469,7 +592,8 @@ def _build_trojan(
     if not usable:
         return None
     entries = [{"password": client["password"]} for client in usable]
-    return {
+    stream = _as_dict(inbound.get("stream_json"))
+    built: dict[str, Any] = {
         "tag": inbound["tag"],
         "port": inbound["port"],
         "protocol": "trojan",
@@ -478,6 +602,11 @@ def _build_trojan(
             inbound, settings, default_network="tcp", default_security="tls"
         ),
     }
+    sniffing = _sniffing_settings(stream)
+    if sniffing is not None:
+        built["sniffing"] = sniffing
+    # Fallbacks ride inside streamSettings (see _stream_settings).
+    return built
 
 
 def _build_shadowsocks(
@@ -791,6 +920,33 @@ def validate_xray_config(cfg: dict) -> tuple[bool, list[str]]:
                     f"inbound '{tag}': shadowsocks needs a 'password' "
                     "in settings (or a 'clients' list)"
                 )
+        # Sniffing / fallbacks (written by the inbound editor): a
+        # fallback without a dest, or an xver other than 0/1, is a
+        # render mistake — Xray would reject the config at load.
+        # Fallbacks live inside streamSettings, not at inbound level.
+        stream_settings = inbound.get("streamSettings") or {}
+        fallbacks = stream_settings.get("fallbacks") if isinstance(
+            stream_settings, dict) else None
+        if fallbacks is not None:
+            if not isinstance(fallbacks, list) or not fallbacks:
+                errors.append(
+                    f"inbound '{tag}': 'fallbacks' must be a non-empty list"
+                )
+            else:
+                for f_index, entry in enumerate(fallbacks):
+                    if not isinstance(entry, dict) or not entry.get("dest"):
+                        errors.append(
+                            f"inbound '{tag}': fallback #{f_index} "
+                            "is missing a 'dest'"
+                        )
+                    elif entry.get("xver") not in (0, 1, None):
+                        errors.append(
+                            f"inbound '{tag}': fallback #{f_index} "
+                            "'xver' must be 0 or 1"
+                        )
+        sniffing = inbound.get("sniffing")
+        if sniffing is not None and not isinstance(sniffing, dict):
+            errors.append(f"inbound '{tag}': 'sniffing' must be an object")
     return (not errors), errors
 
 

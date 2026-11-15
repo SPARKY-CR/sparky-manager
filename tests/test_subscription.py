@@ -359,7 +359,10 @@ def test_sub_singbox_feed_includes_wireguard_for_api_created_user(
     assert wg["peers"][0]["port"] == 51820
     assert wg["peers"][0]["public_key"]
     assert wg["private_key"]
-    assert wg["address"] == ["10.8.0.2/32"]
+    # Alice (seeded) holds 10.8.0.2/32, so the new user gets the
+    # next free address — the feed must report the client's real
+    # allowed_ips, not a hardcoded default.
+    assert wg["address"] == ["10.8.0.3/32"]
 
 
 def test_token_rotation_invalidates_old_token(authed_client, db, seeded):
@@ -397,3 +400,107 @@ def test_user_page_unusable_user_shows_error_not_links(test_client, seeded):
     resp = test_client.get(f"/u/{token}")
     assert resp.status_code == 200
     assert "vless://" not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Inbound editor — sing-box feed follows the new stream settings (Phase 1)
+# ---------------------------------------------------------------------------
+
+def _outbound(protocol, client, inbound):
+    return outbound_for_client(protocol, client, inbound, HOST,
+                               inbound["tag"])
+
+
+def test_sub_vless_grpc_transport():
+    client = {"uuid": "11111111-2222-4333-8444-555555555555",
+              "flow": None, "extra_json": {}}
+    inbound = {"tag": "vless-grpc", "protocol": "vless", "port": 8443,
+               "stream_json": {"network": "grpc", "security": "tls",
+                               "service_name": "vless-grpc",
+                               "tls": {"sni": "example.com"}}}
+    outbound = _outbound("vless", client, inbound)
+    assert outbound["transport"] == {"type": "grpc",
+                                     "service_name": "vless-grpc"}
+
+
+def test_sub_vless_httpupgrade_transport():
+    client = {"uuid": "11111111-2222-4333-8444-555555555555",
+              "flow": None, "extra_json": {}}
+    inbound = {"tag": "vless-hu", "protocol": "vless", "port": 8443,
+               "stream_json": {"network": "httpupgrade",
+                               "security": "tls",
+                               "path": "/up", "host": "example.com",
+                               "tls": {"sni": "example.com"}}}
+    outbound = _outbound("vless", client, inbound)
+    assert outbound["transport"]["type"] == "httpupgrade"
+    assert outbound["transport"]["path"] == "/up"
+    assert outbound["transport"]["headers"]["Host"] == "example.com"
+
+
+def test_sub_vless_xhttp_has_no_outbound():
+    # sing-box has no XHTTP transport — such inbounds are emitted
+    # in the v2rayNG feed only (DESIGN.md §6.3), so the sing-box
+    # outbound builder returns None rather than a broken shape.
+    client = {"uuid": "11111111-2222-4333-8444-555555555555",
+              "flow": None, "extra_json": {}}
+    inbound = {"tag": "vless-xh", "protocol": "vless", "port": 8443,
+               "stream_json": {"network": "xhttp", "security": "tls",
+                               "path": "/xh",
+                               "tls": {"sni": "example.com"}}}
+    assert _outbound("vless", client, inbound) is None
+
+
+def test_sub_trojan_ws_transport():
+    client = {"password": "pw", "extra_json": {}}
+    inbound = {"tag": "trojan-ws", "protocol": "trojan", "port": 8444,
+               "stream_json": {"network": "ws", "security": "tls",
+                               "path": "/trojan", "host": "example.com",
+                               "tls": {"sni": "example.com"}}}
+    outbound = _outbound("trojan", client, inbound)
+    assert outbound["transport"]["type"] == "ws"
+    assert outbound["transport"]["path"] == "/trojan"
+    assert outbound["transport"]["headers"]["Host"] == "example.com"
+    plain = _outbound("trojan", client,
+                      {"tag": "trojan-tls", "protocol": "trojan",
+                       "port": 8444,
+                       "stream_json": {"network": "tcp",
+                                       "security": "tls",
+                                       "tls": {"sni": "example.com"}}})
+    assert "transport" not in plain
+
+
+def test_sub_tuic_congestion_from_stream():
+    client = {"uuid": "11111111-2222-4333-8444-555555555555",
+              "password": "pw", "extra_json": {}}
+    inbound = {"tag": "tuic", "protocol": "tuic", "port": 8443,
+               "stream_json": {"congestion_control": "cubic",
+                               "tls": {"sni": "example.com"}}}
+    outbound = _outbound("tuic", client, inbound)
+    assert outbound["congestion_control"] == "cubic"
+    default = _outbound("tuic", client,
+                        {"tag": "tuic", "protocol": "tuic", "port": 8443,
+                         "stream_json": {"tls": {"sni": "example.com"}}})
+    assert default["congestion_control"] == "bbr"
+
+
+def test_sub_wireguard_endpoint_address_and_mtu(db, seeded):
+    # The endpoint reports the client's real allowed_ips (not a
+    # hardcoded .2) and the inbound's MTU from its stream.
+    from app.models import Inbound
+    wg = seeded["inbounds"]["wireguard"]
+    server_public = wg.stream["peer_public_key"]
+    wg.stream = {"transport": "udp", "subnet": "10.8.0.0/24",
+                 "mtu": 1400, "peer_public_key": server_public}
+    db.commit()
+    client, inbound = _client_inbound(seeded, "wireguard")
+    endpoint = outbound_for_client("wireguard", client, inbound, HOST,
+                                   "wireguard")
+    assert endpoint["address"] == ["10.8.0.2/32"]  # alice's real address
+    assert endpoint["mtu"] == 1400
+    # Without an MTU in the stream, the 1280 default applies.
+    wg.stream = {"transport": "udp", "peer_public_key": server_public}
+    db.commit()
+    client, inbound = _client_inbound(seeded, "wireguard")
+    endpoint = outbound_for_client("wireguard", client, inbound, HOST,
+                                   "wireguard")
+    assert endpoint["mtu"] == 1280

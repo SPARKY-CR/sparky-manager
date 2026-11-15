@@ -140,6 +140,9 @@ def build_vless_link(
     sid: str | None = None,
     network: str = "tcp",
     path: str | None = None,
+    host_header: str | None = None,
+    service_name: str | None = None,
+    mode: str | None = None,
     name: str = "",
 ) -> str:
     """Build a ``vless://`` share link.
@@ -152,9 +155,11 @@ def build_vless_link(
 
     WS+TLS example: pass ``security="tls"``, ``network="ws"`` and
     ``path="/<path>"``; the link then carries ``security=tls&type=ws``
-    plus ``path`` (and ``host`` is not part of this signature — the WS
-    Host header lives in the inbound's ``stream_json`` and is picked up
-    by :func:`build_share_link`).
+    plus ``path`` (and ``host`` when a WS Host header is set).
+    gRPC carries ``serviceName``; XHTTP carries ``mode`` — both
+    read from the inbound's ``stream_json`` by
+    :func:`build_share_link`, so a link always matches the server
+    config the panel rendered.
     """
     uuid = _require(uuid, "uuid")
     host = _require(host, "host")
@@ -172,6 +177,9 @@ def build_vless_link(
         ("sid", sid),
         ("type", network),
         ("path", path),
+        ("host", host_header),
+        ("serviceName", service_name),
+        ("mode", mode),
     ]
     query = _query(params)
     link = f"vless://{quote(uuid, safe='')}@{host}:{port}"
@@ -234,6 +242,9 @@ def build_trojan_link(
     port: int,
     *,
     sni: str | None = None,
+    network: str = "tcp",
+    path: str | None = None,
+    host_header: str | None = None,
     name: str = "",
 ) -> str:
     """Build a ``trojan://`` share link.
@@ -242,15 +253,21 @@ def build_trojan_link(
 
     The password is percent-encoded, so passwords containing ``@``,
     ``#``, ``?`` or ``/`` survive the round-trip. When ``sni`` is not
-    given it defaults to ``host`` (the usual TLS case).
+    given it defaults to ``host`` (the usual TLS case). ``network``
+    (``tcp``/``ws``/``grpc``/``xhttp``/``httpupgrade``) plus ``path``
+    and ``host_header`` mirror the inbound's transport, so a Trojan
+    inbound on WebSocket gets a link clients can actually import.
     """
     password = _require(password, "password")
     host = _require(host, "host")
     port = _validate_port(port)
+    network = (network or "tcp").lower()
     query = _query([
         ("security", "tls"),
-        ("type", "tcp"),
+        ("type", network),
         ("sni", sni or host),
+        ("path", path),
+        ("host", host_header),
     ])
     return (f"trojan://{quote(password, safe='')}@{host}:{port}"
             f"?{query}#{_fragment(name)}")
@@ -313,18 +330,23 @@ def build_tuic_link(
     port: int,
     *,
     sni: str | None = None,
+    congestion_control: str = "bbr",
     name: str = "",
 ) -> str:
     """Build a ``tuic://`` share link (TUIC v5).
 
     ``tuic://<uuid>:<password>@<host>:<port>?congestion_control=bbr&alpn=h3&sni=<sni>#<name>``
+
+    ``congestion_control`` mirrors the inbound's setting (``bbr`` /
+    ``cubic`` / ``new_reno``) so the client negotiates the same
+    algorithm the server was configured with.
     """
     uuid = _require(uuid, "uuid")
     password = _require(password, "password")
     host = _require(host, "host")
     port = _validate_port(port)
     query = _query([
-        ("congestion_control", "bbr"),
+        ("congestion_control", congestion_control or "bbr"),
         ("alpn", "h3"),
         ("sni", sni),
     ])
@@ -487,18 +509,28 @@ def build_share_link(
             sid=reality["short_id"],
             network=str(stream.get("network") or "tcp"),
             path=stream.get("path"),
+            host_header=stream.get("host") or stream.get("host_header"),
+            service_name=stream.get("service_name") or stream.get("serviceName"),
+            mode=stream.get("mode"),
             name=name,
         )
 
     if protocol == "vmess":
         security = str(stream.get("security") or "tls").lower()
+        network = str(stream.get("network") or "ws").lower()
+        # gRPC has no `path` in the VMess JSON — the service name
+        # goes in `path` (the v2rayNG convention), so read it from
+        # the inbound's service_name when the transport is gRPC.
+        path = stream.get("path")
+        if network == "grpc":
+            path = stream.get("service_name") or stream.get("serviceName") or path
         return build_vmess_link(
             client.get("uuid") or "",
             host,
             port,
             name=name,
-            network=str(stream.get("network") or "ws"),
-            path=stream.get("path"),
+            network=network,
+            path=path,
             tls="tls" if security == "tls" else "none",
             sni=_tls_sni(stream),
             host_header=stream.get("host") or stream.get("host_header"),
@@ -510,6 +542,9 @@ def build_share_link(
             host,
             port,
             sni=_tls_sni(stream) or host,
+            network=str(stream.get("network") or "tcp"),
+            path=stream.get("path"),
+            host_header=stream.get("host") or stream.get("host_header"),
             name=name,
         )
 
@@ -534,12 +569,18 @@ def build_share_link(
         )
 
     if protocol == "tuic":
+        congestion = (
+            stream.get("congestion_control")
+            or extra.get("congestion_control")
+            or "bbr"
+        )
         return build_tuic_link(
             client.get("uuid") or "",
             client.get("password") or "",
             host,
             port,
             sni=_tls_sni(stream) or host,
+            congestion_control=str(congestion),
             name=name,
         )
 
@@ -608,8 +649,9 @@ def parse_vless_link(link: str) -> dict:
 
     Returns a dict with ``uuid``, ``host``, ``port`` (int), ``name``,
     ``flow``, ``security``, ``sni``, ``fp``, ``pbk``, ``sid``,
-    ``network`` (from ``type``) and ``path``. Raises :class:`ValueError`
-    on a malformed link.
+    ``network`` (from ``type``), ``path``, ``host_header`` (from
+    ``host``), ``service_name`` (from ``serviceName``) and ``mode``.
+    Raises :class:`ValueError` on a malformed link.
     """
     if not isinstance(link, str) or not link.startswith("vless://"):
         raise ValueError(f"not a vless:// link: {link!r}")
@@ -631,6 +673,9 @@ def parse_vless_link(link: str) -> dict:
         "sid": _single_query(query, "sid"),
         "network": _single_query(query, "type") or "tcp",
         "path": _single_query(query, "path"),
+        "host_header": _single_query(query, "host"),
+        "service_name": _single_query(query, "serviceName"),
+        "mode": _single_query(query, "mode"),
         "encryption": _single_query(query, "encryption") or "none",
     }
 
@@ -685,7 +730,8 @@ def parse_trojan_link(link: str) -> dict:
     """Parse a ``trojan://`` link back into its parts.
 
     Returns a dict with ``password``, ``host``, ``port`` (int),
-    ``name``, ``sni``, ``security`` and ``network`` (from ``type``).
+    ``name``, ``sni``, ``security``, ``network`` (from ``type``),
+    ``path`` and ``host_header`` (from ``host``).
     Raises :class:`ValueError` on a malformed link.
     """
     if not isinstance(link, str) or not link.startswith("trojan://"):
@@ -703,6 +749,8 @@ def parse_trojan_link(link: str) -> dict:
         "sni": _single_query(query, "sni"),
         "security": _single_query(query, "security") or "tls",
         "network": _single_query(query, "type") or "tcp",
+        "path": _single_query(query, "path"),
+        "host_header": _single_query(query, "host"),
     }
 
 

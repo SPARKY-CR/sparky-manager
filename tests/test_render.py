@@ -601,3 +601,258 @@ def test_inject_panel_cert_warns_only_for_self_signed(tmp_path):
         assert settings["self_signed_key_path"] == str(key)
         insecure = [w for w in warnings if "allow insecure" in w]
         assert (not insecure) is trusted, (subj, warnings)
+
+
+# ---------------------------------------------------------------------------
+# Inbound editor — new stream_json keys (Phase 1)
+# ---------------------------------------------------------------------------
+
+def _xray_inbound(tag, protocol, port, stream, clients):
+    """Render ONE inbound through the Xray renderer (plain dicts)."""
+    inbound = {"tag": tag, "port": port, "protocol": protocol,
+               "core": "xray",
+               "stream_json": stream, "enabled": True, "remark": ""}
+    cfg = xray.render_xray_config([inbound], {tag: clients},
+                                  {"hysteria2_core": "xray"})
+    return next(i for i in cfg["inbounds"] if i["tag"] == tag)
+
+
+_VLESS_CLIENTS = [{"uuid": "11111111-2222-4333-8444-555555555555"}]
+
+
+def test_xray_httpupgrade_network_renders():
+    built = _xray_inbound("vless-hu", "vless", 8443,
+                          {"network": "httpupgrade", "path": "/up",
+                           "host": "example.com", "security": "none"},
+                          _VLESS_CLIENTS)
+    stream = built["streamSettings"]
+    assert stream["network"] == "httpupgrade"
+    assert stream["httpupgradeSettings"]["path"] == "/up"
+    assert stream["httpupgradeSettings"]["host"] == "example.com"
+    ok, errors = xray.validate_xray_config(
+        {"inbounds": [built], "outbounds": [{"tag": "direct",
+                                             "protocol": "freedom"}]})
+    assert ok, errors
+
+
+def test_xray_httpupgrade_defaults_path_to_tag():
+    built = _xray_inbound("vless-hu", "vless", 8443,
+                          {"network": "httpupgrade", "security": "none"},
+                          _VLESS_CLIENTS)
+    assert built["streamSettings"]["httpupgradeSettings"]["path"] == "/vless-hu"
+
+
+def test_xray_sniffing_on_with_dest_override():
+    built = _xray_inbound("vless-sniff", "vless", 8443,
+                          {"network": "tcp", "security": "none",
+                           "sniffing": True,
+                           "sniffing_dest_override": ["http", "tls"]},
+                          _VLESS_CLIENTS)
+    assert built["sniffing"] == {"enabled": True,
+                                 "destOverride": ["http", "tls"]}
+
+
+def test_xray_sniffing_defaults_and_off():
+    built = _xray_inbound("vless-sniff", "vless", 8443,
+                          {"network": "tcp", "security": "none",
+                           "sniffing": True},
+                          _VLESS_CLIENTS)
+    assert built["sniffing"]["enabled"] is True
+    assert built["sniffing"]["destOverride"] == ["http", "tls", "quic"]
+    built_off = _xray_inbound("vless-sniff", "vless", 8443,
+                              {"network": "tcp", "security": "none"},
+                              _VLESS_CLIENTS)
+    assert "sniffing" not in built_off
+
+
+def test_xray_fallbacks_render_in_stream_settings_tcp_only():
+    stream = {"network": "tcp", "security": "none",
+              "fallbacks": [{"dest": "127.0.0.1:8080", "xver": 0},
+                            {"dest": 8443, "xver": 1}]}
+    built = _xray_inbound("vless-fb", "vless", 8443, stream, _VLESS_CLIENTS)
+    assert built["streamSettings"]["fallbacks"] == [
+        {"dest": "127.0.0.1:8080", "xver": 0},
+        {"dest": 8443, "xver": 1}]
+    assert "fallbacks" not in built  # never at inbound level
+    # WS: stored but never rendered (the handshake already happened).
+    stream_ws = dict(stream, network="ws", path="/ws")
+    built_ws = _xray_inbound("vless-fb", "vless", 8443, stream_ws,
+                             _VLESS_CLIENTS)
+    assert "fallbacks" not in built_ws["streamSettings"]
+
+
+def test_xray_fallbacks_validator_rejects_bad_shape():
+    bad = _xray_inbound("vless-fb", "vless", 8443,
+                        {"network": "tcp", "security": "none"},
+                        _VLESS_CLIENTS)
+    bad["streamSettings"]["fallbacks"] = [{"xver": 0}]  # no dest
+    ok, errors = xray.validate_xray_config(
+        {"inbounds": [bad], "outbounds": [{"tag": "direct",
+                                           "protocol": "freedom"}]})
+    assert not ok
+    assert any("dest" in e for e in errors)
+    bad["streamSettings"]["fallbacks"] = [{"dest": "127.0.0.1:8080",
+                                           "xver": 2}]
+    ok, errors = xray.validate_xray_config(
+        {"inbounds": [bad], "outbounds": [{"tag": "direct",
+                                           "protocol": "freedom"}]})
+    assert not ok
+    assert any("xver" in e for e in errors)
+
+
+def test_xray_reality_server_names_and_short_id():
+    built = _xray_inbound("vless-r", "vless", 443,
+                          {"network": "tcp", "security": "reality",
+                           "reality": {
+                               "dest": "www.microsoft.com:443",
+                               "sni": "www.microsoft.com",
+                               "server_names": ["www.microsoft.com",
+                                                "www.bing.com"],
+                               "private_key": "a" * 43,
+                               "public_key": "b" * 43,
+                               "short_id": "deadbeef"}},
+                          _VLESS_CLIENTS)
+    reality = built["streamSettings"]["realitySettings"]
+    assert reality["serverNames"] == ["www.microsoft.com", "www.bing.com"]
+    assert reality["shortIds"] == ["deadbeef"]
+
+
+def test_xray_tls_custom_paths_and_alpn():
+    built = _xray_inbound("trojan-tls", "trojan", 8444,
+                          {"network": "tcp", "security": "tls",
+                           "tls": {"sni": "example.com",
+                                   "alpn": ["h2"],
+                                   "cert_path": "/etc/ssl/custom.crt",
+                                   "key_path": "/etc/ssl/custom.key"}},
+                          [{"password": "pw"}])
+    tls = built["streamSettings"]["tlsSettings"]
+    assert tls["serverName"] == "example.com"
+    assert tls["alpn"] == ["h2"]
+    assert tls["certificates"][0]["certificateFile"] == "/etc/ssl/custom.crt"
+    assert tls["certificates"][0]["keyFile"] == "/etc/ssl/custom.key"
+
+
+def test_xray_hysteria2_mbps_snake_and_camel():
+    clients = [{"password": "pw"}]
+    built = _xray_inbound("hy2", "hysteria2", 443,
+                          {"up_mbps": 100, "down_mbps": 200}, clients)
+    assert built["settings"]["upMbps"] == 100
+    assert built["settings"]["downMbps"] == 200
+    built_camel = _xray_inbound("hy2", "hysteria2", 443,
+                                {"upMbps": 50, "downMbps": 60}, clients)
+    assert built_camel["settings"]["upMbps"] == 50
+    assert built_camel["settings"]["downMbps"] == 60
+    built_none = _xray_inbound("hy2", "hysteria2", 443, {}, clients)
+    assert "upMbps" not in built_none["settings"]
+    assert "downMbps" not in built_none["settings"]
+
+
+def test_reality_public_key_derives_from_private():
+    pair = xray.generate_reality_keypair()
+    assert xray.reality_public_key(pair["private_key"]) == pair["public_key"]
+    assert xray.reality_public_key("") is None
+    assert xray.reality_public_key("short") is None
+    assert xray.reality_public_key("a" * 43) is not None
+
+
+def _singbox_inbound(tag, protocol, port, stream, clients, settings):
+    inbound = {"tag": tag, "port": port, "protocol": protocol,
+               "core": "singbox",
+               "stream_json": stream, "enabled": True, "remark": ""}
+    cfg, warnings = singbox.render_singbox_config(
+        [inbound], {tag: clients}, settings)
+    return next(i for i in cfg["inbounds"] if i["tag"] == tag), warnings
+
+
+def test_singbox_tuic_zero_rtt_and_congestion(db, render_settings):
+    settings = dict(render_settings, hysteria2_core="xray")
+    clients = [{"uuid": "11111111-2222-4333-8444-555555555555",
+                "password": "pw"}]
+    built, _ = _singbox_inbound("tuic", "tuic", 8443,
+                                {"congestion_control": "cubic",
+                                 "zero_rtt_handshake": True},
+                                clients, settings)
+    assert built["congestion_control"] == "cubic"
+    assert built["zero_rtt_handshake"] is True
+    built_off, _ = _singbox_inbound("tuic", "tuic", 8443, {}, clients,
+                                    settings)
+    assert built_off["congestion_control"] == "bbr"
+    assert "zero_rtt_handshake" not in built_off
+
+
+def test_singbox_hysteria2_mbps(db, render_settings):
+    settings = dict(render_settings, hysteria2_core="singbox")
+    clients = [{"password": "pw"}]
+    built, _ = _singbox_inbound("hy2", "hysteria2", 443,
+                                {"up_mbps": 100, "down_mbps": 200},
+                                clients, settings)
+    assert built["up_mbps"] == 100
+    assert built["down_mbps"] == 200
+    built_off, _ = _singbox_inbound("hy2", "hysteria2", 443, {}, clients,
+                                    settings)
+    assert "up_mbps" not in built_off
+    assert "down_mbps" not in built_off
+
+
+def test_wireguard_render_mtu_and_custom_address():
+    priv, pub = wireguard.generate_keypair()
+    content = wireguard.render_wg_config(
+        priv, [{"public_key": pub, "allowed_ips": "10.77.0.2/32"}],
+        address="10.77.0.1/24", listen_port=51820, dns="", mtu=1400)
+    assert "Address = 10.77.0.1/24" in content
+    assert "MTU = 1400" in content
+    assert "AllowedIPs = 10.77.0.2/32" in content
+    content_default = wireguard.render_wg_config(priv, [])
+    assert "Address = 10.8.0.1/24" in content_default
+    assert "MTU" not in content_default
+
+
+def test_amneziawg_render_mtu_and_custom_address():
+    from app import amneziawg
+    priv, pub = wireguard.generate_keypair()
+    params = amneziawg.generate_awg_params()
+    content = amneziawg.render_server_config(
+        priv, [{"public_key": pub, "allowed_ips": "10.88.0.2/32"}],
+        address="10.88.0.1/24", listen_port=51821, params=params, mtu=1300)
+    assert "Address = 10.88.0.1/24" in content
+    assert "MTU = 1300" in content
+    assert "AllowedIPs = 10.88.0.2/32" in content
+    content_default = amneziawg.render_server_config(priv, [], params=params)
+    assert "Address = 10.8.1.1/24" in content_default
+    assert "MTU" not in content_default
+
+
+def test_openvpn_render_dns(tmp_path):
+    from app import openvpn
+    content = openvpn.render_server_config(
+        port=1194, proto="tcp", network="10.99.0.0/24",
+        ca_cert="/tmp/ca.pem", server_cert="/tmp/cert.pem",
+        server_key="/tmp/key.pem", auth_script="/tmp/auth.sh",
+        dns=("8.8.8.8",))
+    assert "proto tcp" in content
+    assert "10.99.0.0" in content
+    assert 'push "dhcp-option DNS 8.8.8.8"' in content
+    assert content.count("dhcp-option DNS") == 1
+
+
+def test_ocserv_render_dns_and_max_clients():
+    from app import openconnect
+    content = openconnect.render_ocserv_config(
+        port=4433, network="10.11.0.0/24", server_cert="/tmp/cert.pem",
+        server_key="/tmp/key.pem", passwd_file="/tmp/ocpasswd",
+        dns=("9.9.9.9", "149.112.112.112"), max_clients=50)
+    assert "dns = 9.9.9.9" in content
+    assert "dns = 149.112.112.112" in content
+    assert "max-clients = 50" in content
+    assert "10.11.0.0" in content
+
+
+def test_ikev2_render_dns():
+    from app import ikev2
+    content = ikev2.render_swanctl_config(
+        users=[(1, "alice", "pw")], server_id="example.com",
+        network="10.21.0.0/24", dns=("8.8.4.4",))
+    assert "10.21.0.0/24" in content
+    assert "8.8.4.4" in content
+    problems = ikev2.validate_swanctl_config(content)
+    assert problems == [], problems

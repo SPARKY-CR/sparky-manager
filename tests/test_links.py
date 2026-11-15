@@ -426,3 +426,127 @@ def test_links_module_exports_expected_builders():
                  "parse_vmess_link", "parse_trojan_link",
                  "parse_ss_link", "make_qr_png"):
         assert callable(getattr(links, name)), name
+
+
+# ---------------------------------------------------------------------------
+# Inbound editor — links follow the new stream settings (Phase 1)
+# ---------------------------------------------------------------------------
+
+def test_vless_ws_host_round_trip():
+    link = build_vless_link(
+        UUID, HOST, 8443, security="tls", sni="example.com",
+        network="ws", path="/ws-path", host_header="ws.example.com",
+        name=NAME)
+    back = parse_vless_link(link)
+    assert back["network"] == "ws"
+    assert back["path"] == "/ws-path"
+    assert back["host_header"] == "ws.example.com"
+    assert back["security"] == "tls"
+    assert back["sni"] == "example.com"
+
+
+def test_vless_grpc_service_name_round_trip():
+    link = build_vless_link(
+        UUID, HOST, 8443, security="tls", sni="example.com",
+        network="grpc", service_name="vless-grpc", name=NAME)
+    back = parse_vless_link(link)
+    assert back["network"] == "grpc"
+    assert back["service_name"] == "vless-grpc"
+
+
+def test_vless_xhttp_mode_round_trip():
+    link = build_vless_link(
+        UUID, HOST, 8443, security="tls", sni="example.com",
+        network="xhttp", path="/xh", mode="packet", name=NAME)
+    back = parse_vless_link(link)
+    assert back["network"] == "xhttp"
+    assert back["path"] == "/xh"
+    assert back["mode"] == "packet"
+
+
+def test_vless_tcp_has_no_transport_params():
+    link = build_vless_link(UUID, HOST, 443, security="reality",
+                            sni="www.microsoft.com", pbk=REALITY_PBK,
+                            sid=REALITY_SID, name=NAME)
+    back = parse_vless_link(link)
+    assert back["network"] == "tcp"
+    assert back["path"] is None
+    assert back["host_header"] is None
+    assert back["service_name"] is None
+    assert back["mode"] is None
+
+
+def test_trojan_ws_round_trip():
+    link = build_trojan_link("pw", HOST, 8444, sni="example.com",
+                             network="ws", path="/trojan-ws",
+                             host_header="ws.example.com", name=NAME)
+    back = parse_trojan_link(link)
+    assert back["network"] == "ws"
+    assert back["path"] == "/trojan-ws"
+    assert back["host_header"] == "ws.example.com"
+    assert back["sni"] == "example.com"
+    # Old default behaviour is unchanged: plain TCP, TLS.
+    plain = parse_trojan_link(build_trojan_link("pw", HOST, 8444, name=NAME))
+    assert plain["network"] == "tcp"
+    assert plain["security"] == "tls"
+    assert plain["path"] is None
+
+
+def test_tuic_congestion_control_in_link():
+    link = build_tuic_link(UUID, "pw", HOST, 8443, sni="example.com",
+                           congestion_control="cubic", name=NAME)
+    query = parse_qs(urlparse(link).query)
+    assert query["congestion_control"] == ["cubic"]
+    default = build_tuic_link(UUID, "pw", HOST, 8443, name=NAME)
+    assert parse_qs(urlparse(default).query)["congestion_control"] == ["bbr"]
+
+
+def test_dispatch_vless_ws_host_from_stream():
+    """build_share_link reads host/serviceName/mode from stream_json."""
+    client = {"uuid": UUID, "password": None, "method": None,
+              "flow": None, "extra_json": {}}
+    inbound = {"tag": "vless-ws", "protocol": "vless", "port": 8443,
+               "stream_json": {"network": "ws", "security": "tls",
+                               "path": "/ws", "host": "ws.example.com",
+                               "tls": {"sni": "example.com"}}}
+    back = parse_vless_link(_dispatch("vless", client, inbound))
+    assert back["network"] == "ws"
+    assert back["path"] == "/ws"
+    assert back["host_header"] == "ws.example.com"
+    assert back["security"] == "tls"
+
+
+def test_dispatch_vless_grpc_service_name_from_stream():
+    client = {"uuid": UUID, "password": None, "method": None,
+              "flow": None, "extra_json": {}}
+    inbound = {"tag": "vless-grpc", "protocol": "vless", "port": 8443,
+               "stream_json": {"network": "grpc", "security": "tls",
+                               "service_name": "svc",
+                               "tls": {"sni": "example.com"}}}
+    back = parse_vless_link(_dispatch("vless", client, inbound))
+    assert back["network"] == "grpc"
+    assert back["service_name"] == "svc"
+
+
+def test_dispatch_vmess_grpc_uses_service_name_as_path():
+    """v2rayNG reads the gRPC service name from the vmess `path` field."""
+    client = {"uuid": UUID, "password": None, "method": None,
+              "flow": None, "extra_json": {}}
+    inbound = {"tag": "vmess-grpc", "protocol": "vmess", "port": 8443,
+               "stream_json": {"network": "grpc", "security": "tls",
+                               "service_name": "vmess-svc",
+                               "tls": {"sni": "example.com"}}}
+    link = _dispatch("vmess", client, inbound)
+    back = parse_vmess_link(link)
+    assert back["network"] == "grpc"
+    assert back["path"] == "vmess-svc"
+
+
+def test_dispatch_tuic_congestion_from_stream():
+    client = {"uuid": UUID, "password": "pw", "method": None,
+              "flow": None, "extra_json": {}}
+    inbound = {"tag": "tuic", "protocol": "tuic", "port": 8443,
+               "stream_json": {"congestion_control": "new_reno",
+                               "tls": {"sni": "example.com"}}}
+    link = _dispatch("tuic", client, inbound)
+    assert parse_qs(urlparse(link).query)["congestion_control"] == ["new_reno"]

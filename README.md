@@ -103,6 +103,14 @@ profile), AmneziaWG (UDP 51821, `vpn://` link — needs the kernel
 module), and IKEv2 (UDP 500+4500, `.mobileconfig`). The ZedSecure
 import checklist is in [docs/ZEDSECURE.md](docs/ZEDSECURE.md).
 
+Every inbound is editable after creation (Inbounds → ✏️ Edit):
+transport and security (TLS/Reality, WS/gRPC/XHTTP/HTTPUpgrade,
+sniffing, fallbacks), WireGuard/AmneziaWG subnet/MTU/DNS and
+obfuscation parameters, OpenVPN/OpenConnect/IKEv2 subnet/DNS —
+with regenerate actions for Reality keys, AmneziaWG parameters,
+and the WG/AWG server keypair. Share links and subscriptions
+follow the edited settings automatically.
+
 ## FAQ
 
 **Do I need a domain?**

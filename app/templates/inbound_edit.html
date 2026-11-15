@@ -1,0 +1,334 @@
+{% extends "base.html" %}
+{% block title %} — {{ t.edit_inbound }}{% endblock %}
+{% block content %}
+{% set proto = inbound.protocol %}
+{% set is_xray_stream = proto in ('vless', 'vmess', 'trojan') %}
+{% set is_tls = proto in ('vless', 'vmess', 'trojan', 'hysteria2', 'tuic', 'anytls', 'naive', 'shadowtls') %}
+{% set is_wg = proto in ('wireguard', 'amneziawg') %}
+<div class="page-head">
+  <h1>{{ t.edit_inbound }} <span class="chip" dir="ltr">{{ inbound.tag }}</span></h1>
+  <a class="btn btn-small" href="{{ base_path }}/inbounds">{{ t.back_to_inbounds }}</a>
+</div>
+
+<form method="post" action="{{ base_path }}/inbounds/{{ inbound.id }}/edit" id="edit-inbound-form">
+  <div class="card form-section">
+    <h2>{{ t.basic_settings }}</h2>
+    <div class="field-grid">
+      <label>
+        {{ t.tag }}
+        <input type="text" name="tag" pattern="[a-zA-Z0-9_-]+" value="{{ values["tag"] }}" required>
+      </label>
+      <label>
+        {{ t.port }}
+        <input type="number" name="port" min="1" max="65535" value="{{ values["port"] }}" dir="ltr" required>
+      </label>
+      <label>
+        {{ t.protocol }}
+        <input type="text" value="{{ proto }}" dir="ltr" disabled>
+      </label>
+      <label>
+        {{ t.remark }}
+        <input type="text" name="remark" value="{{ values["remark"] }}">
+      </label>
+      <label class="check-label">
+        <input type="checkbox" name="enabled" {% if values["enabled"] %}checked{% endif %}>
+        {{ t.enabled }}
+      </label>
+    </div>
+  </div>
+
+  {% if is_xray_stream %}
+  <div class="card form-section" id="section-transport">
+    <h2>{{ t.transport }}</h2>
+    <div class="field-grid">
+      <label>
+        {{ t.network }}
+        <select name="network" id="edit-network">
+          <option value="tcp" {% if values["network"] == "tcp" %}selected{% endif %}>tcp</option>
+          <option value="ws" {% if values["network"] == "ws" %}selected{% endif %}>websocket</option>
+          <option value="grpc" {% if values["network"] == "grpc" %}selected{% endif %}>grpc</option>
+          <option value="xhttp" {% if values["network"] == "xhttp" %}selected{% endif %}>xhttp</option>
+          <option value="httpupgrade" {% if values["network"] == "httpupgrade" %}selected{% endif %}>httpupgrade</option>
+        </select>
+      </label>
+      <label>
+        {{ t.security }}
+        <select name="security" id="edit-security">
+          <option value="none" {% if values["security"] == "none" %}selected{% endif %}>{{ t.security_none }}</option>
+          <option value="tls" {% if values["security"] == "tls" %}selected{% endif %}>TLS</option>
+          <option value="reality" {% if values["security"] == "reality" %}selected{% endif %}>Reality</option>
+        </select>
+      </label>
+      <label id="field-path">
+        {{ t.path }}
+        <input type="text" name="path" value="{{ values["path"] }}" placeholder="/vless" dir="ltr">
+      </label>
+      <label id="field-host">
+        {{ t.host_header }}
+        <input type="text" name="host" value="{{ values["host"] }}" placeholder="example.com" dir="ltr">
+      </label>
+      <label id="field-service-name">
+        {{ t.service_name }}
+        <input type="text" name="service_name" value="{{ values["service_name"] }}" dir="ltr">
+      </label>
+      <label id="field-mode">
+        {{ t.xhttp_mode }}
+        <select name="mode" dir="ltr">
+          <option value="auto" {% if values["mode"] == "auto" %}selected{% endif %}>auto</option>
+          <option value="packet" {% if values["mode"] == "packet" %}selected{% endif %}>packet</option>
+          <option value="stream" {% if values["mode"] == "stream" %}selected{% endif %}>stream</option>
+        </select>
+      </label>
+      <label>
+        {{ t.fingerprint }}
+        <select name="fp" dir="ltr">
+          <option value="chrome" {% if values["fp"] == "chrome" %}selected{% endif %}>chrome</option>
+          <option value="firefox" {% if values["fp"] == "firefox" %}selected{% endif %}>firefox</option>
+          <option value="safari" {% if values["fp"] == "safari" %}selected{% endif %}>safari</option>
+          <option value="edge" {% if values["fp"] == "edge" %}selected{% endif %}>edge</option>
+          <option value="random" {% if values["fp"] == "random" %}selected{% endif %}>random</option>
+        </select>
+      </label>
+      <label class="check-label">
+        <input type="checkbox" name="sniffing" {% if values["sniffing"] %}checked{% endif %}>
+        {{ t.sniffing }}
+      </label>
+    </div>
+    <p class="field-hint">{{ t.sniffing_hint }}</p>
+    <label class="field-block">
+      {{ t.fallbacks }}
+      <textarea name="fallbacks" rows="3" dir="ltr" placeholder="127.0.0.1:8080&#10;127.0.0.1:8443,1">{{ values["fallbacks"] }}</textarea>
+    </label>
+    <p class="field-hint">{{ t.fallbacks_hint }}</p>
+  </div>
+
+  <div class="card form-section" id="section-reality">
+    <h2>{{ t.reality_settings }}</h2>
+    <div class="field-grid">
+      <label>
+        {{ t.reality_dest }}
+        <input type="text" name="reality_dest" value="{{ values["reality_dest"] }}" placeholder="www.microsoft.com:443" dir="ltr">
+      </label>
+      <label>
+        {{ t.tls_sni }}
+        <input type="text" name="reality_sni" value="{{ values["reality_sni"] }}" placeholder="www.microsoft.com" dir="ltr">
+      </label>
+      <label>
+        {{ t.reality_server_names }}
+        <input type="text" name="reality_server_names" value="{{ values["reality_server_names"] }}" dir="ltr">
+      </label>
+      <label>
+        {{ t.short_id }}
+        <input type="text" name="reality_short_id" value="{{ values["reality_short_id"] }}" dir="ltr">
+      </label>
+      <label>
+        {{ t.private_key }}
+        <input type="text" name="reality_private_key" id="reality-private-key" value="{{ values["reality_private_key"] }}" dir="ltr" autocomplete="off">
+      </label>
+      <label>
+        {{ t.public_key }}
+        <input type="text" value="{{ values["reality_public_key"] }}" dir="ltr" disabled>
+      </label>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if is_tls %}
+  <div class="card form-section" id="section-tls">
+    <h2>{{ t.tls_settings }}</h2>
+    <div class="field-grid">
+      <label>
+        {{ t.tls_sni }}
+        <input type="text" name="tls_sni" value="{{ values["tls_sni"] }}" placeholder="example.com" dir="ltr">
+      </label>
+      <label>
+        {{ t.tls_alpn }}
+        <input type="text" name="tls_alpn" value="{{ values["tls_alpn"] }}" placeholder="h2, http/1.1" dir="ltr">
+      </label>
+      <label>
+        {{ t.tls_cert_path }}
+        <input type="text" name="tls_cert_path" value="{{ values["tls_cert_path"] }}" dir="ltr">
+      </label>
+      <label>
+        {{ t.tls_key_path }}
+        <input type="text" name="tls_key_path" value="{{ values["tls_key_path"] }}" dir="ltr">
+      </label>
+    </div>
+    <p class="field-hint">{{ t.tls_paths_hint }}</p>
+  </div>
+  {% endif %}
+
+  {% if proto == 'hysteria2' %}
+  <div class="card form-section">
+    <h2>{{ t.transport }}</h2>
+    <div class="field-grid">
+      <label>
+        {{ t.up_mbps }}
+        <input type="number" name="up_mbps" min="1" value="{{ values["up_mbps"] }}" dir="ltr">
+      </label>
+      <label>
+        {{ t.down_mbps }}
+        <input type="number" name="down_mbps" min="1" value="{{ values["down_mbps"] }}" dir="ltr">
+      </label>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if proto == 'tuic' %}
+  <div class="card form-section">
+    <h2>{{ t.transport }}</h2>
+    <div class="field-grid">
+      <label>
+        {{ t.congestion_control }}
+        <select name="congestion_control" dir="ltr">
+          <option value="bbr" {% if values["congestion_control"] == "bbr" %}selected{% endif %}>bbr</option>
+          <option value="cubic" {% if values["congestion_control"] == "cubic" %}selected{% endif %}>cubic</option>
+          <option value="new_reno" {% if values["congestion_control"] == "new_reno" %}selected{% endif %}>new_reno</option>
+        </select>
+      </label>
+      <label class="check-label">
+        <input type="checkbox" name="zero_rtt" {% if values["zero_rtt"] %}checked{% endif %}>
+        {{ t.zero_rtt }}
+      </label>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if proto == 'shadowtls' %}
+  <div class="card form-section">
+    <h2>{{ t.transport }}</h2>
+    <div class="field-grid">
+      <label>
+        {{ t.method }}
+        <select name="method" dir="ltr">
+          <option value="2022-blake3-aes-128-gcm" {% if values["method"] == "2022-blake3-aes-128-gcm" %}selected{% endif %}>2022-blake3-aes-128-gcm</option>
+          <option value="2022-blake3-aes-256-gcm" {% if values["method"] == "2022-blake3-aes-256-gcm" %}selected{% endif %}>2022-blake3-aes-256-gcm</option>
+          <option value="2022-blake3-chacha20-poly1305" {% if values["method"] == "2022-blake3-chacha20-poly1305" %}selected{% endif %}>2022-blake3-chacha20-poly1305</option>
+        </select>
+      </label>
+      <label>
+        {{ t.shadowtls_password }}
+        <input type="text" name="shadowtls_password" value="{{ values["shadowtls_password"] }}" dir="ltr" autocomplete="off">
+      </label>
+      <label>
+        {{ t.inner_port }}
+        <input type="number" name="inner_port" min="1" max="65535" value="{{ values["inner_port"] }}" dir="ltr">
+      </label>
+      <label class="check-label">
+        <input type="checkbox" name="strict_mode" {% if values["strict_mode"] %}checked{% endif %}>
+        {{ t.strict_mode }}
+      </label>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if is_wg or proto in ('openvpn', 'openconnect', 'ikev2') %}
+  <div class="card form-section">
+    <h2>{{ t.basic_settings }}</h2>
+    <div class="field-grid">
+      {% if proto == 'openvpn' %}
+      <label>
+        {{ t.proto }}
+        <select name="proto" dir="ltr">
+          <option value="udp" {% if values["proto"] == "udp" %}selected{% endif %}>UDP</option>
+          <option value="tcp" {% if values["proto"] == "tcp" %}selected{% endif %}>TCP</option>
+        </select>
+      </label>
+      {% endif %}
+      <label>
+        {{ t.subnet }}
+        <input type="text" name="subnet" value="{{ values["subnet"] }}" dir="ltr">
+      </label>
+      {% if is_wg %}
+      <label>
+        {{ t.mtu }}
+        <input type="number" name="mtu" min="576" max="9000" value="{{ values["mtu"] }}" dir="ltr">
+      </label>
+      {% endif %}
+      <label>
+        {{ t.dns_servers }}
+        <input type="text" name="dns" value="{{ values["dns"] }}" dir="ltr">
+      </label>
+      {% if proto == 'openconnect' %}
+      <label>
+        {{ t.max_clients }}
+        <input type="number" name="max_clients" min="1" max="100000" value="{{ values["max_clients"] }}" dir="ltr">
+      </label>
+      {% endif %}
+    </div>
+    {% if is_wg %}
+    <p class="field-hint">{{ t.subnet_hint_wg }}</p>
+    {% else %}
+    <p class="field-hint">{{ t.dns_hint }}</p>
+    {% endif %}
+    {% if is_wg and server_public_key %}
+    <div class="key-box">
+      <span class="key-label">{{ t.server_key }}</span>
+      <code dir="ltr">{{ server_public_key }}</code>
+      <button type="button" class="btn btn-small" data-copy="{{ server_public_key }}" data-copied-label="✓">{{ t["copy"] }}</button>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if proto == 'amneziawg' %}
+  <div class="card form-section">
+    <h2>{{ t.awg_params }}</h2>
+    <p class="field-hint">{{ t.awg_params_hint }}</p>
+    <div class="field-grid">
+      <label>Jc <input type="number" name="awg_jc" min="0" max="65535" value="{{ values["awg_jc"] }}" dir="ltr"></label>
+      <label>Jmin <input type="number" name="awg_jmin" min="0" max="65535" value="{{ values["awg_jmin"] }}" dir="ltr"></label>
+      <label>Jmax <input type="number" name="awg_jmax" min="0" max="65535" value="{{ values["awg_jmax"] }}" dir="ltr"></label>
+      <label>S1 <input type="number" name="awg_s1" min="0" max="65535" value="{{ values["awg_s1"] }}" dir="ltr"></label>
+      <label>S2 <input type="number" name="awg_s2" min="0" max="65535" value="{{ values["awg_s2"] }}" dir="ltr"></label>
+      <label>S3 <input type="number" name="awg_s3" min="0" max="65535" value="{{ values["awg_s3"] }}" dir="ltr"></label>
+      <label>S4 <input type="number" name="awg_s4" min="0" max="65535" value="{{ values["awg_s4"] }}" dir="ltr"></label>
+      <label>H1 <input type="number" name="awg_h1" min="0" value="{{ values["awg_h1"] }}" dir="ltr"></label>
+      <label>H2 <input type="number" name="awg_h2" min="0" value="{{ values["awg_h2"] }}" dir="ltr"></label>
+      <label>H3 <input type="number" name="awg_h3" min="0" value="{{ values["awg_h3"] }}" dir="ltr"></label>
+      <label>H4 <input type="number" name="awg_h4" min="0" value="{{ values["awg_h4"] }}" dir="ltr"></label>
+      <label>I1 <input type="text" name="awg_i1" value="{{ values["awg_i1"] }}" dir="ltr"></label>
+      <label>I2 <input type="text" name="awg_i2" value="{{ values["awg_i2"] }}" dir="ltr"></label>
+      <label>I3 <input type="text" name="awg_i3" value="{{ values["awg_i3"] }}" dir="ltr"></label>
+      <label>I4 <input type="text" name="awg_i4" value="{{ values["awg_i4"] }}" dir="ltr"></label>
+      <label>I5 <input type="text" name="awg_i5" value="{{ values["awg_i5"] }}" dir="ltr"></label>
+      <label>
+        {{ t.header_protection_key }}
+        <input type="text" name="awg_header_key" value="{{ values["awg_header_key"] }}" dir="ltr" autocomplete="off">
+      </label>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">{{ t.save }}</button>
+    <a class="btn" href="{{ base_path }}/inbounds">{{ t.back_to_inbounds }}</a>
+  </div>
+</form>
+
+{# Regenerate actions live OUTSIDE the edit form (nested forms are
+   invalid HTML) — each is its own POST with a confirm dialog. #}
+{% if is_xray_stream or is_wg or proto == 'amneziawg' %}
+<div class="card form-section">
+  <h2>{{ t.regenerate }}</h2>
+  {% if is_xray_stream %}
+  <p class="field-hint">{{ t.regenerate_reality_hint }}</p>
+  <form method="post" action="{{ base_path }}/inbounds/{{ inbound.id }}/regenerate-reality" data-confirm="{{ t.confirm_regenerate }}">
+    <button type="submit" class="btn">{{ t.regenerate }} Reality</button>
+  </form>
+  {% endif %}
+  {% if proto == 'amneziawg' %}
+  <p class="field-hint">{{ t.awg_params_hint }}</p>
+  <form method="post" action="{{ base_path }}/inbounds/{{ inbound.id }}/regenerate-awg-params" data-confirm="{{ t.confirm_regenerate }}">
+    <button type="submit" class="btn">{{ t.regenerate }} {{ t.awg_params }}</button>
+  </form>
+  {% endif %}
+  {% if is_wg %}
+  <p class="field-hint">{{ t.regenerate_server_key_hint }}</p>
+  <form method="post" action="{{ base_path }}/inbounds/{{ inbound.id }}/regenerate-server-key" data-confirm="{{ t.confirm_regenerate }}">
+    <button type="submit" class="btn btn-danger">{{ t.regenerate_server_key }}</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

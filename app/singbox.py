@@ -34,10 +34,12 @@ UDP/443 is never claimed by both cores at once.
 
 Input shapes mirror :mod:`app.xray`: inbound dicts with ``tag``,
 ``core``, ``protocol``, ``port``, ``enabled``, ``stream_json``
-(may contain ``congestion_control``, ``tls`` with ``sni`` / ``alpn``,
-``method``, ``password``, ``inner_port``, ``strict_mode``) and
-``remark``; client dicts with ``uuid``, ``password``, ``method``,
-``flow``, ``extra_json``; settings as documented above.
+(may contain ``congestion_control``, ``zero_rtt_handshake``,
+``up_mbps`` / ``down_mbps``, ``tls`` with ``sni`` / ``alpn`` /
+cert paths, ``method``, ``password``, ``inner_port``,
+``strict_mode``) and ``remark``; client dicts with ``uuid``,
+``password``, ``method``, ``flow``, ``extra_json``; settings as
+documented above.
 """
 
 from __future__ import annotations
@@ -330,20 +332,24 @@ def _build_tuic(
         usable[0].get("extra_json", {}).get("congestion_control"),
         "bbr",
     )
-    return [
-        {
-            "type": "tuic",
-            "tag": tag,
-            "listen": _listen_address(stream),
-            "listen_port": inbound["port"],
-            "users": [
-                {"uuid": c["uuid"], "password": c["password"]}
-                for c in usable
-            ],
-            "congestion_control": congestion,
-            "tls": tls,
-        }
-    ], []
+    tuic_inbound: dict[str, Any] = {
+        "type": "tuic",
+        "tag": tag,
+        "listen": _listen_address(stream),
+        "listen_port": inbound["port"],
+        "users": [
+            {"uuid": c["uuid"], "password": c["password"]}
+            for c in usable
+        ],
+        "congestion_control": congestion,
+        "tls": tls,
+    }
+    # 0-RTT resumption: off unless the admin enables it (it replays
+    # the first flight, so it trades a little security for a faster
+    # reconnect — the panel default stays the safe one).
+    if _as_bool(stream.get("zero_rtt_handshake"), False):
+        tuic_inbound["zero_rtt_handshake"] = True
+    return [tuic_inbound], []
 
 
 def _build_anytls(
@@ -517,16 +523,21 @@ def _build_hysteria2(
             "(set cert_path/key_path or self_signed_cert_path/"
             "self_signed_key_path in settings)"
         ]
-    return [
-        {
-            "type": "hysteria2",
-            "tag": tag,
-            "listen": _listen_address(stream),
-            "listen_port": inbound["port"],
-            "users": [{"password": c["password"]} for c in usable],
-            "tls": tls,
-        }
-    ], []
+    hysteria2_inbound: dict[str, Any] = {
+        "type": "hysteria2",
+        "tag": tag,
+        "listen": _listen_address(stream),
+        "listen_port": inbound["port"],
+        "users": [{"password": c["password"]} for c in usable],
+        "tls": tls,
+    }
+    # Optional per-inbound speed caps (Mbps), mirroring the Xray
+    # Hysteria2 builder's upMbps/downMbps (same stream keys).
+    for key in ("up_mbps", "down_mbps"):
+        value = _as_int(stream.get(key))
+        if value is not None and value > 0:
+            hysteria2_inbound[key] = value
+    return [hysteria2_inbound], []
 
 
 _BUILDERS = {

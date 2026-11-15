@@ -268,6 +268,43 @@ def _ws_transport(stream: dict) -> dict | None:
     return transport
 
 
+def _grpc_transport(stream: dict) -> dict | None:
+    """Build a sing-box gRPC ``transport`` object, or None if not gRPC."""
+    if str(stream.get("network") or "").lower() != "grpc":
+        return None
+    transport: dict = {"type": "grpc"}
+    service_name = stream.get("service_name") or stream.get("serviceName")
+    if service_name:
+        transport["service_name"] = service_name
+    return transport
+
+
+def _httpupgrade_transport(stream: dict) -> dict | None:
+    """Build a sing-box HTTPUpgrade ``transport`` object, or None."""
+    if str(stream.get("network") or "").lower() != "httpupgrade":
+        return None
+    transport: dict = {"type": "httpupgrade"}
+    if stream.get("path"):
+        transport["path"] = stream["path"]
+    host_header = stream.get("host") or stream.get("host_header")
+    if host_header:
+        transport["headers"] = {"Host": host_header}
+    return transport
+
+
+def _transport_for(stream: dict) -> dict | None:
+    """The sing-box ``transport`` object for the inbound's network.
+
+    WS / gRPC / HTTPUpgrade each have their own shape; plain TCP
+    (and XHTTP, which sing-box does not support) return ``None``.
+    """
+    for builder in (_ws_transport, _grpc_transport, _httpupgrade_transport):
+        transport = builder(stream)
+        if transport is not None:
+            return transport
+    return None
+
+
 def outbound_for_client(
     protocol: str,
     client: dict,
@@ -338,7 +375,7 @@ def outbound_for_client(
                 _tls_sni(stream),
                 fingerprint="chrome",
             )
-        transport = _ws_transport(stream)
+        transport = _transport_for(stream)
         if transport is not None:
             outbound["transport"] = transport
         return outbound
@@ -355,7 +392,7 @@ def outbound_for_client(
         outbound["alter_id"] = 0
         if security == "tls":
             outbound["tls"] = _tls_block(_tls_sni(stream))
-        transport = _ws_transport(stream)
+        transport = _transport_for(stream)
         if transport is not None:
             outbound["transport"] = transport
         return outbound
@@ -367,6 +404,9 @@ def outbound_for_client(
             raise ValueError("missing required value: password")
         outbound["password"] = password
         outbound["tls"] = _tls_block(_tls_sni(stream) or host)
+        transport = _transport_for(stream)
+        if transport is not None:
+            outbound["transport"] = transport
         return outbound
 
     if protocol == "shadowsocks":
@@ -400,7 +440,11 @@ def outbound_for_client(
             raise ValueError("missing required value: password")
         outbound["uuid"] = uuid
         outbound["password"] = password
-        outbound["congestion_control"] = "bbr"
+        outbound["congestion_control"] = (
+            stream.get("congestion_control")
+            or extra.get("congestion_control")
+            or "bbr"
+        )
         outbound["tls"] = _tls_block(
             _tls_sni(stream) or host,
             alpn=["h3"],
@@ -446,13 +490,20 @@ def outbound_for_client(
         # become peers[].address/port, `local_address` becomes
         # `address`, `peer_public_key` becomes peers[].public_key.
         # build_singbox_feed moves this object into "endpoints".
+        # MTU from the inbound stream when the admin set one (the
+        # same value the server config and the .conf export use).
+        mtu = stream.get("mtu")
+        try:
+            mtu = int(mtu) if mtu is not None else 1280
+        except (TypeError, ValueError):
+            mtu = 1280
         outbound = {
             "type": "wireguard",
             "tag": tag,
             "address": [],
             "private_key": "",
             "peers": [],
-            "mtu": 1280,
+            "mtu": mtu,
         }
         # The client's private key: `extra_json["private_key"]` when
         # set, else the client dict's own `private_key` — and, as a
@@ -477,7 +528,23 @@ def outbound_for_client(
         if not peer_public_key:
             raise ValueError("missing required value: peer_public_key "
                              "(inbound stream_json)")
-        outbound["address"] = extra.get("local_address") or ["10.8.0.2/32"]
+        # The client's tunnel address: the `allowed_ips` the panel
+        # allocated at user creation (one /32 per peer) — NOT the
+        # old hardcoded 10.8.0.2/32, which gave every user the same
+        # address and broke with a custom subnet. `local_address`
+        # is still honoured when set explicitly.
+        allowed = str(extra.get("allowed_ips") or "").strip()
+        if allowed:
+            outbound["address"] = [
+                part.strip() for part in allowed.split(",") if part.strip()
+            ]
+        elif extra.get("local_address"):
+            local = extra["local_address"]
+            outbound["address"] = (
+                list(local) if isinstance(local, list) else [str(local)]
+            )
+        else:
+            outbound["address"] = ["10.8.0.2/32"]
         outbound["private_key"] = private_key
         outbound["peers"] = [{
             "address": host,

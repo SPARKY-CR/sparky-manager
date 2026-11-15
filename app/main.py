@@ -87,6 +87,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ipaddress
 import json
 import logging
 import os
@@ -448,6 +449,82 @@ STRINGS: dict[str, dict[str, str]] = {
         "confirm_clear_logs": "لاگ فعلی پاک شود؟",
         "size": "اندازه",
         "footer_note": "پنل VPN — فاز ۱",
+        # Inbound editor (Phase 1 of the professional-panel expansion).
+        "edit": "ویرایش",
+        "edit_inbound": "ویرایش اینباند",
+        "back_to_inbounds": "بازگشت به اینباندها",
+        "basic_settings": "تنظیمات پایه",
+        "security": "امنیت",
+        "security_none": "بدون امنیت",
+        "transport": "ترانسپورت",
+        "host_header": "هاست (Host header)",
+        "service_name": "نام سرویس gRPC",
+        "xhttp_mode": "حالت XHTTP",
+        "fingerprint": "اثرانگشت (Fingerprint)",
+        "reality_settings": "تنظیمات Reality",
+        "reality_dest": "مقصد (dest)",
+        "reality_server_names": "نام‌های سرور (با کاما جدا کنید)",
+        "short_id": "Short ID",
+        "private_key": "کلید خصوصی",
+        "public_key": "کلید عمومی",
+        "regenerate": "تولید دوباره",
+        "regenerate_reality_hint": "کلید و Short ID جدید ساخته می‌شود — لینک‌های قدیمی از کار می‌افتند.",
+        "tls_settings": "تنظیمات TLS",
+        "tls_sni": "SNI برای TLS",
+        "tls_alpn": "ALPN (با کاما جدا کنید)",
+        "tls_cert_path": "مسیر گواهی (cert)",
+        "tls_key_path": "مسیر کلید (key)",
+        "tls_paths_hint": "خالی یعنی گواهی پنل (Let's Encrypt یا خودامضا) استفاده می‌شود.",
+        "sniffing": "اسنیفینگ (تشخیص پروتکل)",
+        "sniffing_hint": "تشخیص خودکار پروتکل ترافیک (HTTP/TLS/QUIC) برای روتینگ بهتر.",
+        "fallbacks": "فالبک‌ها (Fallbacks)",
+        "fallbacks_hint": "هر خط یک مقصد: host:port یا host:port,xver — برای سرو چند پروتکل روی یک پورت.",
+        "up_mbps": "سقف آپلود (Mbps، خالی = بدون سقف)",
+        "down_mbps": "سقف دانلود (Mbps، خالی = بدون سقف)",
+        "congestion_control": "کنترل ازدحام",
+        "zero_rtt": "0-RTT (اتصال مجدد سریع‌تر)",
+        "strict_mode": "حالت سخت‌گیرانه (Strict mode)",
+        "inner_port": "پورت داخلی (Inner SS)",
+        "shadowtls_password": "رمز ShadowTLS",
+        "method": "روش رمزنگاری",
+        "subnet": "زیرشبکه (Subnet)",
+        "subnet_hint_wg": "آدرس سرور اولین آدرس این زیرشبکه می‌شود؛ آدرس‌های فعلی کاربرها تغییر نمی‌کند.",
+        "mtu": "MTU",
+        "dns_servers": "سرورهای DNS",
+        "dns_hint": "با کاما جدا کنید؛ حداکثر دو سرور.",
+        "server_key": "کلید سرور",
+        "regenerate_server_key": "تولید کلید سرور جدید",
+        "regenerate_server_key_hint": "کلید عمومی سرور عوض می‌شود — همهٔ کاربرها باید کانفیگ جدید بگیرند.",
+        "confirm_regenerate": "آیا مطمئن هستید؟ کانفیگ‌های فعلی از کار می‌افتند.",
+        "awg_params": "پارامترهای آمنزیا (Obfuscation)",
+        "awg_params_hint": "این مقادیر باید در سرور و کلاینت یکسان باشند؛ با تغییر آن‌ها کاربرها باید کانفیگ جدید بگیرند.",
+        "header_protection_key": "کلید محافظت از هدر",
+        "proto": "پروتکل انتقال",
+        "max_clients": "حداکثر کلاینت هم‌زمان",
+        "listen": "آدرس گوش دادن (Listen)",
+        "invalid_subnet": "زیرشبکه معتبر نیست (مثل 10.8.0.0/24).",
+        "invalid_dns": "آدرس DNS معتبر نیست.",
+        "invalid_mtu": "MTU باید بین ۵۷۶ تا ۹۰۰۰ باشد.",
+        "invalid_fallbacks": "فرمت فالبک اشتباه است (host:port یا host:port,xver).",
+        "invalid_short_id": "Short ID باید رشتهٔ هگزادسیمال با طول زوج باشد.",
+        "invalid_reality_key": "کلید خصوصی Reality معتبر نیست (۴۳ کاراکتر base64url).",
+        "invalid_awg_params": "پارامترهای آمنزیا معتبر نیستند: ",
+        "invalid_inner_port": "پورت داخلی باید بین ۱ تا ۶۵۵۳۵ باشد.",
+        "invalid_max_clients": "حداکثر کلاینت باید بین ۱ تا ۱۰۰۰۰۰ باشد.",
+        "invalid_mbps": "سقف سرعت باید عدد مثبت باشد.",
+        "invalid_transport": "ترنسپورت یا امنیت انتخاب‌شده معتبر نیست.",
+        "invalid_input": "ورودی معتبر نیست.",
+        "reality_key_failed": "ساخت کلیدهای Reality ناموفق بود.",
+        "invalid_mode": "حالت XHTTP معتبر نیست (auto / packet / stream).",
+        "invalid_fingerprint": "فینگرپرینت معتبر نیست.",
+        "invalid_congestion": "کنترل ازدحام معتبر نیست.",
+        "invalid_method": "روش رمزنگاری معتبر نیست.",
+        "reality_needs_tcp": "Reality فقط با TCP کار می‌کند — ترنسپورت را روی TCP بگذارید.",
+        "inbound_not_found": "اینباند پیدا نشد.",
+        "inbound_updated": "اینباند به‌روز شد.",
+        "reality_regenerated": "کلیدهای Reality تازه ساخته شدند.",
+        "awg_params_regenerated": "پارامترهای آمنزیا تازه ساخته شدند.",
+        "server_key_regenerated": "کلید سرور تازه ساخته شد — کاربرها باید کانفیگ جدید بگیرند.",
     },
     "en": {
         "app_name": "Sparky Manager",
@@ -562,6 +639,82 @@ STRINGS: dict[str, dict[str, str]] = {
         "confirm_clear_logs": "Clear the current log?",
         "size": "Size",
         "footer_note": "VPN Panel — Phase 1",
+        # Inbound editor (Phase 1 of the professional-panel expansion).
+        "edit": "Edit",
+        "edit_inbound": "Edit inbound",
+        "back_to_inbounds": "Back to inbounds",
+        "basic_settings": "Basic settings",
+        "security": "Security",
+        "security_none": "None",
+        "transport": "Transport",
+        "host_header": "Host header",
+        "service_name": "gRPC service name",
+        "xhttp_mode": "XHTTP mode",
+        "fingerprint": "Fingerprint",
+        "reality_settings": "Reality settings",
+        "reality_dest": "Destination (dest)",
+        "reality_server_names": "Server names (comma-separated)",
+        "short_id": "Short ID",
+        "private_key": "Private key",
+        "public_key": "Public key",
+        "regenerate": "Regenerate",
+        "regenerate_reality_hint": "A new keypair and short ID are generated — old links stop working.",
+        "tls_settings": "TLS settings",
+        "tls_sni": "TLS SNI",
+        "tls_alpn": "ALPN (comma-separated)",
+        "tls_cert_path": "Certificate path",
+        "tls_key_path": "Key path",
+        "tls_paths_hint": "Empty means the panel certificate (Let's Encrypt or self-signed) is used.",
+        "sniffing": "Sniffing",
+        "sniffing_hint": "Auto-detect the traffic protocol (HTTP/TLS/QUIC) for better routing.",
+        "fallbacks": "Fallbacks",
+        "fallbacks_hint": "One destination per line: host:port or host:port,xver — serve several protocols on one port.",
+        "up_mbps": "Upload cap (Mbps, empty = no cap)",
+        "down_mbps": "Download cap (Mbps, empty = no cap)",
+        "congestion_control": "Congestion control",
+        "zero_rtt": "0-RTT (faster reconnect)",
+        "strict_mode": "Strict mode",
+        "inner_port": "Inner port (inner SS)",
+        "shadowtls_password": "ShadowTLS password",
+        "method": "Cipher method",
+        "subnet": "Subnet",
+        "subnet_hint_wg": "The server takes the first address of this subnet; existing users keep their addresses.",
+        "mtu": "MTU",
+        "dns_servers": "DNS servers",
+        "dns_hint": "Comma-separated; at most two servers.",
+        "server_key": "Server key",
+        "regenerate_server_key": "Regenerate server key",
+        "regenerate_server_key_hint": "The server public key changes — all users must re-fetch their configs.",
+        "confirm_regenerate": "Are you sure? Current configs will stop working.",
+        "awg_params": "AmneziaWG obfuscation parameters",
+        "awg_params_hint": "These values must match on server and client; changing them means users must re-fetch their configs.",
+        "header_protection_key": "Header protection key",
+        "proto": "Transport protocol",
+        "max_clients": "Max simultaneous clients",
+        "listen": "Listen address",
+        "invalid_subnet": "Invalid subnet (e.g. 10.8.0.0/24).",
+        "invalid_dns": "Invalid DNS address.",
+        "invalid_mtu": "MTU must be between 576 and 9000.",
+        "invalid_fallbacks": "Invalid fallback format (host:port or host:port,xver).",
+        "invalid_short_id": "Short ID must be a hex string with even length.",
+        "invalid_reality_key": "Invalid Reality private key (43-char base64url).",
+        "invalid_awg_params": "Invalid AmneziaWG parameters: ",
+        "invalid_inner_port": "Inner port must be between 1 and 65535.",
+        "invalid_max_clients": "Max clients must be between 1 and 100000.",
+        "invalid_mbps": "Speed cap must be a positive number.",
+        "invalid_transport": "Invalid transport or security selection.",
+        "invalid_input": "Invalid input.",
+        "reality_key_failed": "Reality key generation failed.",
+        "invalid_mode": "Invalid XHTTP mode (auto / packet / stream).",
+        "invalid_fingerprint": "Invalid fingerprint.",
+        "invalid_congestion": "Invalid congestion control.",
+        "invalid_method": "Invalid encryption method.",
+        "reality_needs_tcp": "Reality only works over TCP — set the transport to TCP.",
+        "inbound_not_found": "Inbound not found.",
+        "inbound_updated": "Inbound updated.",
+        "reality_regenerated": "Reality keys regenerated.",
+        "awg_params_regenerated": "AmneziaWG parameters regenerated.",
+        "server_key_regenerated": "Server key regenerated — users must re-fetch their configs.",
     },
 }
 
@@ -1113,9 +1266,21 @@ def rerender_configs(db: Session) -> list[str]:
                                 "allowed_ips": extra["allowed_ips"],
                             }
                         )
+                # Server address + MTU come from the inbound's stream
+                # (editable since the Phase 1 inbound editor); a
+                # hand-corrupted stream falls back to the old
+                # defaults instead of breaking the re-render.
+                wg_stream = _inbound_dict(wg_inbound).get("stream_json") or {}
+                try:
+                    wg_address = _subnet_server_address(
+                        str(wg_stream.get("subnet") or "10.8.0.0/24")
+                    )
+                except ValueError:
+                    wg_address = "10.8.0.1/24"
                 content = wireguard_mod.render_wg_config(
                     server_key,
                     peers,
+                    address=wg_address,
                     listen_port=int(wg_inbound.port),
                     # No DNS in the SERVER config: the line only changes
                     # the server's own resolver, it is never pushed to
@@ -1123,6 +1288,7 @@ def rerender_configs(db: Session) -> list[str]:
                     # any system without a resolvconf provider (see
                     # app.wgapply). Client configs still carry DNS.
                     dns="",
+                    mtu=_stream_mtu(wg_stream),
                 )
                 # Validate + live-reload (syncconf) or start; the
                 # helper owns the atomic file replace and restores the
@@ -1152,6 +1318,7 @@ def rerender_configs(db: Session) -> list[str]:
                 server_cert=str(VPN_SERVER_CERT_PATH),
                 server_key=str(VPN_SERVER_KEY_PATH),
                 auth_script=str(OVPN_AUTH_SCRIPT_PATH),
+                dns=_stream_dns(stream, ("1.1.1.1", "1.0.0.1")),
             )
             problems = openvpn_mod.validate_server_config(
                 content,
@@ -1181,12 +1348,20 @@ def rerender_configs(db: Session) -> list[str]:
             ocserv_inbound = ocserv_inbounds[0]
             stream = _inbound_dict(ocserv_inbound).get("stream_json") or {}
             subnet = str(stream.get("subnet") or openconnect_mod.DEFAULT_NETWORK)
+            try:
+                max_clients = int(stream.get("max_clients") or 1024)
+            except (TypeError, ValueError):
+                max_clients = 1024
+            if not 1 <= max_clients <= 100000:
+                max_clients = 1024
             content = openconnect_mod.render_ocserv_config(
                 port=int(ocserv_inbound.port),
                 network=subnet,
                 server_cert=str(VPN_SERVER_CERT_PATH),
                 server_key=str(VPN_SERVER_KEY_PATH),
                 passwd_file=str(OCSERV_PASSWD_PATH),
+                dns=_stream_dns(stream, ("1.1.1.1", "1.0.0.1")),
+                max_clients=max_clients,
             )
             # ocpasswd first (ocserv reads it at auth time, and the
             # config validator checks the file exists), then the
@@ -1265,11 +1440,24 @@ def rerender_configs(db: Session) -> list[str]:
                                 "allowed_ips": extra["allowed_ips"],
                             }
                         )
+                # Server address + MTU come from the inbound's
+                # stream (editable since the Phase 1 inbound
+                # editor); a hand-corrupted stream falls back to
+                # the old defaults instead of breaking the
+                # re-render.
+                try:
+                    awg_address = _subnet_server_address(
+                        str(stream.get("subnet") or "10.8.1.0/24")
+                    )
+                except ValueError:
+                    awg_address = "10.8.1.1/24"
                 content = amneziawg_mod.render_server_config(
                     server_key,
                     peers,
+                    address=awg_address,
                     listen_port=int(awg_inbound.port),
                     params=params,
+                    mtu=_stream_mtu(stream),
                 )
                 if not amneziawg_mod.is_available():
                     # Write the config so it is ready when the tools
@@ -1332,6 +1520,7 @@ def rerender_configs(db: Session) -> list[str]:
                     users=users,
                     server_id=server_id,
                     network=subnet,
+                    dns=_stream_dns(stream, ("1.1.1.1", "1.0.0.1")),
                 )
                 problems = ikev2_mod.validate_swanctl_config(content)
                 if problems:
@@ -1792,20 +1981,34 @@ def _new_client_credentials(inbound: Any) -> dict[str, Any]:
     return creds
 
 
-def _next_wg_address(db: Session) -> str:
-    """Next free WireGuard peer address (10.8.0.2/32 … 10.8.0.254/32).
+def _next_pool_address(
+    db: Session,
+    *,
+    protocol: str,
+    subnet: str,
+    inbound_id: int | None = None,
+) -> str:
+    """Next free peer address inside ``subnet`` for ``protocol``.
 
-    Scans the ``allowed_ips`` stored in existing WireGuard clients'
-    ``extra_json``; the server itself is 10.8.0.1 (see
-    ``render_wg_config`` default address).
+    Scans the ``allowed_ips`` stored in existing clients'
+    ``extra_json`` (of this inbound when ``inbound_id`` is given,
+    else of every inbound of the protocol) and returns the first
+    free host address as ``<ip>/32``. The server itself holds the
+    first host address (``.1`` — see :func:`_subnet_server_address`),
+    so allocation starts at the second host; the broadcast address
+    is never handed out. Raises ``ValueError`` when the pool is
+    exhausted.
     """
-    used: set[int] = set()
-    for (raw,) in (
+    net = ipaddress.ip_network(subnet, strict=False)
+    query = (
         db.query(Client.extra_json)
         .join(Inbound, Client.inbound_id == Inbound.id)
-        .filter(Inbound.protocol == "wireguard")
-        .all()
-    ):
+        .filter(Inbound.protocol == protocol)
+    )
+    if inbound_id is not None:
+        query = query.filter(Inbound.id == inbound_id)
+    used: set[ipaddress.IPv4Address] = set()
+    for (raw,) in query.all():
         if not raw:
             continue
         try:
@@ -1813,44 +2016,58 @@ def _next_wg_address(db: Session) -> str:
             allowed = str(extra.get("allowed_ips") or "")
         except (ValueError, TypeError):
             continue
-        match = re.search(r"10\.8\.0\.(\d+)/32", allowed)
-        if match:
-            used.add(int(match.group(1)))
-    for octet in range(2, 255):
-        if octet not in used:
-            return f"10.8.0.{octet}/32"
-    raise ValueError("WireGuard address pool (10.8.0.0/24) exhausted")
+        for part in allowed.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                addr = ipaddress.ip_interface(part).ip
+            except ValueError:
+                continue
+            if addr in net:
+                used.add(addr)
+    for host in net.hosts():
+        # The first host is the server's own address.
+        if host == net.network_address + 1:
+            continue
+        if host not in used:
+            return f"{host}/32"
+    raise ValueError(f"{protocol} address pool ({subnet}) exhausted")
 
 
-def _next_awg_address(db: Session) -> str:
-    """Next free AmneziaWG peer address (10.8.1.2/32 … 10.8.1.254/32).
+def _next_wg_address(
+    db: Session,
+    subnet: str = "10.8.0.0/24",
+    inbound_id: int | None = None,
+) -> str:
+    """Next free WireGuard peer address (10.8.0.2/32 … 10.8.0.254/32
+    for the default subnet).
+
+    The subnet comes from the inbound's stream (editable since the
+    Phase 1 inbound editor); the default keeps the old behaviour
+    for inbounds created before the editor existed.
+    """
+    return _next_pool_address(
+        db, protocol="wireguard", subnet=subnet, inbound_id=inbound_id
+    )
+
+
+def _next_awg_address(
+    db: Session,
+    subnet: str = "10.8.1.0/24",
+    inbound_id: int | None = None,
+) -> str:
+    """Next free AmneziaWG peer address (10.8.1.2/32 … 10.8.1.254/32
+    for the default subnet).
 
     A separate pool from WireGuard (10.8.0.0/24) — the two
     interfaces (wg0 / awg0) must never hand out the same address.
-    The server itself is 10.8.1.1 (see ``render_server_config`` in
-    ``app.amneziawg``).
+    The subnet comes from the inbound's stream (editable since the
+    Phase 1 inbound editor).
     """
-    used: set[int] = set()
-    for (raw,) in (
-        db.query(Client.extra_json)
-        .join(Inbound, Client.inbound_id == Inbound.id)
-        .filter(Inbound.protocol == "amneziawg")
-        .all()
-    ):
-        if not raw:
-            continue
-        try:
-            extra = json.loads(raw) if isinstance(raw, str) else dict(raw)
-            allowed = str(extra.get("allowed_ips") or "")
-        except (ValueError, TypeError):
-            continue
-        match = re.search(r"10\.8\.1\.(\d+)/32", allowed)
-        if match:
-            used.add(int(match.group(1)))
-    for octet in range(2, 255):
-        if octet not in used:
-            return f"10.8.1.{octet}/32"
-    raise ValueError("AmneziaWG address pool (10.8.1.0/24) exhausted")
+    return _next_pool_address(
+        db, protocol="amneziawg", subnet=subnet, inbound_id=inbound_id
+    )
 
 
 def _wg_pubkey_map(db: Session) -> dict[str, int]:
@@ -1876,15 +2093,21 @@ def _create_clients_for_user(db: Session, user: Any) -> None:
         creds = _new_client_credentials(inbound)
         extra_json: Optional[str] = None
         if inbound.protocol == "wireguard":
-            # The WG renderer needs allowed_ips per peer; allocate one.
+            # The WG renderer needs allowed_ips per peer; allocate
+            # one from the inbound's own subnet (editable in the
+            # inbound editor; 10.8.0.0/24 for older inbounds).
+            subnet = inbound.stream.get("subnet") or "10.8.0.0/24"
             try:
-                extra_json = json.dumps({"allowed_ips": _next_wg_address(db)})
+                address = _next_wg_address(db, subnet, inbound_id=inbound.id)
+                extra_json = json.dumps({"allowed_ips": address})
             except ValueError:
                 logger.warning("no free WireGuard address for user %s", user.name)
         if inbound.protocol == "amneziawg":
             # Same idea, separate pool (10.8.1.0/24 — never the WG pool).
+            subnet = inbound.stream.get("subnet") or "10.8.1.0/24"
             try:
-                extra_json = json.dumps({"allowed_ips": _next_awg_address(db)})
+                address = _next_awg_address(db, subnet, inbound_id=inbound.id)
+                extra_json = json.dumps({"allowed_ips": address})
             except ValueError:
                 logger.warning("no free AmneziaWG address for user %s", user.name)
         db.add(
@@ -1928,6 +2151,205 @@ def _inbound_transports(stream: dict[str, Any], protocol: str) -> set[str]:
     if protocol == "openconnect":
         return {"tcp", "udp"}
     return {_stream_transport(stream, protocol)}
+
+
+# ---------------------------------------------------------------------------
+# Inbound-editor value parsing (Phase 1 of the professional-panel
+# expansion). The edit form writes everything into the inbound's
+# ``stream_json`` — no DB migration — and these helpers turn the raw
+# form strings into the validated values the renderers read. Each one
+# raises ``ValueError`` with a plain-English message; the edit handler
+# maps it to a translated error string and re-renders the form.
+# ---------------------------------------------------------------------------
+
+#: Reality private keys are base64url WITHOUT padding of 32 bytes
+#: (43 chars) — the format ``xray x25519`` emits.
+_REALITY_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
+#: A Reality shortId is a hex string of even length, at most 16 chars.
+_SHORT_ID_RE = re.compile(r"^(?:[0-9a-fA-F]{2}){0,8}$")
+
+
+def _parse_subnet(value: str) -> str:
+    """Validate a client subnet (``10.8.0.0/24``) and normalise it.
+
+    IPv4 only, with room for at least the server address plus one
+    peer (prefix length <= 30). Host bits are normalised away, so
+    ``10.8.0.5/24`` becomes ``10.8.0.0/24``.
+    """
+    text = (value or "").strip()
+    try:
+        net = ipaddress.ip_network(text, strict=False)
+    except ValueError:
+        raise ValueError(f"invalid subnet: {text!r}") from None
+    if not isinstance(net, ipaddress.IPv4Network):
+        raise ValueError(f"subnet must be IPv4: {text!r}")
+    if net.prefixlen > 30:
+        raise ValueError(f"subnet is too small (need /30 or larger): {text!r}")
+    return str(net)
+
+
+def _subnet_server_address(subnet: str) -> str:
+    """The server's own address inside ``subnet`` (first host, /32-less).
+
+    ``10.8.0.0/24`` -> ``10.8.0.1/24``: the ``Address`` line of the
+    WireGuard / AmneziaWG server config. The peer pool starts at
+    .2 (see :func:`_next_wg_address`).
+    """
+    net = ipaddress.ip_network(subnet, strict=False)
+    return f"{net.network_address + 1}/{net.prefixlen}"
+
+
+def _parse_dns_list(value: str) -> tuple[str, ...]:
+    """Parse a comma-separated DNS list (1–2 IPv4/IPv6 addresses)."""
+    parts = [part.strip() for part in (value or "").split(",") if part.strip()]
+    if not parts:
+        raise ValueError("at least one DNS server is required")
+    if len(parts) > 2:
+        raise ValueError("at most two DNS servers are allowed")
+    for part in parts:
+        try:
+            ipaddress.ip_address(part)
+        except ValueError:
+            raise ValueError(f"invalid DNS address: {part!r}") from None
+    return tuple(parts)
+
+
+def _stream_dns(stream: dict[str, Any], default: tuple[str, str]) -> tuple[str, ...]:
+    """DNS servers from an inbound stream (``dns`` list or string).
+
+    Falls back to ``default`` when the stream carries nothing (or
+    nothing parseable) — a hand-edited stream must never break a
+    re-render.
+    """
+    raw = stream.get("dns")
+    if isinstance(raw, (list, tuple)):
+        servers = [str(item).strip() for item in raw if str(item).strip()]
+    elif isinstance(raw, str):
+        servers = [part.strip() for part in raw.split(",") if part.strip()]
+    else:
+        return default
+    valid: list[str] = []
+    for server in servers:
+        try:
+            ipaddress.ip_address(server)
+        except ValueError:
+            continue
+        valid.append(server)
+    return tuple(valid) if valid else default
+
+
+def _parse_mtu(value: str) -> int | None:
+    """Parse an MTU field (blank = None, the kernel/client default)."""
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        mtu = int(text)
+    except ValueError:
+        raise ValueError(f"MTU is not a number: {text!r}") from None
+    if not 576 <= mtu <= 9000:
+        raise ValueError(f"MTU out of range 576-9000: {mtu}")
+    return mtu
+
+
+def _stream_mtu(stream: dict[str, Any]) -> int | None:
+    """MTU from an inbound stream (``None`` when unset/invalid)."""
+    raw = stream.get("mtu")
+    if raw is None or raw == "":
+        return None
+    try:
+        mtu = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return mtu if 576 <= mtu <= 9000 else None
+
+
+def _parse_mbps(value: str) -> int | None:
+    """Parse an optional speed cap in Mbps (blank = None, no cap)."""
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        mbps = int(text)
+    except ValueError:
+        raise ValueError(f"speed cap is not a number: {text!r}") from None
+    if mbps <= 0:
+        raise ValueError(f"speed cap must be positive: {mbps}")
+    return mbps
+
+
+def _parse_fallbacks(value: str) -> list[dict[str, Any]]:
+    """Parse the fallbacks textarea: one ``host:port`` per line, with
+    an optional ``,xver`` suffix (``127.0.0.1:8080,1``). A bare port
+    number is also accepted (Xray forwards to localhost on it)."""
+    fallbacks: list[dict[str, Any]] = []
+    for raw_line in (value or "").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        xver = 0
+        if "," in line:
+            line, _, xver_text = line.rpartition(",")
+            line = line.strip()
+            try:
+                xver = int(xver_text.strip())
+            except ValueError:
+                raise ValueError(f"invalid fallback xver: {line!r}") from None
+            if xver not in (0, 1):
+                raise ValueError(f"fallback xver must be 0 or 1: {line!r}")
+        dest: Any = line
+        if ":" in line:
+            host, _, port_text = line.rpartition(":")
+            if not host.strip():
+                raise ValueError(f"invalid fallback destination: {line!r}")
+            try:
+                port = int(port_text)
+            except ValueError:
+                raise ValueError(f"invalid fallback port: {line!r}") from None
+            if not 1 <= port <= 65535:
+                raise ValueError(f"fallback port out of range: {line!r}")
+            dest = f"{host.strip()}:{port}"
+        else:
+            try:
+                port = int(line)
+            except ValueError:
+                raise ValueError(f"invalid fallback destination: {line!r}") from None
+            if not 1 <= port <= 65535:
+                raise ValueError(f"fallback port out of range: {line!r}")
+            dest = port
+        fallbacks.append({"dest": dest, "xver": xver})
+    return fallbacks
+
+
+def _fallbacks_text(fallbacks: Any) -> str:
+    """Render a stored fallbacks list back into textarea lines."""
+    if not isinstance(fallbacks, list):
+        return ""
+    lines: list[str] = []
+    for entry in fallbacks:
+        if not isinstance(entry, dict) or entry.get("dest") in (None, ""):
+            continue
+        line = str(entry["dest"])
+        if entry.get("xver"):
+            line += f",{int(entry['xver'])}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _parse_short_id(value: str) -> str:
+    """Validate a Reality shortId (hex, even length, <= 16 chars)."""
+    text = (value or "").strip().lower()
+    if not _SHORT_ID_RE.match(text):
+        raise ValueError(f"invalid shortId: {value!r}")
+    return text
+
+
+def _parse_reality_private_key(value: str) -> str:
+    """Validate a Reality private key (43-char base64url)."""
+    text = (value or "").strip()
+    if not _REALITY_KEY_RE.match(text):
+        raise ValueError("invalid Reality private key")
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -2071,6 +2493,620 @@ def _new_reality_keypair() -> dict[str, str]:
     except Exception:  # noqa: BLE001
         logger.exception("reality keypair fallback failed")
     return {}
+
+
+# ---------------------------------------------------------------------------
+# Inbound editor (Phase 1 of the professional-panel expansion)
+# ---------------------------------------------------------------------------
+
+#: Default client subnet per single-instance protocol, used when an
+#: older inbound has no ``subnet`` in its stream yet.
+_EDIT_SUBNET_DEFAULTS = {
+    "wireguard": "10.8.0.0/24",
+    "amneziawg": "10.8.1.0/24",
+    "openvpn": "10.9.0.0/24",
+    "openconnect": "10.10.10.0/24",
+    "ikev2": "10.20.0.0/24",
+}
+
+#: Protocols whose edit form shows the Xray transport/security block.
+_XRAY_STREAM_PROTOCOLS = {"vless", "vmess", "trojan"}
+
+#: Protocols whose edit form shows the TLS block (SNI / ALPN /
+#: custom cert paths). Sing-box protocols are always TLS, so they
+#: show the block without the security select.
+_TLS_PROTOCOLS = {
+    "vless",
+    "vmess",
+    "trojan",
+    "hysteria2",
+    "tuic",
+    "anytls",
+    "naive",
+    "shadowtls",
+}
+
+#: Allowed values for the validated select fields (anything else is
+#: rejected — a hand-crafted POST must not smuggle an unknown value
+#: into a renderer).
+_XHTTP_MODES = {"auto", "packet", "stream"}
+_FINGERPRINTS = {"chrome", "firefox", "safari", "edge", "random"}
+_CONGESTION_CONTROLS = {"bbr", "cubic", "new_reno"}
+_SHADOWTLS_METHODS = {
+    "2022-blake3-aes-128-gcm",
+    "2022-blake3-aes-256-gcm",
+    "2022-blake3-chacha20-poly1305",
+}
+
+
+def _edit_form_values(inbound: Any) -> dict[str, Any]:
+    """Every field of the edit form, pre-filled from the inbound.
+
+    The template reads ONLY this dict (plus ``inbound`` itself), so
+    the GET handler and the POST-error re-render share one source of
+    truth: the POST handler merges the submitted values over it.
+    """
+    stream = inbound.stream if isinstance(inbound.stream, dict) else {}
+    reality = stream.get("reality") if isinstance(stream.get("reality"), dict) else {}
+    tls = stream.get("tls") if isinstance(stream.get("tls"), dict) else {}
+    awg = stream.get("awg_params") if isinstance(stream.get("awg_params"), dict) else {}
+    protocol = inbound.protocol
+    security = str(stream.get("security") or "")
+    if not security:
+        # The renderer defaults trojan to TLS; everything else to
+        # plain — show the effective value, not a blank select.
+        security = "tls" if protocol == "trojan" else "none"
+    dns = _stream_dns(stream, ("1.1.1.1", "1.0.0.1"))
+    values: dict[str, Any] = {
+        # Common
+        "tag": inbound.tag,
+        "port": inbound.port,
+        "remark": inbound.remark or "",
+        "enabled": bool(inbound.enabled),
+        # Xray transport / security
+        "network": str(stream.get("network") or "tcp"),
+        "security": security,
+        "path": str(stream.get("path") or ""),
+        "host": str(stream.get("host") or ""),
+        "service_name": str(stream.get("service_name") or ""),
+        "mode": str(stream.get("mode") or "auto"),
+        "fp": str(stream.get("fp") or "chrome"),
+        "sniffing": bool(stream.get("sniffing")),
+        "fallbacks": _fallbacks_text(stream.get("fallbacks")),
+        # Reality
+        "reality_dest": str(reality.get("dest") or ""),
+        "reality_sni": str(reality.get("sni") or ""),
+        "reality_server_names": ", ".join(
+            str(name) for name in (reality.get("server_names") or [])
+        ),
+        "reality_short_id": str(reality.get("short_id") or ""),
+        "reality_private_key": str(reality.get("private_key") or ""),
+        "reality_public_key": str(reality.get("public_key") or ""),
+        # TLS
+        "tls_sni": str(tls.get("sni") or ""),
+        "tls_alpn": ", ".join(str(item) for item in (tls.get("alpn") or [])),
+        "tls_cert_path": str(tls.get("cert_path") or ""),
+        "tls_key_path": str(tls.get("key_path") or ""),
+        # Speed caps (hysteria2)
+        "up_mbps": stream.get("up_mbps") if stream.get("up_mbps") else "",
+        "down_mbps": stream.get("down_mbps") if stream.get("down_mbps") else "",
+        # Sing-box
+        "congestion_control": str(stream.get("congestion_control") or "bbr"),
+        "zero_rtt": bool(stream.get("zero_rtt_handshake")),
+        "strict_mode": bool(stream.get("strict_mode")),
+        "shadowtls_password": str(stream.get("password") or ""),
+        "method": str(stream.get("method") or "2022-blake3-aes-128-gcm"),
+        "inner_port": stream.get("inner_port") if stream.get("inner_port") else "",
+        # WG / AWG / OVPN / ocserv / IKEv2
+        "subnet": str(
+            stream.get("subnet") or _EDIT_SUBNET_DEFAULTS.get(protocol, "")
+        ),
+        "mtu": stream.get("mtu") if stream.get("mtu") else "",
+        "dns": ", ".join(dns),
+        "proto": str(stream.get("transport") or "udp"),
+        "max_clients": stream.get("max_clients") if stream.get("max_clients") else 1024,
+    }
+    # AmneziaWG obfuscation parameters (one form field each).
+    for key in ("Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4",
+                "H1", "H2", "H3", "H4", "I1", "I2", "I3", "I4", "I5"):
+        values[f"awg_{key.lower()}"] = awg.get(key, "")
+    values["awg_header_key"] = awg.get("HeaderProtectionKey", "")
+    return values
+
+
+def _build_stream_from_form(
+    inbound: Any, data: dict[str, str], t: dict[str, str]
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Validate the edit form and build the inbound's new stream.
+
+    ``data`` is the submitted form (checkboxes present only when
+    checked). Returns ``(new_stream, None)`` on success or
+    ``(None, translated_error)`` on the first invalid field. The
+    caller applies the result — this function touches nothing.
+    """
+    stream = dict(inbound.stream) if isinstance(inbound.stream, dict) else {}
+    protocol = inbound.protocol
+
+    def _field(name: str) -> str:
+        return (data.get(name) or "").strip()
+
+    def _checked(name: str) -> bool:
+        return data.get(name) in ("on", "true", "1")
+
+    # -- Xray transport / security (vless / vmess / trojan) --------
+    if protocol in _XRAY_STREAM_PROTOCOLS:
+        network = _field("network") or "tcp"
+        if network not in ("tcp", "ws", "grpc", "xhttp", "httpupgrade"):
+            return None, t["invalid_transport"]
+        security = _field("security") or "none"
+        if security not in ("none", "tls", "reality"):
+            return None, t["invalid_transport"]
+        if security == "reality" and network != "tcp":
+            # Reality is a TCP-only security in Xray; a WS/gRPC
+            # Reality inbound would fail `xray -test` at re-render.
+            return None, t["reality_needs_tcp"]
+        stream["network"] = network
+        stream["security"] = security
+        stream["transport"] = "tcp"
+        stream["path"] = _field("path")
+        stream["host"] = _field("host")
+        stream["service_name"] = _field("service_name")
+        mode = _field("mode") or "auto"
+        if mode not in _XHTTP_MODES:
+            return None, t["invalid_mode"]
+        stream["mode"] = mode
+        fp = _field("fp") or "chrome"
+        if fp not in _FINGERPRINTS:
+            return None, t["invalid_fingerprint"]
+        stream["fp"] = fp
+        stream["sniffing"] = _checked("sniffing")
+        try:
+            stream["fallbacks"] = _parse_fallbacks(data.get("fallbacks") or "")
+        except ValueError:
+            return None, t["invalid_fallbacks"]
+
+        if security == "reality":
+            try:
+                short_id = _parse_short_id(data.get("reality_short_id") or "")
+            except ValueError:
+                return None, t["invalid_short_id"]
+            private_key = _field("reality_private_key")
+            reality = dict(stream.get("reality") or {})
+            if private_key:
+                try:
+                    private_key = _parse_reality_private_key(private_key)
+                except ValueError:
+                    return None, t["invalid_reality_key"]
+                reality["private_key"] = private_key
+                # The public key MUST match the private key, or
+                # clients cannot connect — derive it, never trust
+                # a pasted public key.
+                if xray_mod is not None and hasattr(
+                    xray_mod, "reality_public_key"
+                ):
+                    public_key = xray_mod.reality_public_key(private_key)
+                    if public_key:
+                        reality["public_key"] = public_key
+            reality["dest"] = _field("reality_dest")
+            reality["sni"] = _field("reality_sni")
+            reality["server_names"] = [
+                part.strip()
+                for part in _field("reality_server_names").split(",")
+                if part.strip()
+            ]
+            reality["short_id"] = short_id
+            stream["reality"] = reality
+
+        if security == "tls":
+            tls = dict(stream.get("tls") or {})
+            tls["sni"] = _field("tls_sni")
+            tls["alpn"] = [
+                part.strip()
+                for part in _field("tls_alpn").split(",")
+                if part.strip()
+            ]
+            tls["cert_path"] = _field("tls_cert_path")
+            tls["key_path"] = _field("tls_key_path")
+            stream["tls"] = tls
+
+    # -- TLS block for the always-TLS protocols ---------------------
+    if protocol in ("hysteria2", "tuic", "anytls", "naive", "shadowtls"):
+        tls = dict(stream.get("tls") or {})
+        tls["sni"] = _field("tls_sni")
+        tls["alpn"] = [
+            part.strip() for part in _field("tls_alpn").split(",") if part.strip()
+        ]
+        tls["cert_path"] = _field("tls_cert_path")
+        tls["key_path"] = _field("tls_key_path")
+        stream["tls"] = tls
+
+    # -- Hysteria2 speed caps ---------------------------------------
+    if protocol == "hysteria2":
+        try:
+            up = _parse_mbps(data.get("up_mbps") or "")
+            down = _parse_mbps(data.get("down_mbps") or "")
+        except ValueError:
+            return None, t["invalid_mbps"]
+        stream["up_mbps"] = up
+        stream["down_mbps"] = down
+
+    # -- Sing-box protocol options ----------------------------------
+    if protocol == "tuic":
+        congestion = _field("congestion_control") or "bbr"
+        if congestion not in _CONGESTION_CONTROLS:
+            return None, t["invalid_congestion"]
+        stream["congestion_control"] = congestion
+        stream["zero_rtt_handshake"] = _checked("zero_rtt")
+    if protocol == "shadowtls":
+        method = _field("method") or "2022-blake3-aes-128-gcm"
+        if method not in _SHADOWTLS_METHODS:
+            return None, t["invalid_method"]
+        stream["method"] = method
+        stream["password"] = _field("shadowtls_password")
+        stream["strict_mode"] = _checked("strict_mode")
+        inner_raw = _field("inner_port")
+        if inner_raw:
+            try:
+                inner_port = int(inner_raw)
+            except ValueError:
+                return None, t["invalid_inner_port"]
+            if not 1 <= inner_port <= 65535:
+                return None, t["invalid_inner_port"]
+            stream["inner_port"] = inner_port
+        else:
+            stream.pop("inner_port", None)
+
+    # -- WG / AWG / OVPN / ocserv / IKEv2 ---------------------------
+    if protocol in ("wireguard", "amneziawg"):
+        try:
+            stream["subnet"] = _parse_subnet(data.get("subnet") or "")
+        except ValueError:
+            return None, t["invalid_subnet"]
+        try:
+            stream["mtu"] = _parse_mtu(data.get("mtu") or "")
+        except ValueError:
+            return None, t["invalid_mtu"]
+        try:
+            stream["dns"] = list(_parse_dns_list(data.get("dns") or ""))
+        except ValueError:
+            return None, t["invalid_dns"]
+    if protocol == "amneziawg":
+        params: dict[str, Any] = {}
+        try:
+            params["Jc"] = int(_field("awg_jc") or 0)
+            params["Jmin"] = int(_field("awg_jmin") or 0)
+            params["Jmax"] = int(_field("awg_jmax") or 0)
+            for key in ("S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4"):
+                params[key] = int(_field(f"awg_{key.lower()}") or 0)
+        except ValueError:
+            return None, t["invalid_awg_params"]
+        # I1–I5 are initiation TAGS (opaque strings), not numbers.
+        for key in ("I1", "I2", "I3", "I4", "I5"):
+            params[key] = _field(f"awg_{key.lower()}")
+        params["HeaderProtectionKey"] = _field("awg_header_key")
+        if amneziawg_mod is not None and hasattr(
+            amneziawg_mod, "validate_awg_params"
+        ):
+            problems = amneziawg_mod.validate_awg_params(params)
+            if problems:
+                return None, t["invalid_awg_params"] + "; ".join(problems)
+        stream["awg_params"] = params
+    if protocol == "openvpn":
+        proto = _field("proto") or "udp"
+        if proto not in ("udp", "tcp"):
+            return None, t["invalid_transport"]
+        stream["transport"] = proto
+        try:
+            stream["subnet"] = _parse_subnet(data.get("subnet") or "")
+        except ValueError:
+            return None, t["invalid_subnet"]
+        try:
+            stream["dns"] = list(_parse_dns_list(data.get("dns") or ""))
+        except ValueError:
+            return None, t["invalid_dns"]
+    if protocol == "openconnect":
+        try:
+            stream["subnet"] = _parse_subnet(data.get("subnet") or "")
+        except ValueError:
+            return None, t["invalid_subnet"]
+        try:
+            stream["dns"] = list(_parse_dns_list(data.get("dns") or ""))
+        except ValueError:
+            return None, t["invalid_dns"]
+        try:
+            max_clients = int(_field("max_clients") or 1024)
+        except ValueError:
+            return None, t["invalid_max_clients"]
+        if not 1 <= max_clients <= 100000:
+            return None, t["invalid_max_clients"]
+        stream["max_clients"] = max_clients
+    if protocol == "ikev2":
+        try:
+            stream["subnet"] = _parse_subnet(data.get("subnet") or "")
+        except ValueError:
+            return None, t["invalid_subnet"]
+        try:
+            stream["dns"] = list(_parse_dns_list(data.get("dns") or ""))
+        except ValueError:
+            return None, t["invalid_dns"]
+
+    return stream, None
+
+
+def _render_inbound_edit(
+    request: Request,
+    inbound: Any,
+    values: dict[str, Any],
+    *,
+    error: str | None = None,
+    msg: str | None = None,
+    db: Session,
+) -> HTMLResponse:
+    """Render the edit page (GET and POST-error re-render share it)."""
+    t = t_for(get_lang(request))
+    settings = get_settings(db)
+    server_public_key = ""
+    if inbound.protocol == "wireguard":
+        server_public_key = str(settings.get("wireguard_public_key") or "")
+    elif inbound.protocol == "amneziawg":
+        server_public_key = str(settings.get("amneziawg_public_key") or "")
+    return templates.TemplateResponse(
+        request,
+        "inbound_edit.html",
+        {
+            "t": t,
+            "inbound": inbound,
+            "values": values,
+            "server_public_key": server_public_key,
+            "error": error,
+            "msg": msg,
+            "lang": get_lang(request),
+        },
+    )
+
+
+@app.get("/inbounds/{inbound_id}/edit", response_class=HTMLResponse)
+def edit_inbound_page(
+    request: Request,
+    inbound_id: int,
+    admin: Any = Depends(require_admin),
+    db: Session = Depends(db_session),
+):
+    """Pre-filled edit page for one inbound (Phase 1)."""
+    inbound = db.get(Inbound, inbound_id)
+    if inbound is None:
+        raise HTTPException(status_code=404, detail="inbound not found")
+    return _render_inbound_edit(
+        request, inbound, _edit_form_values(inbound), db=db
+    )
+
+
+@app.post("/inbounds/{inbound_id}/edit")
+async def edit_inbound_submit(
+    request: Request,
+    inbound_id: int,
+    admin: Any = Depends(require_admin),
+    db: Session = Depends(db_session),
+):
+    """Validate, save, re-render — exactly like the create path.
+
+    On a validation error the edit form is re-rendered (200) with
+    the submitted values preserved, so the admin fixes one field
+    instead of retyping the whole form.
+    """
+    t = t_for(get_lang(request))
+    inbound = db.get(Inbound, inbound_id)
+    if inbound is None:
+        raise HTTPException(status_code=404, detail="inbound not found")
+    form = await request.form()
+    data: dict[str, str] = {
+        str(key): str(value) for key, value in form.multi_items()
+        if isinstance(value, str)
+    }
+    values = _edit_form_values(inbound)
+    # Merge the submitted values over the current ones so a
+    # validation error shows what the admin typed, not the old DB.
+    for key, value in data.items():
+        values[key] = value
+    for checkbox in ("enabled", "sniffing", "zero_rtt", "strict_mode"):
+        values[checkbox] = data.get(checkbox) in ("on", "true", "1")
+
+    def _error(message: str) -> HTMLResponse:
+        return _render_inbound_edit(
+            request, inbound, values, error=message, db=db
+        )
+
+    tag = (data.get("tag") or "").strip()
+    if not NAME_RE.match(tag):
+        return _error(t["invalid_name"])
+    clash = (
+        db.query(Inbound)
+        .filter(Inbound.tag == tag, Inbound.id != inbound.id)
+        .first()
+    )
+    if clash is not None:
+        return _error(t["tag_exists"])
+    try:
+        port = int((data.get("port") or "").strip())
+    except ValueError:
+        return _error(t["invalid_port"])
+    if not 1 <= port <= 65535:
+        return _error(t["invalid_port"])
+    if port in RESERVED_PORTS and not (inbound.protocol == "ikev2" and port == 500):
+        return _error(t["port_reserved"])
+
+    stream, stream_error = _build_stream_from_form(inbound, data, t)
+    if stream is None:
+        return _error(stream_error or t["invalid_input"])
+
+    # Port clash, same rule as create: (port, transport) must be
+    # unique across OTHER inbounds — OpenConnect occupies both.
+    new_transports = _inbound_transports(stream, inbound.protocol)
+    for other in db.query(Inbound).filter(Inbound.id != inbound.id).all():
+        if int(other.port) != port:
+            continue
+        other_transports = _inbound_transports(
+            other.stream if isinstance(other.stream, dict) else {},
+            other.protocol,
+        )
+        if new_transports & other_transports:
+            return _error(t["port_in_use"])
+
+    inbound.tag = tag
+    inbound.port = port
+    inbound.remark = (data.get("remark") or "").strip() or None
+    inbound.enabled = bool(data.get("enabled") in ("on", "true", "1"))
+    inbound.stream = stream
+    db.commit()
+    _audit(
+        db,
+        admin.id if admin is not None else None,
+        "inbound.update",
+        f"{inbound.protocol} {tag}:{port}",
+    )
+    errors = rerender_configs(db)
+    if errors:
+        return _redirect(
+            "/inbounds", request, err=t["rerender_failed"] + "; ".join(errors)
+        )
+    return _redirect("/inbounds", request, msg=t["inbound_updated"])
+
+
+@app.post("/inbounds/{inbound_id}/regenerate-reality")
+def regenerate_reality(
+    request: Request,
+    inbound_id: int,
+    admin: Any = Depends(require_admin),
+    db: Session = Depends(db_session),
+):
+    """Fresh Reality keypair + shortId for one inbound (Phase 1).
+
+    Clients must re-fetch their configs — the share links change.
+    """
+    t = t_for(get_lang(request))
+    inbound = db.get(Inbound, inbound_id)
+    if inbound is None:
+        raise HTTPException(status_code=404, detail="inbound not found")
+    if inbound.protocol not in _XRAY_STREAM_PROTOCOLS:
+        return _redirect(
+            f"/inbounds/{inbound_id}/edit", request, err=t["invalid_transport"]
+        )
+    pair = _new_reality_keypair()
+    if not pair:
+        return _redirect(
+            f"/inbounds/{inbound_id}/edit", request, err=t["reality_key_failed"]
+        )
+    stream = dict(inbound.stream) if isinstance(inbound.stream, dict) else {}
+    reality = dict(stream.get("reality") or {})
+    reality["private_key"] = pair["private_key"]
+    reality["public_key"] = pair["public_key"]
+    reality["short_id"] = secrets.token_hex(8)
+    stream["reality"] = reality
+    inbound.stream = stream
+    db.commit()
+    _audit(
+        db,
+        admin.id if admin is not None else None,
+        "inbound.regenerate_reality",
+        inbound.tag,
+    )
+    errors = rerender_configs(db)
+    if errors:
+        return _redirect(
+            f"/inbounds/{inbound_id}/edit",
+            request,
+            err=t["rerender_failed"] + "; ".join(errors),
+        )
+    return _redirect(
+        f"/inbounds/{inbound_id}/edit", request, msg=t["reality_regenerated"]
+    )
+
+
+@app.post("/inbounds/{inbound_id}/regenerate-awg-params")
+def regenerate_awg_params(
+    request: Request,
+    inbound_id: int,
+    admin: Any = Depends(require_admin),
+    db: Session = Depends(db_session),
+):
+    """Fresh AmneziaWG obfuscation parameters for one inbound.
+
+    Clients must re-fetch their configs — the junk-packet
+    parameters are part of the client config.
+    """
+    t = t_for(get_lang(request))
+    inbound = db.get(Inbound, inbound_id)
+    if inbound is None:
+        raise HTTPException(status_code=404, detail="inbound not found")
+    if inbound.protocol != "amneziawg" or amneziawg_mod is None:
+        return _redirect(
+            f"/inbounds/{inbound_id}/edit", request, err=t["invalid_transport"]
+        )
+    stream = dict(inbound.stream) if isinstance(inbound.stream, dict) else {}
+    stream["awg_params"] = amneziawg_mod.generate_awg_params()
+    inbound.stream = stream
+    db.commit()
+    _audit(
+        db,
+        admin.id if admin is not None else None,
+        "inbound.regenerate_awg_params",
+        inbound.tag,
+    )
+    errors = rerender_configs(db)
+    if errors:
+        return _redirect(
+            f"/inbounds/{inbound_id}/edit",
+            request,
+            err=t["rerender_failed"] + "; ".join(errors),
+        )
+    return _redirect(
+        f"/inbounds/{inbound_id}/edit", request, msg=t["awg_params_regenerated"]
+    )
+
+
+@app.post("/inbounds/{inbound_id}/regenerate-server-key")
+def regenerate_server_key(
+    request: Request,
+    inbound_id: int,
+    admin: Any = Depends(require_admin),
+    db: Session = Depends(db_session),
+):
+    """Fresh WireGuard/AmneziaWG SERVER keypair for the panel.
+
+    The server key is shared by every inbound of the protocol
+    (there is one wg0 / awg0 interface), so this regenerates the
+    settings keypair — ALL clients of the protocol must re-fetch
+    their configs. The edit page warns about this.
+    """
+    t = t_for(get_lang(request))
+    inbound = db.get(Inbound, inbound_id)
+    if inbound is None:
+        raise HTTPException(status_code=404, detail="inbound not found")
+    if inbound.protocol not in ("wireguard", "amneziawg") or wireguard_mod is None:
+        return _redirect(
+            f"/inbounds/{inbound_id}/edit", request, err=t["invalid_transport"]
+        )
+    prefix = inbound.protocol
+    private_b64, public_b64 = wireguard_mod.generate_keypair()
+    set_setting(db, f"{prefix}_private_key", private_b64)
+    set_setting(db, f"{prefix}_public_key", public_b64)
+    db.commit()
+    _audit(
+        db,
+        admin.id if admin is not None else None,
+        "inbound.regenerate_server_key",
+        f"{prefix} {inbound.tag}",
+    )
+    errors = rerender_configs(db)
+    if errors:
+        return _redirect(
+            f"/inbounds/{inbound_id}/edit",
+            request,
+            err=t["rerender_failed"] + "; ".join(errors),
+        )
+    return _redirect(
+        f"/inbounds/{inbound_id}/edit", request, msg=t["server_key_regenerated"]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2455,6 +3491,8 @@ def create_inbound(
     # inbound stream): the client subnet, and the AmneziaWG
     # obfuscation parameters (generated once here, shared by the
     # server and every client of the inbound).
+    if protocol == "wireguard":
+        stream["subnet"] = "10.8.0.0/24"
     if protocol == "openvpn":
         stream["subnet"] = (
             openvpn_mod.DEFAULT_NETWORK if openvpn_mod is not None else "10.9.0.0/24"
@@ -2817,12 +3855,19 @@ def _wireguard_conf_for(
         server_public = (settings.get("wireguard_public_key") or "").strip()
         if not private_key or not address or not server_public:
             return None
+        # MTU / DNS come from the inbound's stream (editable since
+        # the Phase 1 inbound editor); the first DNS server is the
+        # one a WireGuard client config carries.
+        stream = _inbound_dict(inbound).get("stream_json") or {}
+        dns_servers = _stream_dns(stream, ("1.1.1.1",))
         return wireguard_mod.render_peer_config(
             private_key,
             address,
             server_public,
             host,
             server_port=int(inbound.port),
+            dns=dns_servers[0] if dns_servers else "1.1.1.1",
+            mtu=_stream_mtu(stream) or 1280,
         )
     except Exception:  # noqa: BLE001
         logger.exception("wireguard peer config failed for %s", inbound.tag)
@@ -2883,6 +3928,7 @@ def _amneziawg_conf_for(
     params = stream.get("awg_params") or {}
     if not isinstance(params, dict):
         params = {}
+    dns_servers = _stream_dns(stream, ("1.1.1.1",))
     return amneziawg_mod.render_peer_config(
         private_key,
         address,
@@ -2890,6 +3936,8 @@ def _amneziawg_conf_for(
         host,
         server_port=int(inbound.port),
         params=params,
+        dns=dns_servers[0] if dns_servers else "1.1.1.1",
+        mtu=_stream_mtu(stream) or 1280,
     )
 
 

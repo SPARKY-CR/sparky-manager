@@ -246,12 +246,15 @@ def render_server_config(
     address: str = "10.8.1.1/24",
     listen_port: int = DEFAULT_PORT,
     params: dict[str, Any] | None = None,
+    mtu: int | None = None,
 ) -> str:
     """Render a server ``awg0.conf`` (WireGuard shape + AWG fields).
 
     No DNS line: like the WireGuard server config, DNS only changes
     the server's own resolver and breaks ``awg-quick up`` on systems
-    without a resolvconf provider.
+    without a resolvconf provider. ``mtu`` is omitted when ``None``
+    (the kernel default applies); the panel writes it from the
+    inbound's stream when the admin sets one.
     """
     params = dict(params or {})
     lines = [
@@ -260,6 +263,8 @@ def render_server_config(
         f"Address = {address}",
         f"ListenPort = {listen_port}",
     ]
+    if mtu:
+        lines.append(f"MTU = {int(mtu)}")
     lines.extend(_awg_interface_lines(params))
     for peer in peers or []:
         if not isinstance(peer, dict):
