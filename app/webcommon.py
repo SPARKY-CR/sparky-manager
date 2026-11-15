@@ -48,7 +48,6 @@ from app.models import (
     TrafficDaily,
     client_is_frozen,
     client_is_usable,
-    user_is_usable,
 )
 
 logger = logging.getLogger("sparky-manager")

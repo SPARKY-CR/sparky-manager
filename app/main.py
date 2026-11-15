@@ -99,7 +99,6 @@ import shutil
 import subprocess
 import threading
 import time
-import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -114,7 +113,6 @@ from fastapi.responses import (
     Response,
 )
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -158,7 +156,6 @@ from app import xray_stats as xray_stats_mod
 from app.auth import (
     create_session,
     csrf_token_for_session,
-    get_admin_from_token,
     hash_password,
     invalidate_other_sessions,
     invalidate_session,
@@ -182,7 +179,6 @@ from app.models import (
     Setting,
     TrafficDaily,
     User,
-    client_is_frozen,
     client_is_usable,
     user_is_usable,
 )
@@ -1419,7 +1415,20 @@ async def lifespan(app: FastAPI):
         task.cancel()
 
 
-app = FastAPI(title="sparky-manager", lifespan=lifespan)
+# No auto-generated API docs (Phase 7): this panel is a private admin
+# tool, not a public API — the /docs, /redoc and /openapi.json pages
+# expose the full route schema unauthenticated and serve no purpose
+# here. The flags only control the docs pages; the panel's own /api
+# endpoints are unaffected. The root app in _mount_web_path disables
+# them too (it would otherwise serve /docs at the root, outside the
+# secret web path).
+app = FastAPI(
+    title="sparky-manager",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
@@ -4520,7 +4529,16 @@ def _mount_web_path(panel_app: FastAPI, web_path: str) -> FastAPI:
     """Return ``panel_app`` mounted under ``web_path`` ("" = root, unchanged)."""
     if not web_path:
         return panel_app
-    root = FastAPI(title="sparky-manager", lifespan=lifespan)
+    # Docs disabled here too (Phase 7): without these flags the root
+    # app would serve /docs, /redoc and /openapi.json at the ROOT —
+    # outside the secret web path, unauthenticated.
+    root = FastAPI(
+        title="sparky-manager",
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     root.mount(web_path, panel_app)
     return root
 

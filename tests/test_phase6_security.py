@@ -59,14 +59,12 @@ PUBLIC_GETS = {
     "/sub/{token}/amneziawg.conf",
     "/sub/{token}/ikev2.mobileconfig",
     "/sub/{token}/qr",
-    # FastAPI's auto-generated API docs — unauthenticated by design
-    # (they expose the route schema, no data), reachable only under
-    # the secret web path in production. Noted as a LOW finding in
-    # the Phase 6 report; not changed (behavior preservation).
-    "/docs",
-    "/docs/oauth2-redirect",
-    "/redoc",
-    "/openapi.json",
+    # FastAPI's auto-generated API docs (/docs, /redoc,
+    # /openapi.json) are NOT listed here: they were disabled in
+    # Phase 7 (docs_url/redoc_url/openapi_url=None on both app
+    # constructors) and no longer exist as routes — see
+    # test_api_docs_disabled below. Phase 6 had listed them as
+    # public-by-design and noted the exposure as a LOW finding.
 }
 
 
@@ -229,6 +227,33 @@ def test_unauthenticated_api_returns_401(test_client):
         "/api/users", json={"name": "x", "inbounds": [1]},
         follow_redirects=False)
     assert resp.status_code == 401
+
+
+def test_api_docs_disabled(test_client):
+    """Phase 7: the auto-generated API docs pages do not exist — the
+    panel is a private admin tool and the schema exposure served no
+    purpose. The panel's own /api endpoints are unaffected (401,
+    not 404, unauthenticated)."""
+    for path in ("/docs", "/redoc", "/openapi.json",
+                 "/docs/oauth2-redirect"):
+        assert test_client.get(path).status_code == 404, path
+    assert test_client.get("/api/users").status_code == 401
+
+
+def test_api_docs_disabled_under_web_path():
+    """Phase 7: with a secret web path set, the ROOT app must not
+    serve /docs at the root (outside the web path) — before the fix
+    it did, unauthenticated. The mounted panel's docs are gone too."""
+    from fastapi.testclient import TestClient
+
+    root = main_mod._mount_web_path(main_mod.app, "/testsecretpath")
+    client = TestClient(root, raise_server_exceptions=False)
+    for path in ("/docs", "/redoc", "/openapi.json",
+                 "/testsecretpath/docs", "/testsecretpath/openapi.json"):
+        assert client.get(path).status_code == 404, path
+    # The panel itself still answers under the web path.
+    assert client.get("/testsecretpath/login").status_code == 200
+    assert client.get("/login").status_code == 404
 
 
 def test_unauthenticated_logout_redirects_to_login(test_client):

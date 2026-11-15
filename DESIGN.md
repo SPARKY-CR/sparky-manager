@@ -1,12 +1,18 @@
 # sparky-manager — Design Document
 
-> **Status:** DESIGN ONLY — no code, no GitHub push, no server install yet.
+> **Status:** IMPLEMENTED. The design below shipped as v1.2.0 (2026-11-14,
+> on `main`), was expanded with a full inbound editor, per-client
+> management, panel settings and a Telegram bot (2026-11-15), and then
+> went through a 7-phase professional upgrade on branch
+> `upgrade/professional` (2026-11-15, §§12–14). The panel is installed
+> and running on a real server. Historical sections (§§0–11) describe
+> the original design and are annotated where the shipped code differs.
 > **Date:** 2026-11-11 · **Working name:** `sparky-manager`
 
-> **Decisions confirmed by James, 2026-11-11 (override any conflicting
+> **Decisions confirmed by Morteza, 2026-11-11 (override any conflicting
 > suggestion below):**
 > 1. **PUBLIC project** — prepared as a public repo (README FA+EN, MIT
->    LICENSE, CI). James can change the license later.
+>    LICENSE, CI). Morteza can change the license later.
 > 2. **DOMAIN-AGNOSTIC** — installer and panel work with a bare server IP
 >    and no domain. Default first pair: VLESS+Reality on TCP 443 +
 >    Hysteria2 on UDP 443 + WireGuard, none needing a domain or cert.
@@ -16,17 +22,17 @@
 >    install script and tests are written originally for this project.
 >    No code is copied, forked or adapted from any other panel project
 >    (3X-UI, vpn-ui, Marzban, Marzneshin, Remnawave, Hiddify, …) or from
->    James's Ikev2-manager. Stock upstream Xray-core and sing-box
+>    Morteza's Ikev2-manager. Stock upstream Xray-core and sing-box
 >    binaries are used as protocol engines only. The comparison table
 >    in §2 is context, not a template.
-> **For:** James (Persian-speaking, works from phone in Termux, Ubuntu/Debian server)
+> **For:** Morteza (Persian-speaking, works from phone in Termux, Ubuntu/Debian server)
 > **Client target:** ZedSecure (multi-core client, Android/Linux/Windows/macOS)
 > **Replaces / beats:** Sir-MmD/vpn-ui (3X-UI fork, v2.9.3-based) and MHSanaei/3x-ui
 
 ## 0. What changed in this version
 
 The first draft was Xray-only (VLESS / VMess / Trojan / Shadowsocks).
-James then clarified: **ALL methods and ALL cores, suitable for the ZedSecure app.**
+Morteza then clarified: **ALL methods and ALL cores, suitable for the ZedSecure app.**
 This document is the revised, multi-core design. The Xray-only scope is superseded.
 
 ZedSecure (GitHub `EbiDevSharp/ZedSecure`, also `CluvexStudio/ZedSecure`,
@@ -58,7 +64,7 @@ networks (see §9).
 
 ## 1. Goals — and what was wrong with vpn-ui
 
-James installed vpn-ui, got in, then deleted it as "not good".
+Morteza installed vpn-ui, got in, then deleted it as "not good".
 Exact pain points were never spelled out, so this design fixes the
 **known, verifiable** vpn-ui / 3X-UI weaknesses:
 
@@ -67,7 +73,7 @@ Exact pain points were never spelled out, so this design fixes the
 | Fresh install **randomises port, username, password and web path**; login info is hidden behind `/opt/vpn-ui/vpn-ui-amd64 info` (menu option 8) | **Like other panels** (see §7): fresh install randomises the panel port (10000–60000), the admin password and the secret web path; username `admin`. Installer prints one big, unmissable login box at the end (full URL + user + password), saves it to `/root/sparky-manager-login.txt`, and `sparky-manager info` reprints it. Port and password are re-used on re-install, never re-randomised. |
 | Cluttered English UI; 3X-UI has 14 languages but no Persian-first design, and vpn-ui adds ~15 protocols, resellers, multi-admin, bulk ops — a huge surface for one person | **Persian-first RTL UI**, English as secondary toggle. One screen per job: Dashboard → Inbounds → Users → Subscriptions. No reseller/multi-admin in MVP. |
 | Heavy setup: vpn-ui is a Go monolith bundling patched Xray-core, RADIUS, procmgr, a dozen daemons (xl2tpd, strongSwan, pptpd, OpenVPN, ocserv, accel-ppp, telemt…), kernel-module builds (AmneziaWG DKMS fails on kernel ≥ 7.1 and on RHEL kernels) | **Two stock cores + Python backend, no patched core, no kernel builds in Phase 1.** Xray-core and sing-box are downloaded as official upstream binaries. AmneziaWG (needs a kernel module) is Phase 2, explicitly gated. |
-| Go + Vue build: editing the UI means a Node build step | **No Node/Vue build step.** Server-rendered pages (Jinja2) + one hand-written CSS file + a little vanilla JS. James can edit a template with copy-paste in Termux. |
+| Go + Vue build: editing the UI means a Node build step | **No Node/Vue build step.** Server-rendered pages (Jinja2) + one hand-written CSS file + a little vanilla JS. Morteza can edit a template with copy-paste in Termux. |
 | One-line install exists (`curl …/deploy.sh \| sudo bash`) but the *result* is hard to find | Same one-line install shape, but the installer **ends by printing the URL + login** and verifying the panel answers HTTP 200 before exiting. |
 
 ### Non-goals (MVP)
@@ -89,9 +95,9 @@ Exact pain points were never spelled out, so this design fixes the
 | OpenVPN / OpenConnect | — | Bundled daemons | v1.2.0 (§8) |
 | Subscription formats | v2rayNG-style links, JSON, Clash | Same + TXT/PDF export | **Dual: v2rayNG base64 links AND sing-box JSON** (§6), QR, per-user link |
 | Per-user quota / expiry / enable-disable | Yes | Yes + Freeze + bulk ops | Yes (MVP core); Freeze = enable/disable; bulk ops Phase 2 |
-| Traffic stats / online users | Xray gRPC stats | Xray gRPC + RADIUS/nftables for daemons | Xray gRPC + `wg show` + nftables-per-port for sing-box (§6.4) |
+| Traffic stats / online users | Xray gRPC stats | Xray gRPC + RADIUS/nftables for daemons | Xray gRPC + `wg show`; sing-box traffic uncollected (no stats API) (§6.4) |
 | UI language | 14 languages, English-first | Same + FA/AR/ZH/ES/RU/TR READMEs | **Persian RTL first**, English toggle |
-| Install | `bash <(curl …/install.sh)` | `curl …/deploy.sh \| sudo bash`, randomised login | One-liner, **fixed port/login, printed login box** |
+| Install | `bash <(curl …/install.sh)` | `curl …/deploy.sh \| sudo bash`, randomised login | One-liner, **randomised port/password/web path, printed login box** |
 | Stack | Go + Vue (Node build) | Go + Vue (Node build) | **Python FastAPI + Jinja2, no build step** (§3) |
 | Storage | SQLite | SQLite (changed path) | SQLite (WAL) |
 
@@ -104,12 +110,12 @@ Exact pain points were never spelled out, so this design fixes the
 
 | Choice | Why | Rejected alternative |
 |---|---|---|
-| **FastAPI** (not Flask) | Async-native (ASGI): the traffic-sync loop, Xray gRPC polling and expiry sweeper run as background tasks without blocking requests. Pydantic v2 validates every API payload (inbound/user forms) for free. Auto-generated OpenAPI docs (`/docs`) — useful when James later adds a Telegram bot. Type hints catch config-shape bugs before runtime. Now ahead of Flask in PyPI downloads; well documented. | Flask: sync WSGI, no built-in validation, needs extensions for everything FastAPI ships. Fine for a prototype, worse for background jobs + validation. |
+| **FastAPI** (not Flask) | Async-native (ASGI): the traffic-sync loop, Xray gRPC polling and expiry sweeper run as background tasks without blocking requests. Pydantic v2 validates every API payload (inbound/user forms) for free. Type hints catch config-shape bugs before runtime. Now ahead of Flask in PyPI downloads; well documented. (The auto-generated OpenAPI docs pages `/docs`, `/redoc`, `/openapi.json` were disabled in the professional upgrade, Phase 7 — a private admin panel has no use for an unauthenticated schema dump; see §14.) | Flask: sync WSGI, no built-in validation, needs extensions for everything FastAPI ships. Fine for a prototype, worse for background jobs + validation. |
 | **SQLAlchemy 2.0 sync + SQLite** | One file (`/opt/sparky-manager/data/panel.db`), zero DB server, trivial backup (`cp` the file). WAL mode so reads don't block the sweeper's writes. Sync engine (not async) keeps the code simple: FastAPI runs sync endpoints in a threadpool; the DB is small and local, so async adds complexity for no gain. | PostgreSQL: overkill for one server / one admin. aiosqlite/async SQLAlchemy: async-everywhere tax for a single-file DB. Raw `sqlite3`: no migrations. |
-| **Jinja2 + hand-written CSS, no Node/Vue** | James edits in Termux by copy-paste. A template change is a file edit + `systemctl reload`, not `npm run build`. RTL + Vazirmatn font (system fallback if offline; CDN optional). | Vue/React SPA: needs a build step, exactly the friction vpn-ui has. Django: batteries-included but heavy; its admin is English-first and its ORM/migration ceremony is overkill here. |
+| **Jinja2 + hand-written CSS, no Node/Vue** | Morteza edits in Termux by copy-paste. A template change is a file edit + `systemctl reload`, not `npm run build`. RTL + Vazirmatn font (system fallback if offline; CDN optional). | Vue/React SPA: needs a build step, exactly the friction vpn-ui has. Django: batteries-included but heavy; its admin is English-first and its ORM/migration ceremony is overkill here. |
 | **Uvicorn, single process, systemd unit** | One service `sparky-manager.service`. No Gunicorn workers (SQLite + multiple writers = lock contention). | Gunicorn multi-worker: wrong for SQLite. |
 | **Xray-core + sing-box, official binaries** | No patched core. Upgrades = replace binary + restart. Each core owns its own `config.json`, generated by the panel. | Patched Xray-core (vpn-ui approach): carries AnyTLS/TUIC/Naive inside Xray but forks the project from upstream security fixes. |
-| **Deps (pinned in `requirements.txt`)** | `fastapi`, `uvicorn[standard]`, `sqlalchemy`, `jinja2`, `qrcode[pil]`, `passlib[argon2]` (or `argon2-cffi`), `python-multipart`, `httpx` (for version checks), `cryptography` (key gen). Nothing else in MVP. | — |
+| **Deps (pinned in `requirements.txt`)** | `fastapi`, `uvicorn[standard]`, `sqlalchemy`, `jinja2`, `qrcode[pil]`, `python-multipart`, `httpx` (Telegram Bot API), `cryptography` (key gen), `grpcio` (Xray Stats client). Auth uses stdlib PBKDF2 — no `argon2-cffi` (removed in the professional upgrade, Phase 5). Nothing else. | — |
 
 ### Architecture (text diagram)
 
@@ -167,7 +173,7 @@ sing-box on UDP/443).
 | Naive | TCP 8445 | sing-box, TLS mandatory |
 | ShadowTLS v3 + SS2022 | TCP 8446 | Inner SS on 127.0.0.1 only, `strict_mode` |
 | WireGuard | UDP 51820 | Native `wg0` |
-| Subscription endpoint | Same panel port, `/sub/<token>` | Separate port only if James wants it unlisted |
+| Subscription endpoint | Same panel port, `/sub/<token>` | Separate port only if Morteza wants it unlisted |
 
 Reality (TCP 443) + Hysteria2 (UDP 443) sharing port 443 is the
 recommended first pair: no domain, no certificate, maximum compatibility.
@@ -190,7 +196,8 @@ settings(key PK, value TEXT)
 -- protocol: vless | vmess | trojan | shadowsocks | hysteria2 | tuic |
 --           anytls | naive | shadowtls | wireguard | amneziawg | ikev2 | ...
 -- stream/security are JSON blobs so a new transport doesn't need a migration.
-inbounds(id PK, tag UNIQUE, core TEXT, protocol TEXT, port INT UNIQUE,
+inbounds(id PK, tag UNIQUE, core TEXT, protocol TEXT, port INT,
+         UNIQUE(port, protocol),  -- same port may serve TCP + UDP protocols
          enabled BOOL DEFAULT 1,
          stream_json TEXT,   -- {network: tcp/ws/xhttp/grpc, security: reality/tls/none,
                              --  reality: {sni, private_key, public_key, short_id},
@@ -261,11 +268,12 @@ DB change (transaction)
   → on failure: keep old config, keep old service running, show the error
 ```
 
-MVP restarts the affected core on every change (simple, reliable,
-a ~1 s blip). **Phase 2:** use Xray's gRPC `HandlerService.AddUser /
-RemoveUser` for zero-downtime user add/remove, and keep full regen only
-for inbound changes. sing-box has no equivalent live API, so sing-box
-inbound changes always restart sing-box.
+The panel restarts the affected core on every change (simple, reliable,
+a ~1 s blip). Zero-downtime user add/remove via Xray's gRPC
+`HandlerService.AddUser / RemoveUser` was considered and NOT
+implemented — full re-render on every change is what ships, and
+sing-box has no equivalent live API anyway, so sing-box inbound
+changes always restart sing-box.
 
 ### 5.1 Xray-core (`/usr/local/etc/xray/config.json`)
 
@@ -441,7 +449,7 @@ authoritative). XTLS is not offered (no renderer support).
 |---|---|---|
 | **Psiphon** | ❌ No | Psiphon's own network; no server of yours exists to run. ZedSecure ships it built-in — the user just taps it in the app when nothing else connects. Nothing for a panel to do. |
 | **Tor** (obfs4 / Snowflake / Conjure) | ❌ No (Phase 3 at most) | Tor is a third-party anonymity network. Running a bridge is a separate project (obfs4 bridge + Tor daemon + bridge-line distribution) with its own abuse/ops profile. ZedSecure already bundles Tor; the panel gains nothing by owning it in MVP. |
-| **DNS tunnels** (DNSTT / VayDNS / MasterDNS) | ❌ No | These tunnel through DNS on networks that allow little else. They need a DNS server + a tunnel endpoint (iodine-style) and a domain with NS records — a niche fallback, not a general VPN server. ZedSecure bundles the clients; the panel does not need a DNS-tunnel server for its core job. Revisit only if James explicitly asks. |
+| **DNS tunnels** (DNSTT / VayDNS / MasterDNS) | ❌ No | These tunnel through DNS on networks that allow little else. They need a DNS server + a tunnel endpoint (iodine-style) and a domain with NS records — a niche fallback, not a general VPN server. ZedSecure bundles the clients; the panel does not need a DNS-tunnel server for its core job. Revisit only if Morteza explicitly asks. |
 | **SSH** (as a VPN) | ❌ No server in MVP | ZedSecure lists SSH as an engine, but SSH-as-VPN (dynamic SOCKS) is a manual fallback, not a managed multi-user service. The server already has SSH; the panel doesn't need to manage it. |
 | OpenVPN / OpenConnect | ✅ v1.2.0 | Real servers (OpenVPN daemon, ocserv) with `.ovpn` / AnyConnect-profile export; one shared CA under `data/ca/` with the IKEv2 server cert. |
 
@@ -613,7 +621,7 @@ feature done (see §10, Q5).
 | WireGuard | `wg show wg0 transfer` (bytes per peer public key → map to client). Poll every 60 s. | Per peer. Accurate. |
 | sing-box inbounds | **Uncollected — no stats API.** sing-box exposes no per-user traffic API, and the panel does not run `nft list` (the `nft_text` parameter of `sync_traffic` exists for a future nftables-counter implementation, but nothing feeds it today). Shared-port sing-box inbounds cannot be attributed per user at all — the UI must say "traffic: n/a (shared port)" rather than invent a number. | None today. |
 | IKEv2 | Native since v1.2.0; no per-user traffic API yet (same gap as OpenVPN/ocserv — `swanctl --list-sas` / occtl exist but are not wired into the panel yet). | — |
-| Online status | Xray: a user with non-zero traffic delta in the last 60–120 s, or present in `QueryStats` with recent activity → "online". WireGuard: `latest handshake < 3 min ago`. sing-box: no live sessions API — show "last seen" from traffic deltas only, never fake "online". | Best-effort, labelled as such. |
+| Online status | Not measured as presence — the dashboard shows "Active today": users with any traffic recorded today (Xray deltas, WireGuard transfers). WireGuard's latest handshake is also available (`< 3 min ago`). sing-box has no live sessions API. The label says what the number actually is; nothing claims "online now". | Best-effort, labelled as such. |
 
 Xray collection details (`app/xray_stats.py`, Phase 5 F1 fix): the
 renderer enables the Stats API (`api` + `stats` + `policy.levels`
@@ -632,8 +640,9 @@ traffic cannot be broken down per inbound.
 
 Enforcement runs in the sweeper (every 5 min): expired or over-quota
 users are removed from the rendered configs (so the core drops them)
-and their subscription returns 403. No live-connection killing in MVP
-(Xray `RemoveUser` / `wg set peer remove` are the Phase 2 mechanism).
+and their subscription returns 403. No live-connection killing:
+existing connections are not killed mid-session (Xray `RemoveUser` /
+`wg set peer remove` were considered and not implemented).
 
 The per-client IP limit (§5.7) is stored in the client's `extra`
 JSON and shown in the UI, but it is **not enforced**: none of the
@@ -695,9 +704,9 @@ not faked.
   Re-used on re-install; `--port` fixes it. The firewall opens only the
   panel port + the inbound ports in use.
 - **Panel TLS:** installer asks for a domain (optional).
-  - *Domain given:* `certbot` / `acme.sh` (Let's Encrypt) obtains a cert
-    for the panel + the TLS inbounds; auto-renew via systemd timer;
-    renewal is picked up without dropping connections (reload, not restart).
+  - *Domain given:* `acme.sh` (Let's Encrypt) obtains a cert
+    for the panel + the TLS inbounds; auto-renew via acme.sh's cron
+    job; renewal is picked up without dropping connections (reload, not restart).
   - *No domain:* panel serves a **self-signed cert** (generated at
     install, fingerprint printed in the login box) and Reality +
     WireGuard carry the VPN side, since neither needs a domain or cert.
@@ -715,10 +724,13 @@ not faked.
 - **Input validation:** Pydantic models on every API route; ports
   validated 1–65535 and checked for clashes before render; usernames
   `[a-zA-Z0-9_-]` only (they appear in share-link fragments and file names).
-- **Updates:** installer pins Xray + sing-box versions in
-  `/opt/sparky-manager/versions.env`; `sparky-manager update-cores` downloads the
-  new binaries, validates configs, restarts. No auto-update (a bad core
-  must never take the server down unattended).
+- **Updates:** the installer records the installed Xray + sing-box
+  versions in `/opt/sparky-manager/versions.env`. `sparky-manager
+  update-cores` is deliberately unimplemented (exit 2) — downloading
+  and swapping core binaries is install.sh's job, with its SHA256
+  verification and config validation; re-run the installer to update
+  the cores. No auto-update (a bad core must never take the server
+  down unattended).
 
 ---
 
@@ -728,19 +740,21 @@ One-liner install:
 
 ```bash
 curl -Ls https://raw.githubusercontent.com/SPARKY-CR/sparky-manager/main/install.sh | sudo bash
-# or pinned:  curl -Ls …/install.sh | sudo bash -s -- --version 1.2.0
 ```
 
 `install.sh` outline (idempotent — safe to re-run):
 1. Refuse non-root; detect OS (`Ubuntu 22.04/24.04/26.04`, `Debian 12/13` only;
    anything else → clear error, not a half-install).
-2. `apt-get update`; install `curl, ca-certificates, qrencode?, python3.11+,
-   python3-venv, wireguard, nftables, iproute2, ufw?` (no — use nftables
-   directly; don't fight UFW).
+2. `apt-get update`; install `curl, ca-certificates, git, unzip,
+   python3, python3-venv, python3-pip, wireguard, wireguard-tools,
+   nftables, iproute2, openssl, cron, socat, openvpn, ocserv,
+   strongswan (+ swanctl/pki/plugins)`; AmneziaWG best-effort from its
+   PPA (never breaks the install).
 3. Create `/opt/sparky-manager/{app,data,certs}`, `sparky-manager` system user,
-   `xray`/`sing-box` config dirs; download pinned Xray-core + sing-box
-   release tarballs (verify SHA256 from the release page), place binaries
-   in `/usr/local/bin/`.
+   `xray`/`sing-box` config dirs; download the latest stable Xray-core +
+   sing-box release tarballs (verify SHA256 from the release API when
+   published), place binaries in `/usr/local/bin/`, record versions in
+   `/opt/sparky-manager/versions.env`.
 4. Python venv at `/opt/sparky-manager/venv`, `pip install -r requirements.txt`.
 5. Interactive prompts (with sane defaults, all skippable with flags
    for unattended install): panel port `[random]`, web path
@@ -769,30 +783,32 @@ curl -Ls https://raw.githubusercontent.com/SPARKY-CR/sparky-manager/main/install
   Password: <generated-or-supplied>
   Subscriptions, QR codes and users are inside the panel.
   Reprint this anytime:  sudo sparky-manager info
-  Docs: /opt/sparky-manager/README.md
 ============================================================
 ```
 
 `sparky-manager` CLI (a small wrapper, like `vpn-ui`'s menu but non-interactive
-first): `sparky-manager info | status | restart | update-cores | backup | restore`.
-`backup` = tarball of `/opt/sparky-manager/data/` + both `config.json` files
-(DB is the source of truth, so restoring the DB + re-rendering is enough).
+first): `sparky-manager info | status | restart | backup` (`update-cores`
+exists but exits 2, deliberately unimplemented — re-run install.sh to
+update the cores). There is no CLI `restore` — restore is done from the
+panel's settings page. `backup` = tarball of `/opt/sparky-manager/data/`
++ both `config.json` files (DB is the source of truth, so restoring the
+DB + re-rendering is enough).
 
 ---
 
 ## 9. Phases — what ships when
 
 ### Phase 1 — MVP (build this first)
-- FastAPI + SQLite + Persian RTL UI; fixed-port install, printed login box.
+- FastAPI + SQLite + Persian RTL UI; randomised-port install, printed login box.
 - **Xray:** VLESS (Reality + WS/TLS + XHTTP), VMess, Trojan, Shadowsocks 2022,
-  Hysteria2 (if the pinned Xray ships it, else sing-box).
-- **sing-box:** TUIC, AnyTLS, Naive, ShadowTLS (+ inner SS).
+  Hysteria2 (both cores ship it — the inbound's `core` field decides).
+- **sing-box:** TUIC, AnyTLS, Naive, ShadowTLS (+ inner SS), Hysteria2.
 - **WireGuard** native (keys, `wg0.conf`, `wg show` accounting, `.conf` + QR export).
 - Users: quota, expiry, enable/disable, per-user subscription token.
 - **Dual subscription:** v2rayNG base64 + sing-box JSON, UA sniffing,
   `?format=` override, `Subscription-Userinfo` header; per-user page with
   QR codes + single links; token rotation.
-- Traffic: Xray gRPC + `wg show` + nftables-per-port for sing-box;
+- Traffic: Xray gRPC + `wg show` (sing-box traffic uncollected — no stats API);
   dashboard totals + per-user used/remaining + expiry countdown.
 - IKEv2: native strongSwan since v1.2.0 (EAP-MSCHAPv2 + server cert,
   `.mobileconfig` export); OpenVPN + OpenConnect since v1.2.0;
@@ -806,12 +822,12 @@ first): `sparky-manager info | status | restart | update-cores | backup | restor
 - ~~OpenVPN (daemon + `.ovpn` export) and OpenConnect/ocserv.~~ Done in v1.2.0.
 - ~~AmneziaWG — **only** when the installer can verify the kernel module
   builds on that host; otherwise it stays unavailable with a clear reason.~~ Done in v1.2.0 (gated: the panel reports honestly when the tools are missing).
-- Zero-downtime user add/remove (Xray gRPC `AddUser`/`RemoveUser`).
-- Bulk operations (traffic/days/enable/delete) + Freeze.
-- Clash/Mihomo YAML subscription format.
-- Optional second admin (read-only role).
+- Zero-downtime user add/remove (Xray gRPC `AddUser`/`RemoveUser`) — NOT done; re-render still restarts the affected core.
+- Bulk operations (traffic/days/enable/delete) + Freeze. Done (expansion Phase 2).
+- Clash/Mihomo YAML subscription format — NOT done.
+- Optional second admin (read-only role) — NOT done.
 - ~~Native IKEv2 (strongSwan) support.~~ Done in v1.2.0.
-- Telegram-bot hook — only if James asks.
+- Telegram-bot hook — only if Morteza asks.
 
 ### Phase 3 (only if asked)
 - Tor obfs4 bridge (separate daemon + bridge-line distribution).
@@ -836,11 +852,12 @@ sparky-manager/
 ├── requirements.txt           # pinned Python deps
 ├── .github/workflows/ci.yml   # pytest + shellcheck + config golden tests
 ├── app/
-│   ├── __init__.py
+│   ├── __init__.py            # __version__ = "1.2.0"
 │   ├── main.py                # FastAPI app, routes, startup (sweeper, syncer)
 │   ├── webcommon.py           # shared web plumbing: session/auth/CSRF,
 │   │                          #   settings/audit, templates/redirects (§13)
 │   ├── routes/
+│   │   ├── __init__.py
 │   │   └── users.py           # /users* routes (APIRouter, §13)
 │   ├── config.py              # settings, paths, versions.env
 │   ├── db.py                  # SQLAlchemy engine/session, init
@@ -869,58 +886,84 @@ sparky-manager/
 │   ├── panel_log.py           # rotating file log + redaction
 │   ├── panel_cli.py           # `sparky-manager info/status/restart/update-cores/backup`
 │   ├── templates/             # Jinja2, RTL, Persian-first
-│   │   ├── base.html  dashboard.html  inbounds.html
-│   │   ├── users.html  user_detail.html  settings.html  login.html
+│   │   ├── base.html  dashboard.html  inbounds.html  inbound_edit.html
+│   │   ├── users.html  user_detail.html  user_edit.html
+│   │   ├── settings.html  login.html  logs.html  error.html
 │   └── static/
 │       ├── style.css          # one hand-written stylesheet, no build step
-│       └── app.js             # small vanilla JS (copy link, show QR, confirm dialogs)
+│       ├── app.js             # small vanilla JS (copy link, show QR, confirm dialogs)
+│       └── fonts/             # bundled Vazirmatn woff2 (offline-first)
 ├── scripts/
 │   ├── render_configs.py      # render both cores from DB (used by installer + CLI)
+│   ├── ovpn-auth.py           # OpenVPN username/password auth helper
 │   └── backup.sh
 ├── systemd/
 │   ├── sparky-manager.service
 │   ├── xray.service           # or use the cores' shipped units
 │   └── sing-box.service
-├── tests/
+├── tests/                     # 956 tests (conftest.py: seeded DB + CSRF client)
 │   ├── test_links.py          # link round-trips for all 9 schemes
 │   ├── test_render.py         # golden configs → xray -test / sing-box check
 │   ├── test_subscription.py   # v2rayNG + sing-box feeds parse cleanly
-│   └── test_users.py          # quota/expiry/enable rules (§4)
+│   ├── test_users.py          # quota/expiry/enable rules (§4)
+│   ├── test_security_phase2.py / test_telegram_phase3.py /
+│   │   test_ui_phase4.py      # per-phase upgrade tests
+│   ├── test_xray_stats.py / test_rerender_lock.py /
+│   │   test_config_io.py      # Phase 5 tests
+│   └── test_phase6_*.py / test_links.py
+│                              # Phase 6: security sweep, loops, perf, UI
 └── docs/
     ├── PORTS.md               # §3 port plan
-    └── ZEDSECURE.md           # per-protocol import checklist for ZedSecure
+    ├── ZEDSECURE.md           # per-protocol import checklist for ZedSecure
+    ├── MANUAL_UI_CHECKLIST.md # human visual/mobile check (Phase 6, §14)
+    └── PROFESSIONAL_UPGRADE_REPORT.md  # the upgrade report (Phase 7)
 ```
 
 ---
 
 ## 11. Open questions (answers that would change the design)
 
+Written 2026-11-11; all but Q5 are answered now (noted inline).
+
 1. **Domain?** Do you have a domain for this server? It decides whether
    the TLS inbounds (WS/TLS, TUIC, AnyTLS, Naive, ShadowTLS, Hysteria2)
    and the panel itself get real Let's Encrypt certs, or whether Phase 1
    ships Reality + WireGuard only (no domain needed) and TLS inbounds wait.
+   *Answered: no domain required — the panel works on a bare IP and the
+   installer obtains a free Let's Encrypt IP certificate when TCP 80 is
+   open; a domain entered later unlocks TLS inbounds as an option.*
 2. **Server IP / host?** Needed for the default subscription host and the
    Reality `dest`. Also: is strongSwan/IKEv2 running on the *same* server?
    (If yes, Phase 1 must reserve UDP 500/4500 and avoid port clashes.)
+   *Answered: same server; IKEv2 shipped in v1.2.0 with UDP 500/4500
+   reserved.*
 3. **Hysteria2 core:** prefer Xray (if pinned Xray ≥ 26.1 ships a native
    hysteria inbound) or sing-box? Affects which core owns UDP/443 and
    whether Hysteria2 gets accurate per-user stats (Xray gRPC) or
    nftables-port accounting (sing-box).
+   *Answered: both cores ship Hysteria2 — the inbound's `core` field
+   decides. Xray-served Hysteria2 gets per-user gRPC stats; sing-box
+   traffic is uncollected (§6.4).*
 4. **AmneziaWG now or later?** It needs a kernel-module build that fails
    on some hosts. Phase 2 (recommended) or attempt in Phase 1 with a
    build check that disables it cleanly?
+   *Answered: Phase 2 — shipped in v1.2.0, gated on the kernel module.*
 5. **ZedSecure test device?** Can you install ZedSecure on your phone and
    import the two subscription feeds (v2rayNG + sing-box) to verify them
    against the real app? This is the single most valuable test; link
    formats (especially Naive `naive+https://` and ShadowTLS) vary between
    clients and must be checked against the real importer, not the spec.
+   *Still open — the feeds are verified by parser tests only, not
+   against the real ZedSecure importer.*
 6. **OpenVPN / OpenConnect in Phase 1?** The brief says "ALL methods".
    They are real daemons with their own PKI; putting them in Phase 1
    roughly doubles the installer's scope. Confirm Phase 2 is acceptable,
    or say which of the two matters more.
+   *Answered: Phase 2 — both shipped in v1.2.0.*
 7. **Public repo?** Should sparky-manager be public from day one, or
    private until Phase 1 works?
    (Affects whether the install URL can be the public raw GitHub URL.)
+   *Answered: public from day one (MIT).*
 
 ---
 
@@ -980,8 +1023,9 @@ the UI works offline and with JS disabled (progressive enhancement).
   attribute. Tables without that class keep horizontal scroll.
 - **Verification limit.** No browser or screenshot tooling exists in
   this environment, so the responsive/drawer behavior is verified by
-  rendered-HTML and route tests only (`tests/test_ui_phase4.py`);
-  visual layout still needs a manual check (Phase 6).
+  rendered-HTML and route tests only (`tests/test_ui_phase4.py`,
+  `tests/test_phase6_ui.py`); visual layout still needs a manual
+  check — the checklist is `docs/MANUAL_UI_CHECKLIST.md` (§14).
 
 ---
 
@@ -1000,7 +1044,9 @@ the UI works offline and with JS disabled (progressive enhancement).
   3.11 / 3.12 / 3.14 (the server runs 3.14);
   `app/openconnect.py` guards the removed `crypt` module (the
   `openssl passwd` fallback is the live path on 3.13+).
-- **main.py split (first increment).** `main.py` was 6,262 lines.
+- **main.py split (first increment).** `main.py` was 6,262 lines;
+  after the split it is ~4,550 (4,546 at the end of Phase 7, with the
+  docs-pages flags and dead-import cleanup).
   The i18n dicts moved to `app/i18n.py`, the shared web plumbing
   (session/auth/CSRF, settings/audit, template/redirect helpers,
   link builders, client credential/address helpers, Telegram
@@ -1053,6 +1099,78 @@ the UI works offline and with JS disabled (progressive enhancement).
   reports its result), so a slow core restart delays the response.
   It is NOT moved to a background task — that needs a UX decision
   (progress reporting), not a silent behaviour change.
+
+---
+
+## 14. Testing + verification (professional upgrade, Phase 6, 2026-11-15)
+
+Phase 6 verified the whole upgrade with teeth: 852 → **954 tests**,
+all passing (0 failed, 0 skipped). New suites:
+`tests/test_phase6_security.py` (route-table sweep + unauthenticated
+sweep + session expiry + malicious input), `tests/test_phase6_loops.py`
+(background-loop end-to-end tests), `tests/test_phase6_perf.py`
+(N+1 regression tests with a SQL statement counter),
+`tests/test_phase6_ui.py` (every page renders, every link/asset
+resolves, every form carries a CSRF token, every i18n key exists in
+both languages), plus `tests/test_links.py` (every href/src in every
+template resolves).
+
+- **N+1 fixes (audit Q6), measured with a statement counter.**
+  Dashboard client counts: one grouped COUNT query
+  (`webcommon.clients_count_by_inbound`) instead of one COUNT per
+  inbound (11 seeded inbounds used to mean 11 queries); the
+  dashboard's total statement count is now identical with 11 and
+  with 21 inbounds. Dashboard user loads: one full load instead of
+  three (total, active count and traffic sum all derive from it).
+  Users page: one full load (the expired-ids set derives from the
+  same load instead of re-querying the table). Traffic chart: one
+  query with the 14-day window filtered at the DB level
+  (`traffic_daily.date >= …`) instead of loading all history and
+  discarding it in Python (60 days of history still yields a
+  14-day total). Static assets are bounded by test: style.css
+  ≤ 100 KB, app.js ≤ 50 KB, bundled fonts ≤ 500 KB total.
+- **Installer renderer dropped `user_id` (Phase 6 finding).**
+  `scripts/render_configs.py` built the client dicts without
+  `user_id`, so the Xray renderer could not build the Stats API
+  email (`user-<id>@sparky.local`) for installer-rendered configs —
+  Xray could not attribute traffic per user on the installer path.
+  Fixed: the client dict now carries `user_id`.
+- **Privileged-command argv was logged raw (Phase 6 finding).**
+  `_run_privileged`'s docstring promised every invocation is logged
+  through the redactor, but only the output tail was redacted — the
+  argv itself (which can contain config paths and, in future, secrets)
+  was logged verbatim. Fixed: argv goes through `_redact` on both
+  the success and failure paths. No current call passes secrets in
+  argv; the fix is defense-in-depth.
+- **Security sweep (tests, not just review).** Route-table
+  introspection asserts every POST route carries `require_csrf`
+  (except the two documented exemptions) and every GET route is
+  either public-by-design or guarded by `require_admin`; an
+  unauthenticated sweep hits every admin page and POST and proves
+  the redirect AND that no state changed; expired and forged
+  sessions are rejected; SQL-injection strings and XSS payloads in
+  text fields are stored safely and rendered escaped; path-traversal
+  and command-injection attempts in restore/upload fields are
+  rejected; the Telegram stranger tests (Phase 3) cover the new
+  service-restart and backup callbacks.
+- **Loop tests.** The traffic sync loop end-to-end: mocked Xray
+  stats reach `traffic_daily`, limits trigger, a malformed stats
+  response is ignored, and a dead API leaves the DB untouched; the
+  sweeper survives a render failure.
+- **Manual UI checklist.** Automation verifies the HTML, not how it
+  looks — there is no browser or screenshot tooling in the build
+  environment. `docs/MANUAL_UI_CHECKLIST.md` is the human half:
+  work through it on a real deployment (desktop + phone, portrait
+  and landscape) before calling the upgrade done.
+- **Auto-generated API docs (Phase 6 LOW finding, fixed in Phase 7).**
+  `/docs`, `/redoc` and `/openapi.json` returned 200
+  unauthenticated — and with a secret web path set, the ROOT app
+  served them at the root, outside the web path. The panel is a
+  private admin tool: the docs pages are disabled on both FastAPI
+  constructors (`docs_url=None, redoc_url=None, openapi_url=None`),
+  with tests asserting 404 on the panel app and on a web-path-mounted
+  root app. The panel's own `/api` endpoints are unaffected (still
+  401 unauthenticated).
 
 ---
 
