@@ -165,6 +165,25 @@ def _move_targets(
         query = query.filter(~Inbound.id.in_(taken))
     return query.order_by(Inbound.tag).all()
 
+def _addable_inbounds(
+    db: Session, user: Any
+) -> list[Any]:
+    """Enabled inbounds the user has no client on yet — any protocol,
+    including shared ones (an inbound other users already use). Only
+    enabled inbounds: a client on a disabled inbound renders nowhere,
+    and new users never get one either (``_create_clients_for_user``
+    skips disabled inbounds)."""
+    taken = {
+        row[0]
+        for row in db.query(Client.inbound_id)
+        .filter(Client.user_id == user.id)
+        .all()
+    }
+    query = db.query(Inbound).filter(Inbound.enabled.is_(True))
+    if taken:
+        query = query.filter(~Inbound.id.in_(taken))
+    return query.order_by(Inbound.tag).all()
+
 def _user_client_rows(
     db: Session, user: Any, *, with_moves: bool = True
 ) -> list[dict[str, Any]]:
@@ -503,6 +522,7 @@ def user_detail(
                 "clients": clients,
                 "inbounds": inbounds,
                 "client_extra": client_extra,
+                "addable_inbounds": _addable_inbounds(db, user),
                 "frozen": frozen,
                 "links": links,
                 "links_available": True,
@@ -579,6 +599,110 @@ def rotate_token(
     logger.info("subscription token rotated for %s", user.name)
     # No core re-render needed: the subscription token is not in core configs.
     return _redirect(f"/users/{user_id}", request)
+
+
+@router.post("/users/{user_id}/add-inbound")
+def add_user_to_inbound(
+    request: Request,
+    user_id: int,
+    inbound_id: str = Form(""),
+    admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
+    db: Session = Depends(db_session),
+):
+    """Add an existing user to another inbound (any protocol,
+    including shared ones). The client is created by the same
+    ``_create_clients_for_user`` new users go through — fresh
+    credentials for the inbound's protocol, WireGuard/AmneziaWG
+    address from the inbound's subnet — restricted to the one
+    inbound. The (user, inbound) uniqueness rule is enforced by
+    the picker and re-checked here."""
+    t = t_for(get_lang(request))
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    try:
+        target_id = int((inbound_id or "").strip())
+    except ValueError:
+        return _redirect(f"/users/{user_id}", request, err=t["invalid_inbound"])
+    target = db.get(Inbound, target_id)
+    if target is None or not target.enabled:
+        return _redirect(f"/users/{user_id}", request, err=t["invalid_inbound"])
+    existing = (
+        db.query(Client)
+        .filter(Client.user_id == user.id, Client.inbound_id == target.id)
+        .first()
+    )
+    if existing is not None:
+        return _redirect(f"/users/{user_id}", request, err=t["already_on_inbound"])
+    # Pre-check the WG/AWG address pool (mirrors the move flow): a
+    # full pool fails before any write, instead of creating a client
+    # with no allowed_ips.
+    if target.protocol in ("wireguard", "amneziawg"):
+        subnet = (target.stream or {}).get("subnet") or (
+            "10.8.0.0/24" if target.protocol == "wireguard" else "10.8.1.0/24"
+        )
+        try:
+            if target.protocol == "wireguard":
+                _next_wg_address(db, subnet, inbound_id=target.id)
+            else:
+                _next_awg_address(db, subnet, inbound_id=target.id)
+        except ValueError:
+            return _redirect(
+                f"/users/{user_id}",
+                request,
+                err=t["add_inbound_address_exhausted"],
+            )
+    _create_clients_for_user(db, user, inbound_ids={target.id})
+    _audit(db, admin.id, "user.add_inbound", f"{user.name} -> {target.tag}")
+    logger.info("user added to inbound: %s -> %s", user.name, target.tag)
+    errors = rerender_configs(db)
+    err = (t["rerender_failed"] + "; ".join(errors)) if errors else ""
+    return _redirect(
+        f"/users/{user_id}", request, msg=t["user_inbound_added"], err=err
+    )
+
+
+@router.post("/users/{user_id}/detach/{client_id}")
+def detach_user_from_inbound(
+    request: Request,
+    user_id: int,
+    client_id: int,
+    admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
+    db: Session = Depends(db_session),
+):
+    """Detach the user from ONE inbound (delete just that client).
+
+    The last client may be detached too: zero-client users are
+    already a normal state in the codebase (fresh installs start
+    with no inbounds, so a new user has zero clients; deleting an
+    inbound deletes its clients, which can leave users at zero),
+    both pages render that state, and add-to-inbound makes the
+    detach fully reversible. The confirmation dialog carries a
+    distinct warning when it is the last client."""
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    client = (
+        db.query(Client)
+        .filter(Client.id == client_id, Client.user_id == user.id)
+        .first()
+    )
+    if client is None:
+        raise HTTPException(status_code=404, detail="client not found")
+    inbound = db.get(Inbound, client.inbound_id)
+    tag = inbound.tag if inbound is not None else str(client.inbound_id)
+    db.delete(client)
+    db.commit()
+    _audit(db, admin.id, "user.detach_inbound", f"{user.name} from {tag}")
+    logger.info("user detached from inbound: %s from %s", user.name, tag)
+    errors = rerender_configs(db)
+    t = t_for(get_lang(request))
+    err = (t["rerender_failed"] + "; ".join(errors)) if errors else ""
+    return _redirect(
+        f"/users/{user_id}", request, msg=t["user_inbound_detached"], err=err
+    )
 
 
 @router.get("/users/{user_id}/edit", response_class=HTMLResponse)

@@ -66,12 +66,14 @@
             </td>
             <td data-label="{{ t.ip_limit }}">
               <input type="number" name="ip_limit_{{ c.id }}" min="0" max="1000" value="{{ values["ip_limit_" ~ c.id] }}" dir="ltr">
+              <p class="field-hint">{{ t.ip_limit_hint }}</p>
             </td>
             <td data-label="{{ t.frozen }}">
               <label class="check-label">
                 <input type="checkbox" name="frozen_{{ c.id }}" {% if values["frozen_" ~ c.id] %}checked{% endif %}>
                 {{ t.freeze }}
               </label>
+              <p class="field-hint">{{ t.freeze_hint }}</p>
             </td>
             <td data-label="{{ t.move_to }}">
               {% if row.move_targets %}
@@ -81,8 +83,9 @@
                 <option value="{{ target.id }}" {% if values["move_" ~ c.id] == target.id|string %}selected{% endif %}>{{ target.tag }} :{{ target.port }}</option>
                 {% endfor %}
               </select>
+              <p class="field-hint">{{ t.move_hint }}</p>
               {% else %}
-              —
+              <p class="field-hint">{{ t.move_no_targets }}</p>
               {% endif %}
             </td>
           </tr>
@@ -90,9 +93,6 @@
         </tbody>
       </table>
     </div>
-    <p class="field-hint">{{ t.ip_limit_hint }}</p>
-    <p class="field-hint">{{ t.move_hint }}</p>
-    <p class="field-hint">{{ t.freeze_hint }}</p>
     {% else %}
     <p class="muted">{{ t.no_clients }}</p>
     {% endif %}

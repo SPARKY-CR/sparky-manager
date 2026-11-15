@@ -132,7 +132,7 @@
     <div class="table-wrap">
       <table class="table-cards">
         <thead>
-          <tr><th>{{ t.inbounds }}</th><th>{{ t.protocol }}</th><th>{{ t.flow }}</th><th>{{ t.ip_limit }}</th><th>{{ t.status }}</th></tr>
+          <tr><th>{{ t.inbounds }}</th><th>{{ t.protocol }}</th><th>{{ t.flow }}</th><th>{{ t.ip_limit }}</th><th>{{ t.status }}</th><th>{{ t.actions }}</th></tr>
         </thead>
         <tbody>
           {% for c in clients %}
@@ -146,11 +146,44 @@
               <span class="badge {{ 'badge-ok' if c.enabled else 'badge-off' }}">{{ t.enabled if c.enabled else t.disabled }}</span>
               {% if extra is not none and extra["frozen"] %}<span class="badge badge-warn">{{ t.frozen }}</span>{% endif %}
             </td>
+            <td data-label="{{ t.actions }}">
+              <form method="post" action="{{ base_path }}/users/{{ user.id }}/detach/{{ c.id }}" class="inline-form" data-confirm="{{ t.confirm_detach_last if clients|length == 1 else t.confirm_detach }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="btn btn-small btn-danger">{{ t.detach }}</button>
+              </form>
+            </td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
+  </div>
+  {% endif %}
+
+  {% if not public %}
+  <div class="card">
+    <h2>{{ t.add_to_inbound }}</h2>
+    {% if addable_inbounds %}
+    <form method="post" action="{{ base_path }}/users/{{ user.id }}/add-inbound">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="field-grid">
+        <label>
+          {{ t.inbounds }}
+          <select name="inbound_id" dir="ltr">
+            {% for i in addable_inbounds %}
+            <option value="{{ i.id }}">{{ i.tag }} — {{ i.protocol }} :{{ i.port }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <p class="field-hint">{{ t.add_inbound_hint }}</p>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">{{ t.add_to_inbound }}</button>
+      </div>
+    </form>
+    {% else %}
+    <p class="muted">{{ t.add_inbound_none }}</p>
+    {% endif %}
   </div>
   {% endif %}
 {% endif %}

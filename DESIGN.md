@@ -900,7 +900,7 @@ sparky-manager/
 │   ├── sparky-manager.service
 │   ├── xray.service           # or use the cores' shipped units
 │   └── sing-box.service
-├── tests/                     # 1130 tests (conftest.py: seeded DB + CSRF client)
+├── tests/                     # 1152 tests (conftest.py: seeded DB + CSRF client)
 │   ├── test_links.py          # link round-trips for all 9 schemes
 │   ├── test_render.py         # golden configs → xray -test / sing-box check
 │   ├── test_subscription.py   # v2rayNG + sing-box feeds parse cleanly
@@ -1178,7 +1178,7 @@ found live issues and asked for a complete check of the project.
 `main.py` is 4,922 lines at this point (4,546 at the end of Phase 7;
 the post-upgrade batches added routes, diagnostics, the webhook
 set-on-save path, the Cores page and the bot UX work). The full suite
-is 1130 tests; i18n parity is 514 keys each.
+is 1152 tests; i18n parity is 526 keys each.
 
 - **Fix batch (evening, after the server upgrade).** The language
   toggle reverted on navigation (the `lang` cookie was only set on
@@ -1275,6 +1275,30 @@ is 1130 tests; i18n parity is 514 keys each.
   \"See systemctl status ...\" hint is stripped from bot-facing
   errors (not actionable from a chat), and no cut ever lands
   mid-line. And the OpenVPN crash-loop is fixed (see §15.4).
+- **Add user to any inbound + detach (evening).** The web UI had no
+  way to add an EXISTING user to another inbound: new users get one
+  client per enabled inbound, so the gap was only inbounds created
+  after the user (the live case: user "Me" predated the OpenVPN
+  inbound). The user detail page now has an add-to-inbound picker
+  (enabled inbounds the user has no client on, any protocol,
+  including shared ones) and a per-client Detach button with a
+  confirmation step. Adding reuses `_create_clients_for_user`
+  restricted to the one inbound — fresh credentials per protocol,
+  WireGuard/AmneziaWG address from the inbound's subnet (the pool
+  is pre-checked, like the move flow). Both actions are
+  CSRF-protected POSTs, audited as `user.add_inbound` /
+  `user.detach_inbound`, and re-render configs afterwards. One
+  client per (user, inbound) stays — the UniqueConstraint is
+  untouched, no migration. Detaching the LAST client is allowed:
+  zero-client users are already a normal state (fresh installs
+  start with no inbounds; deleting an inbound can leave users at
+  zero), both pages render it, and add-to-inbound makes it
+  reversible — but the confirm dialog carries a distinct warning
+  when it is the last client. Edit-page nits fixed alongside: the
+  move dropdown explains itself when no targets exist, and the
+  IP-limit / freeze / move hints now sit under their fields in the
+  table instead of detached at the bottom of the card. Bot
+  add-to-inbound is deliberately out of scope (web only).
 
 ### 15.1 The admin password on re-install (installer trap, fixed)
 
