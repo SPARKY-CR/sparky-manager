@@ -6,7 +6,8 @@ Rules enforced by the backend (not just the UI):
 - A user is usable iff enabled AND not expired AND under its traffic
   limit (see :func:`user_is_usable`); a client is usable iff the
   client, its user and its inbound are all usable (see
-  :func:`client_is_usable`). Renderers omit unusable clients.
+  :func:`client_is_usable`) AND the client is not frozen (see
+  :func:`client_is_frozen`). Renderers omit unusable clients.
 - ``traffic_used_bytes`` is a running total; the traffic syncer adds
   *deltas* only, never overwrites. ``traffic_daily`` is the history.
 - Deleting a user deletes its clients (FK cascade) and regenerates
@@ -320,6 +321,25 @@ def user_is_usable(user: "User", now: Optional[datetime] = None) -> bool:
     return True
 
 
+def client_is_frozen(client: "Client") -> bool:
+    """True when the client's ``extra`` JSON carries ``frozen: true``.
+
+    Freeze is a per-client hold (Phase 2): a frozen client cannot
+    connect — it is omitted from every rendered config, share link
+    and subscription feed — but its credentials, config and traffic
+    history are kept, so unfreezing restores it exactly. Distinct
+    from ``enabled=False`` (admin off-switch) and from delete.
+    Defensive: any unreadable/missing ``extra`` counts as not frozen.
+    """
+    try:
+        extra = client.extra
+    except (AttributeError, TypeError, ValueError):
+        return False
+    if not isinstance(extra, dict):
+        return False
+    return bool(extra.get("frozen"))
+
+
 def client_is_usable(
     client: "Client",
     user: "User",
@@ -327,10 +347,13 @@ def client_is_usable(
     now: Optional[datetime] = None,
 ) -> bool:
     """A client is usable iff its own flag, its user and its inbound
-    are all usable (DESIGN.md §4 rule, applied to the triple)."""
+    are all usable (DESIGN.md §4 rule, applied to the triple) AND it
+    is not frozen (Phase 2: ``extra.frozen``)."""
     if not client.enabled:
         return False
     if not inbound.enabled:
+        return False
+    if client_is_frozen(client):
         return False
     return user_is_usable(user, now=now)
 
@@ -348,4 +371,5 @@ __all__ = [
     "generate_sub_token",
     "user_is_usable",
     "client_is_usable",
+    "client_is_frozen",
 ]

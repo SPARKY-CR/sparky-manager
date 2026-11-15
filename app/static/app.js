@@ -43,6 +43,29 @@
     });
   });
 
+  // Same, but per submit button: <button type="submit"
+  // data-confirm="message"> — used by the bulk-delete button, whose
+  // form has other (harmless) actions that need no confirmation.
+  document.querySelectorAll("button[data-confirm]").forEach(function (btn) {
+    btn.addEventListener("click", function (event) {
+      var message = btn.getAttribute("data-confirm") || "Are you sure?";
+      if (!window.confirm(message)) {
+        event.preventDefault();
+      }
+    });
+  });
+
+  // Bulk select-all: the header checkbox toggles every row checkbox
+  // in the users table. Without JS the admin checks rows by hand.
+  var selectAll = document.getElementById("select-all-users");
+  if (selectAll) {
+    selectAll.addEventListener("change", function () {
+      document.querySelectorAll("input[name=\"user_ids\"]").forEach(function (box) {
+        box.checked = selectAll.checked;
+      });
+    });
+  }
+
   // Add-inbound form: an empty port means "auto-generate" — send 0
   // so the server picks a free port instead of failing validation.
   var inboundForm = document.getElementById("add-inbound-form");

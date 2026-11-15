@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %} — {{ t.edit_user }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ t.edit_user }} <span class="chip" dir="ltr">{{ user.name }}</span></h1>
+  <a class="btn btn-small" href="{{ base_path }}/users/{{ user.id }}">{{ t.back_to_user }}</a>
+</div>
+
+<form method="post" action="{{ base_path }}/users/{{ user.id }}/edit" id="edit-user-form">
+  <div class="card form-section">
+    <h2>{{ t.basic_settings }}</h2>
+    <div class="field-grid">
+      <label>
+        {{ t.name }}
+        <input type="text" name="name" pattern="[a-zA-Z0-9_-]+" value="{{ values["name"] }}" required>
+      </label>
+      <label>
+        {{ t.note }}
+        <input type="text" name="note" value="{{ values["note"] }}">
+      </label>
+      <label>
+        {{ t.traffic_limit_gb }}
+        <input type="number" name="traffic_limit_gb" min="0" step="0.1" value="{{ values["traffic_limit_gb"] }}" dir="ltr">
+      </label>
+      <label>
+        {{ t.expiry_date }}
+        <input type="date" name="expires_date" value="{{ values["expires_date"] }}" dir="ltr">
+      </label>
+    </div>
+    <p class="field-hint">{{ t.expiry_date_hint }}</p>
+  </div>
+
+  <div class="card form-section">
+    <h2>{{ t.per_client_settings }}</h2>
+    {% if rows %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>{{ t.inbounds }}</th><th>{{ t.flow }}</th><th>{{ t.ip_limit }}</th>
+            <th>{{ t.frozen }}</th><th>{{ t.move_to }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          {% set c = row.client %}
+          <tr>
+            <td>
+              {{ row.inbound.tag }}
+              <span class="chip" dir="ltr">{{ row.inbound.protocol }}</span>
+            </td>
+            <td>
+              {% if row.flow_options %}
+              {# A single-option select (security=none) still renders: saving
+                 it clears any stale Vision flow the client picked up when
+                 the inbound had TLS/Reality. #}
+              <select name="flow_{{ c.id }}" dir="ltr">
+                {% for opt in row.flow_options %}
+                <option value="{{ opt }}" {% if values["flow_" ~ c.id] == opt %}selected{% endif %}>{{ t.flow_none if opt == "" else opt }}</option>
+                {% endfor %}
+              </select>
+              {% else %}
+              —
+              {% endif %}
+            </td>
+            <td>
+              <input type="number" name="ip_limit_{{ c.id }}" min="0" max="1000" value="{{ values["ip_limit_" ~ c.id] }}" dir="ltr">
+            </td>
+            <td>
+              <label class="check-label">
+                <input type="checkbox" name="frozen_{{ c.id }}" {% if values["frozen_" ~ c.id] %}checked{% endif %}>
+                {{ t.freeze }}
+              </label>
+            </td>
+            <td>
+              {% if row.move_targets %}
+              <select name="move_{{ c.id }}" dir="ltr">
+                <option value="">{{ t.keep_inbound }}</option>
+                {% for target in row.move_targets %}
+                <option value="{{ target.id }}" {% if values["move_" ~ c.id] == target.id|string %}selected{% endif %}>{{ target.tag }} :{{ target.port }}</option>
+                {% endfor %}
+              </select>
+              {% else %}
+              —
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="field-hint">{{ t.ip_limit_hint }}</p>
+    <p class="field-hint">{{ t.move_hint }}</p>
+    <p class="field-hint">{{ t.freeze_hint }}</p>
+    {% else %}
+    <p class="muted">{{ t.no_clients }}</p>
+    {% endif %}
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">{{ t.save }}</button>
+    <a class="btn" href="{{ base_path }}/users/{{ user.id }}">{{ t.back_to_user }}</a>
+  </div>
+</form>
+{% endblock %}

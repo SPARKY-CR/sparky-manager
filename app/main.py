@@ -161,14 +161,20 @@ try:
         User,
     )
     try:
-        from app.models import client_is_usable, user_is_usable
+        from app.models import (
+            client_is_frozen,
+            client_is_usable,
+            user_is_usable,
+        )
     except ImportError:
         client_is_usable = None  # type: ignore[assignment]
+        client_is_frozen = None  # type: ignore[assignment]
         user_is_usable = None  # type: ignore[assignment]
 except ImportError:  # pragma: no cover
     models = None  # type: ignore[assignment]
     Admin = AuditLog = Client = Inbound = Setting = TrafficDaily = User = None  # type: ignore[assignment]
     client_is_usable = None  # type: ignore[assignment]
+    client_is_frozen = None  # type: ignore[assignment]
     user_is_usable = None  # type: ignore[assignment]
     logger.warning("app.models not available yet")
 
@@ -525,6 +531,50 @@ STRINGS: dict[str, dict[str, str]] = {
         "reality_regenerated": "کلیدهای Reality تازه ساخته شدند.",
         "awg_params_regenerated": "پارامترهای آمنزیا تازه ساخته شدند.",
         "server_key_regenerated": "کلید سرور تازه ساخته شد — کاربرها باید کانفیگ جدید بگیرند.",
+        # User editor (Phase 2 of the professional-panel expansion).
+        "edit_user": "ویرایش کاربر",
+        "back_to_user": "بازگشت به کاربر",
+        "expiry_date": "تاریخ انقضا (خالی = بدون انقضا)",
+        "expiry_date_hint": "تاریخ به وقت UTC است و کاربر تا پایان همان روز معتبر می‌ماند.",
+        "flow": "Flow (XTLS)",
+        "flow_none": "بدون Flow",
+        "ip_limit": "سقف آی‌پی هم‌زمان",
+        "ip_limit_hint": "خالی یا صفر یعنی نامحدود. فعلاً فقط ذخیره و نمایش داده می‌شود — پنل راهی برای دیدن آی‌پی‌های متصل ندارد و سقف را اعمال نمی‌کند.",
+        "frozen": "فریز شده",
+        "freeze": "فریز",
+        "unfreeze": "آزاد کردن فریز",
+        "freeze_hint": "کاربر فریز شده نمی‌تواند وصل شود، ولی کانفیگ و سابقهٔ ترافیکش حفظ می‌شود.",
+        "move_to": "انتقال به اینباند",
+        "keep_inbound": "— همین اینباند —",
+        "move_hint": "فقط اینباندهای هم‌پروتکل که کاربر در آن‌ها کلاینت ندارد. برای وایرگارد/آمنزیا آدرس جدید از ساب‌نت مقصد گرفته می‌شود.",
+        "per_client_settings": "تنظیمات هر کلاینت",
+        "no_clients": "این کاربر کلاینتی ندارد.",
+        "bulk_actions": "عملیات گروهی",
+        "bulk_enable": "فعال‌کردن انتخاب‌شده‌ها",
+        "bulk_disable": "غیرفعال‌کردن انتخاب‌شده‌ها",
+        "bulk_delete": "حذف انتخاب‌شده‌ها",
+        "bulk_reset_traffic": "صفر کردن ترافیک انتخاب‌شده‌ها",
+        "bulk_extend_expiry": "تمدید انقضا",
+        "extend_days": "تمدید (روز)",
+        "extend_days_hint": "به انقضای فعلی اضافه می‌شود؛ برای کاربر بدون انقضا از امروز حساب می‌شود.",
+        "reset_traffic": "صفر کردن ترافیک",
+        "no_users_selected": "هیچ کاربری انتخاب نشده است.",
+        "invalid_action": "عملیات انتخاب‌شده معتبر نیست.",
+        "invalid_extend_days": "روزهای تمدید باید بین ۱ تا ۳۶۵۰ باشد.",
+        "invalid_expiry_date": "تاریخ انقضا معتبر نیست (قالب: YYYY-MM-DD).",
+        "invalid_ip_limit": "سقف آی‌پی باید بین ۱ تا ۱۰۰۰ باشد (خالی = نامحدود).",
+        "invalid_flow": "Flow انتخاب‌شده معتبر نیست.",
+        "flow_needs_tls": "Flow فقط با TLS یا Reality کار می‌کند.",
+        "flow_needs_vision": "برای اینباند Reality باید یک Flow از نوع Vision انتخاب شود.",
+        "move_invalid_target": "اینباند مقصد برای انتقال معتبر نیست.",
+        "move_address_exhausted": "در ساب‌نت اینباند مقصد آدرس آزاد نیست.",
+        "user_updated": "کاربر به‌روز شد.",
+        "user_frozen": "کاربر فریز شد — کلاینت‌هایش از کانفیگ‌ها حذف شدند.",
+        "user_unfrozen": "فریز کاربر برداشته شد.",
+        "bulk_done": "عملیات گروهی انجام شد.",
+        "confirm_bulk_delete": "کاربران انتخاب‌شده حذف شوند؟ این عمل قابل بازگشت نیست.",
+        "select_all": "انتخاب همه",
+        "traffic_reset_hint": "فقط شمارندهٔ ترافیک صفر می‌شود؛ سابقهٔ روزانه حفظ می‌شود.",
     },
     "en": {
         "app_name": "Sparky Manager",
@@ -715,6 +765,50 @@ STRINGS: dict[str, dict[str, str]] = {
         "reality_regenerated": "Reality keys regenerated.",
         "awg_params_regenerated": "AmneziaWG parameters regenerated.",
         "server_key_regenerated": "Server key regenerated — users must re-fetch their configs.",
+        # User editor (Phase 2 of the professional-panel expansion).
+        "edit_user": "Edit user",
+        "back_to_user": "Back to user",
+        "expiry_date": "Expiry date (empty = never)",
+        "expiry_date_hint": "The date is UTC; the user stays valid through the end of that day.",
+        "flow": "Flow (XTLS)",
+        "flow_none": "No flow",
+        "ip_limit": "Concurrent IP limit",
+        "ip_limit_hint": "Empty or 0 means unlimited. Stored and shown only for now — the panel has no way to see connected IPs, so the limit is not enforced.",
+        "frozen": "Frozen",
+        "freeze": "Freeze",
+        "unfreeze": "Unfreeze",
+        "freeze_hint": "A frozen user cannot connect, but keeps configs and traffic history.",
+        "move_to": "Move to inbound",
+        "keep_inbound": "— keep this inbound —",
+        "move_hint": "Only same-protocol inbounds without a client for this user. WireGuard/AmneziaWG get a fresh address from the target subnet.",
+        "per_client_settings": "Per-client settings",
+        "no_clients": "This user has no clients.",
+        "bulk_actions": "Bulk actions",
+        "bulk_enable": "Enable selected",
+        "bulk_disable": "Disable selected",
+        "bulk_delete": "Delete selected",
+        "bulk_reset_traffic": "Reset traffic of selected",
+        "bulk_extend_expiry": "Extend expiry",
+        "extend_days": "Extend (days)",
+        "extend_days_hint": "Added to the current expiry; for users without expiry it counts from today.",
+        "reset_traffic": "Reset traffic",
+        "no_users_selected": "No users selected.",
+        "invalid_action": "Invalid bulk action.",
+        "invalid_extend_days": "Extension days must be between 1 and 3650.",
+        "invalid_expiry_date": "Invalid expiry date (format: YYYY-MM-DD).",
+        "invalid_ip_limit": "IP limit must be between 1 and 1000 (empty = unlimited).",
+        "invalid_flow": "Invalid flow selection.",
+        "flow_needs_tls": "Flow only works with TLS or Reality.",
+        "flow_needs_vision": "A Reality inbound needs a Vision flow.",
+        "move_invalid_target": "Invalid move target inbound.",
+        "move_address_exhausted": "No free address in the target inbound's subnet.",
+        "user_updated": "User updated.",
+        "user_frozen": "User frozen — clients removed from configs.",
+        "user_unfrozen": "User unfrozen.",
+        "bulk_done": "Bulk action completed.",
+        "confirm_bulk_delete": "Delete the selected users? This cannot be undone.",
+        "select_all": "Select all",
+        "traffic_reset_hint": "Only the traffic counter is reset; daily history is kept.",
     },
 }
 
@@ -2861,6 +2955,12 @@ def _render_inbound_edit(
             "error": error,
             "msg": msg,
             "lang": get_lang(request),
+            # base_path is the web prefix (WEB_PATH): without it the
+            # edit form and links render unprefixed and 404 on a
+            # server served under a sub-path (every other page gets
+            # it via _template_ctx; this helper builds its context
+            # by hand, so it must include it explicitly).
+            "base_path": WEB_PATH,
         },
     )
 
@@ -3233,6 +3333,255 @@ def dashboard(
 
 
 # ---------------------------------------------------------------------------
+# User editor helpers (Phase 2 of the professional-panel expansion)
+# ---------------------------------------------------------------------------
+
+# XTLS flows Xray accepts for VLESS clients. Vision needs TLS or
+# Reality; the "-udp443" variant additionally serves QUIC on 443.
+VLESS_FLOWS = ("xtls-rprx-vision", "xtls-rprx-vision-udp443")
+
+# Bounds for the per-client IP limit and bulk expiry extension.
+IP_LIMIT_MAX = 1000
+EXTEND_DAYS_MAX = 3650
+
+
+def _parse_expiry_date(value: str) -> Optional[datetime]:
+    """``YYYY-MM-DD`` -> end of that day (23:59:59 UTC), or ``None``
+    for an empty value (never expires). Raises ``ValueError`` on a
+    malformed date. A past date is allowed — it expires the user
+    immediately, which is a legitimate admin action."""
+    text = (value or "").strip()
+    if not text:
+        return None
+    parsed = datetime.strptime(text, "%Y-%m-%d")
+    return parsed.replace(
+        hour=23, minute=59, second=59, tzinfo=timezone.utc
+    )
+
+
+def _parse_ip_limit(value: str) -> Optional[int]:
+    """Per-client IP limit: empty or ``0`` means unlimited (``None``);
+    otherwise an int in ``1..IP_LIMIT_MAX``. Raises ``ValueError``."""
+    text = (value or "").strip()
+    if not text:
+        return None
+    limit = int(text)
+    if limit == 0:
+        return None
+    if not 1 <= limit <= IP_LIMIT_MAX:
+        raise ValueError("ip limit out of range")
+    return limit
+
+
+def _set_client_extra(client: Any, key: str, value: Any) -> None:
+    """Set (or, for ``None``, remove) one key in a client's ``extra``
+    JSON. Read-modify-write through the model property so other keys
+    (e.g. ``allowed_ips``) are preserved."""
+    extra = dict(getattr(client, "extra", None) or {})
+    if value is None:
+        extra.pop(key, None)
+    else:
+        extra[key] = value
+    client.extra = extra
+
+
+def _set_client_frozen(client: Any, frozen: bool) -> None:
+    """Freeze/unfreeze one client (``extra.frozen``). A frozen client
+    is unusable (see :func:`app.models.client_is_frozen`) but keeps
+    its credentials, config and traffic history."""
+    _set_client_extra(client, "frozen", True if frozen else None)
+
+
+def _client_is_frozen(client: Any) -> bool:
+    """Frozen flag for one client (model helper when available, else
+    a direct ``extra`` read — same rule either way)."""
+    if client_is_frozen is not None:
+        try:
+            return bool(client_is_frozen(client))
+        except (TypeError, AttributeError, ValueError):
+            pass
+    extra = getattr(client, "extra", None) or {}
+    return bool(extra.get("frozen")) if isinstance(extra, dict) else False
+
+
+def _client_flow_options(inbound: Any) -> list[str]:
+    """Allowed ``flow`` values for a client of ``inbound``.
+
+    Flow is VLESS-only (VMess has no flow). Vision needs TLS or
+    Reality, so a security=``none`` inbound offers only ``""``
+    (no flow) — saving the edit page then clears any stale Vision
+    value a client picked up when the inbound had TLS/Reality.
+    A Reality inbound offers only the Vision variants: the Xray
+    renderer defaults an empty flow to ``xtls-rprx-vision`` for
+    Reality (``app/xray.py``), so offering "none" there would render
+    Vision on the server while the share link carried no flow — a
+    client that can never connect.
+    """
+    if getattr(inbound, "protocol", None) != "vless":
+        return []
+    stream = getattr(inbound, "stream", None) or {}
+    security = (stream.get("security") or "none") if isinstance(stream, dict) else "none"
+    if security == "reality":
+        return list(VLESS_FLOWS)
+    if security == "tls":
+        return ["", *VLESS_FLOWS]
+    return [""]
+
+
+def _move_targets(
+    db: Session, user: Any, client: Any
+) -> list[Any]:
+    """Inbounds a client may move to: same protocol as its current
+    inbound, enabled, not the current one, and without an existing
+    client for this user (``UNIQUE(user_id, inbound_id)``)."""
+    current = db.get(Inbound, client.inbound_id)
+    if current is None:
+        return []
+    taken = {
+        row[0]
+        for row in db.query(Client.inbound_id)
+        .filter(Client.user_id == user.id)
+        .all()
+    }
+    query = (
+        db.query(Inbound)
+        .filter(
+            Inbound.protocol == current.protocol,
+            Inbound.enabled.is_(True),
+            Inbound.id != current.id,
+        )
+    )
+    if taken:
+        query = query.filter(~Inbound.id.in_(taken))
+    return query.order_by(Inbound.tag).all()
+
+
+def _user_client_rows(
+    db: Session, user: Any, *, with_moves: bool = True
+) -> list[dict[str, Any]]:
+    """One row per client of ``user`` for the edit/detail pages:
+    the client, its inbound, its flow options, its move targets
+    (skipped when ``with_moves`` is False — the detail page does
+    not need them), and its frozen / IP-limit state (from ``extra``).
+    """
+    clients = (
+        db.query(Client)
+        .filter(Client.user_id == user.id)
+        .order_by(Client.inbound_id)
+        .all()
+    )
+    inbounds = {i.id: i for i in db.query(Inbound).all()}
+    rows: list[dict[str, Any]] = []
+    for client in clients:
+        inbound = inbounds.get(client.inbound_id)
+        if inbound is None:
+            continue
+        extra = getattr(client, "extra", None) or {}
+        rows.append(
+            {
+                "client": client,
+                "inbound": inbound,
+                "flow_options": _client_flow_options(inbound),
+                "move_targets": (
+                    _move_targets(db, user, client) if with_moves else []
+                ),
+                "frozen": _client_is_frozen(client),
+                "ip_limit": extra.get("ip_limit")
+                if isinstance(extra, dict)
+                else None,
+            }
+        )
+    return rows
+
+
+def _user_edit_values(
+    user: Any, rows: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Pre-filled values for the user edit form (user fields + one
+    set of per-client fields per row, keyed ``flow_<id>`` /
+    ``ip_limit_<id>`` / ``frozen_<id>`` / ``move_<id>``)."""
+    limit_gb = ""
+    if user.traffic_limit_bytes:
+        limit_gb = str(round(user.traffic_limit_bytes / 1024**3, 2))
+    values: dict[str, Any] = {
+        "name": user.name,
+        "note": user.note or "",
+        "traffic_limit_gb": limit_gb,
+        "expires_date": (
+            user.expires_at.strftime("%Y-%m-%d") if user.expires_at else ""
+        ),
+    }
+    for row in rows:
+        client = row["client"]
+        cid = client.id
+        flow = getattr(client, "flow", None) or ""
+        # The form only offers the flow options valid for this
+        # inbound; a stale value outside them shows as the first
+        # option (and is corrected on save).
+        if row["flow_options"] and flow not in row["flow_options"]:
+            flow = row["flow_options"][0]
+        values[f"flow_{cid}"] = flow
+        values[f"ip_limit_{cid}"] = (
+            "" if row["ip_limit"] is None else str(row["ip_limit"])
+        )
+        values[f"frozen_{cid}"] = bool(row["frozen"])
+        values[f"move_{cid}"] = ""
+    return values
+
+
+def _render_user_edit(
+    request: Request,
+    user: Any,
+    values: dict[str, Any],
+    rows: list[dict[str, Any]],
+    *,
+    error: str | None = None,
+    db: Session,
+) -> HTMLResponse:
+    """Render the user edit page (GET and POST-error re-render)."""
+    return templates.TemplateResponse(
+        request,
+        "user_edit.html",
+        _template_ctx(
+            request,
+            {
+                "user": user,
+                "values": values,
+                "rows": rows,
+                "error": error or "",
+            },
+        ),
+    )
+
+
+def _apply_client_move(
+    db: Session, client: Any, target: Any
+) -> Optional[str]:
+    """Move ``client`` to ``target`` (same protocol, pre-validated).
+
+    Credentials stay; WireGuard/AmneziaWG get a fresh address from
+    the target subnet (the old address belongs to the old subnet's
+    pool). Traffic history is per-user, so it is untouched. Returns
+    an error string, or ``None`` on success. Does not commit.
+    """
+    protocol = target.protocol
+    if protocol in ("wireguard", "amneziawg"):
+        subnet = (target.stream or {}).get("subnet") or (
+            "10.8.0.0/24" if protocol == "wireguard" else "10.8.1.0/24"
+        )
+        try:
+            if protocol == "wireguard":
+                address = _next_wg_address(db, subnet, inbound_id=target.id)
+            else:
+                address = _next_awg_address(db, subnet, inbound_id=target.id)
+        except ValueError:
+            return "move_address_exhausted"
+        _set_client_extra(client, "allowed_ips", address)
+    client.inbound_id = target.id
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Users (HTML)
 # ---------------------------------------------------------------------------
 
@@ -3323,6 +3672,17 @@ def user_detail(
         .all()
     )
     inbounds = {i.id: i for i in db.query(Inbound).all()}
+    # Phase 2: frozen / IP-limit state per client (from `extra`) and
+    # the user-level frozen flag (all clients frozen).
+    rows = _user_client_rows(db, user, with_moves=False)
+    client_extra = {
+        row["client"].id: {
+            "frozen": row["frozen"],
+            "ip_limit": row["ip_limit"],
+        }
+        for row in rows
+    }
+    frozen = bool(rows) and all(row["frozen"] for row in rows)
     return templates.TemplateResponse(request, "user_detail.html",
         _template_ctx(
             request,
@@ -3331,6 +3691,8 @@ def user_detail(
                 "user": user,
                 "clients": clients,
                 "inbounds": inbounds,
+                "client_extra": client_extra,
+                "frozen": frozen,
                 "links": links,
                 "links_available": links_mod is not None,
                 "sub_url": f"{base}/sub/{user.sub_token}",
@@ -3401,6 +3763,287 @@ def rotate_token(
     logger.info("subscription token rotated for %s", user.name)
     # No core re-render needed: the subscription token is not in core configs.
     return _redirect(f"/users/{user_id}", request)
+
+
+@app.get("/users/{user_id}/edit", response_class=HTMLResponse)
+def edit_user_page(
+    request: Request,
+    user_id: int,
+    admin: Any = Depends(require_admin),
+    db: Session = Depends(db_session),
+):
+    """Pre-filled edit page for one user (Phase 2)."""
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    rows = _user_client_rows(db, user)
+    return _render_user_edit(
+        request, user, _user_edit_values(user, rows), rows, db=db
+    )
+
+
+@app.post("/users/{user_id}/edit")
+async def edit_user_submit(
+    request: Request,
+    user_id: int,
+    admin: Any = Depends(require_admin),
+    db: Session = Depends(db_session),
+):
+    """Validate, save, re-render — two passes so a bad per-client
+    field never leaves a half-saved user.
+
+    On a validation error the edit form is re-rendered (200) with
+    the submitted values preserved, like the inbound editor.
+    """
+    t = t_for(get_lang(request))
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    form = await request.form()
+    data: dict[str, str] = {
+        str(key): str(value) for key, value in form.multi_items()
+        if isinstance(value, str)
+    }
+    rows = _user_client_rows(db, user)
+    values = _user_edit_values(user, rows)
+    # Merge the submitted values over the current ones so a
+    # validation error shows what the admin typed, not the old DB.
+    for key, value in data.items():
+        values[key] = value
+    for row in rows:
+        cid = row["client"].id
+        values[f"frozen_{cid}"] = data.get(f"frozen_{cid}") in ("on", "true", "1")
+
+    def _error(message: str) -> HTMLResponse:
+        return _render_user_edit(
+            request, user, values, rows, error=message, db=db
+        )
+
+    # --- pass 1: validate everything, apply nothing ---
+    name = (data.get("name") or "").strip()
+    if not NAME_RE.match(name):
+        return _error(t["invalid_name"])
+    clash = (
+        db.query(User)
+        .filter(User.name == name, User.id != user.id)
+        .first()
+    )
+    if clash is not None:
+        return _error(t["name_exists"])
+    limit_bytes: Optional[int] = None
+    if (data.get("traffic_limit_gb") or "").strip():
+        try:
+            limit_bytes = int(float(data["traffic_limit_gb"]) * 1024**3)
+            if limit_bytes <= 0:
+                limit_bytes = None
+        except ValueError:
+            return _error(t["traffic_limit_gb"])
+    try:
+        expires_at = _parse_expiry_date(data.get("expires_date") or "")
+    except ValueError:
+        return _error(t["invalid_expiry_date"])
+
+    planned: list[tuple[Any, str, Optional[int], bool, Any]] = []
+    planned_targets: set[int] = set()
+    for row in rows:
+        client = row["client"]
+        cid = client.id
+        # Flow (VLESS only; a field the form did not send leaves the
+        # stored value untouched).
+        flow = getattr(client, "flow", None) or ""
+        options = row["flow_options"]
+        if options and f"flow_{cid}" in data:
+            flow = data[f"flow_{cid}"]
+            if flow not in options:
+                return _error(t["invalid_flow"])
+        # IP limit (a field the form did not send keeps the value).
+        ip_limit: Optional[int] = row["ip_limit"]
+        if f"ip_limit_{cid}" in data:
+            try:
+                ip_limit = _parse_ip_limit(data[f"ip_limit_{cid}"])
+            except ValueError:
+                return _error(t["invalid_ip_limit"])
+        frozen = data.get(f"frozen_{cid}") in ("on", "true", "1")
+        # Move to another compatible inbound.
+        target = None
+        move_raw = (data.get(f"move_{cid}") or "").strip()
+        if move_raw:
+            try:
+                target_id = int(move_raw)
+            except ValueError:
+                return _error(t["move_invalid_target"])
+            allowed = {i.id for i in row["move_targets"]}
+            if target_id not in allowed or target_id in planned_targets:
+                return _error(t["move_invalid_target"])
+            planned_targets.add(target_id)
+            target = db.get(Inbound, target_id)
+            if target is None:  # pragma: no cover - allowed ids exist
+                return _error(t["move_invalid_target"])
+            # Pre-check the WG/AWG address pool so a full pool fails
+            # validation (no partial save) instead of mid-apply.
+            if target.protocol in ("wireguard", "amneziawg"):
+                subnet = (target.stream or {}).get("subnet") or (
+                    "10.8.0.0/24"
+                    if target.protocol == "wireguard"
+                    else "10.8.1.0/24"
+                )
+                try:
+                    if target.protocol == "wireguard":
+                        _next_wg_address(db, subnet, inbound_id=target.id)
+                    else:
+                        _next_awg_address(db, subnet, inbound_id=target.id)
+                except ValueError:
+                    return _error(t["move_address_exhausted"])
+        planned.append((client, flow, ip_limit, frozen, target))
+
+    # --- pass 2: apply ---
+    user.name = name
+    user.note = (data.get("note") or "").strip() or None
+    user.traffic_limit_bytes = limit_bytes
+    user.expires_at = expires_at
+    for client, flow, ip_limit, frozen, target in planned:
+        client.flow = flow or None
+        _set_client_extra(client, "ip_limit", ip_limit)
+        _set_client_frozen(client, frozen)
+        if target is not None:
+            move_err = _apply_client_move(db, client, target)
+            if move_err is not None:  # pre-checked; defence in depth
+                db.rollback()
+                return _error(t[move_err])
+    db.commit()
+    _audit(db, admin.id if admin is not None else None, "user.update", name)
+    logger.info("user updated: %s", name)
+    errors = rerender_configs(db)
+    if errors:
+        return _redirect(
+            f"/users/{user.id}",
+            request,
+            err=t["rerender_failed"] + "; ".join(errors),
+        )
+    return _redirect(f"/users/{user.id}", request, msg=t["user_updated"])
+
+
+@app.post("/users/{user_id}/freeze")
+def freeze_user(
+    request: Request,
+    user_id: int,
+    admin: Any = Depends(require_admin),
+    db: Session = Depends(db_session),
+):
+    """Freeze every client of the user: they drop out of configs,
+    links and feeds, but keep credentials and traffic history."""
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    count = 0
+    for client in db.query(Client).filter(Client.user_id == user.id).all():
+        if not _client_is_frozen(client):
+            _set_client_frozen(client, True)
+            count += 1
+    db.commit()
+    _audit(db, admin.id, "user.freeze", f"{user.name} ({count} clients)")
+    logger.info("user frozen: %s (%d clients)", user.name, count)
+    errors = rerender_configs(db)
+    t = t_for(get_lang(request))
+    err = (t["rerender_failed"] + "; ".join(errors)) if errors else ""
+    return _redirect(f"/users/{user_id}", request, msg=t["user_frozen"], err=err)
+
+
+@app.post("/users/{user_id}/unfreeze")
+def unfreeze_user(
+    request: Request,
+    user_id: int,
+    admin: Any = Depends(require_admin),
+    db: Session = Depends(db_session),
+):
+    """Unfreeze every client of the user (restores the frozen state)."""
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    count = 0
+    for client in db.query(Client).filter(Client.user_id == user.id).all():
+        if _client_is_frozen(client):
+            _set_client_frozen(client, False)
+            count += 1
+    db.commit()
+    _audit(db, admin.id, "user.unfreeze", f"{user.name} ({count} clients)")
+    logger.info("user unfrozen: %s (%d clients)", user.name, count)
+    errors = rerender_configs(db)
+    t = t_for(get_lang(request))
+    err = (t["rerender_failed"] + "; ".join(errors)) if errors else ""
+    return _redirect(
+        f"/users/{user_id}", request, msg=t["user_unfrozen"], err=err
+    )
+
+
+BULK_ACTIONS = ("enable", "disable", "delete", "reset-traffic", "extend-expiry")
+
+
+@app.post("/users/bulk")
+async def bulk_users(
+    request: Request,
+    admin: Any = Depends(require_admin),
+    db: Session = Depends(db_session),
+):
+    """Bulk ops on the selected users (Phase 2).
+
+    ``action`` comes from the clicked submit button; ``extend-expiry``
+    also needs ``extend_days``. Every action can change usability
+    (a reset user is back under quota, an extended user un-expires),
+    so configs are re-rendered once at the end.
+    """
+    t = t_for(get_lang(request))
+    form = await request.form()
+    ids: set[int] = set()
+    for raw in form.getlist("user_ids"):
+        try:
+            ids.add(int(raw))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return _redirect("/users", request, err=t["no_users_selected"])
+    action = (form.get("action") or "").strip()
+    if action not in BULK_ACTIONS:
+        return _redirect("/users", request, err=t["invalid_action"])
+    users = db.query(User).filter(User.id.in_(ids)).all()
+    if not users:
+        return _redirect("/users", request, err=t["no_users_selected"])
+    extend_days: Optional[int] = None
+    if action == "extend-expiry":
+        try:
+            extend_days = int((form.get("extend_days") or "").strip())
+        except ValueError:
+            return _redirect("/users", request, err=t["invalid_extend_days"])
+        if not 1 <= extend_days <= EXTEND_DAYS_MAX:
+            return _redirect("/users", request, err=t["invalid_extend_days"])
+    now = datetime.now(timezone.utc)
+    for user in users:
+        if action == "enable":
+            user.enabled = True
+        elif action == "disable":
+            user.enabled = False
+        elif action == "delete":
+            db.query(Client).filter(Client.user_id == user.id).delete()
+            db.delete(user)
+        elif action == "reset-traffic":
+            user.traffic_used_bytes = 0
+        elif action == "extend-expiry":
+            assert extend_days is not None  # validated above
+            base = user.expires_at
+            if base is not None and base.tzinfo is None:
+                base = base.replace(tzinfo=timezone.utc)
+            # Extend from the current expiry when it is still in the
+            # future, else from now (an expired user must not stay
+            # expired after an extension); never-expiring users get
+            # now + N days.
+            base = max(base, now) if base is not None else now
+            user.expires_at = base + timedelta(days=extend_days)
+    db.commit()
+    _audit(db, admin.id, "user.bulk", f"{action} x{len(users)}")
+    logger.info("bulk users: %s x%d", action, len(users))
+    errors = rerender_configs(db)
+    err = (t["rerender_failed"] + "; ".join(errors)) if errors else ""
+    return _redirect("/users", request, msg=t["bulk_done"], err=err)
 
 
 # ---------------------------------------------------------------------------

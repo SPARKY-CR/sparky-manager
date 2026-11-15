@@ -111,6 +111,20 @@ with regenerate actions for Reality keys, AmneziaWG parameters,
 and the WG/AWG server keypair. Share links and subscriptions
 follow the edited settings automatically.
 
+Every user is editable too (Users → user → Edit): name, note,
+traffic limit, and expiry as a calendar date (UTC, valid through
+the end of that day). Per client: the XTLS flow for VLESS clients
+(Reality inbounds need a Vision flow; a stale Vision value on a
+plain-TCP inbound is cleared on save), a concurrent-IP limit, a
+freeze switch, and a move to another inbound of the same protocol
+(WireGuard/AmneziaWG get a fresh address from the target subnet;
+traffic history is kept). A frozen client cannot connect but keeps
+its config and history — unfreezing restores it exactly. The users
+list supports bulk enable/disable/delete, traffic reset (the daily
+history is kept), and expiry extension. The IP limit is stored and
+shown but not enforced: the panel cannot see connected IPs, so it
+does not pretend to limit them.
+
 ## FAQ
 
 **Do I need a domain?**

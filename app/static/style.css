@@ -515,7 +515,7 @@ td a { font-weight: 600; }
 
 /* ---- forms ---- */
 label { display: block; margin-block-end: 0.85rem; font-weight: 600; font-size: 0.93rem; color: var(--ink-2); }
-input[type="text"], input[type="number"], input[type="password"], select {
+input[type="text"], input[type="number"], input[type="password"], input[type="date"], select {
   display: block;
   width: 100%;
   margin-block-start: 0.3rem;
@@ -573,6 +573,13 @@ select option { background: var(--surface-solid-2); color: var(--ink); }
 .key-box code { font-size: 0.85rem; overflow-wrap: anywhere; flex: 1 1 200px; }
 .inline-form { display: inline; }
 .row-actions { display: flex; gap: 0.45rem; flex-wrap: wrap; align-items: center; }
+
+/* ---- user editor (Phase 2): bulk bar + table checkboxes ---- */
+.check-col { width: 34px; text-align: center; }
+.check-col input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent); vertical-align: middle; cursor: pointer; }
+.bulk-bar { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: end; margin-block-end: 0.85rem; }
+.bulk-extend { display: inline-flex; flex-direction: column; gap: 0.15rem; margin-block-end: 0; font-size: 0.85rem; }
+.bulk-extend input[type="number"] { width: 92px; margin-block-start: 0; }
 
 /* ---- buttons ---- */
 .btn {

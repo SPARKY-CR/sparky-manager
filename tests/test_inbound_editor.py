@@ -965,3 +965,18 @@ def test_build_stream_from_form_reality_needs_tcp(db, seeded):
     stream, error = _build_stream_from_form(inbound, data, T)
     assert stream is None
     assert "TCP" in error
+
+
+def test_get_edit_uses_web_prefix(authed_client, seeded, monkeypatch):
+    # Regression test: _render_inbound_edit builds its template
+    # context by hand (unlike every other page, which goes through
+    # _template_ctx). It used to omit base_path, so on a server
+    # served under a sub-path the edit form posted to the unprefixed
+    # URL and 404'd. The form action and back links must carry the
+    # prefix.
+    monkeypatch.setattr(main_mod, "WEB_PATH", "/5iyn5jldfzuc")
+    inbound = seeded["inbounds"]["vless-reality"]
+    resp = authed_client.get(f"/inbounds/{inbound.id}/edit")
+    assert resp.status_code == 200
+    assert f'action="/5iyn5jldfzuc/inbounds/{inbound.id}/edit"' in resp.text
+    assert 'href="/5iyn5jldfzuc/inbounds"' in resp.text

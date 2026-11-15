@@ -214,6 +214,8 @@ clients(id PK, user_id FK, inbound_id FK,
         method TEXT NULL,            -- SS cipher, e.g. 2022-blake3-aes-128-gcm
         flow TEXT NULL,              -- xtls-rprx-vision (VLESS)
         extra_json TEXT NULL,        -- {congestion_control: bbr, alpn: h3, ...}
+                                     -- Phase 2 keys: frozen (bool), ip_limit (int),
+                                     -- allowed_ips (WireGuard/AmneziaWG peer address)
         enabled BOOL DEFAULT 1,
         UNIQUE(user_id, inbound_id))
 
@@ -233,6 +235,10 @@ Rules enforced by the backend (not just the UI):
   (traffic_limit IS NULL OR traffic_used < traffic_limit)`.
 - The renderers **omit** unusable clients from generated configs, so an
   expired/over-quota user stops working even if a core is restarted by hand.
+- A client with `extra.frozen` set is unusable (Phase 2, §5.7): it is
+  omitted from configs, links and feeds, but keeps its credentials and
+  traffic history; unfreezing restores it exactly. Distinct from
+  `enabled=False` (admin off-switch) and from delete.
 - `traffic_used_bytes` is the running total; `traffic_daily` is the history.
   The syncer adds *deltas* only, never overwrites, so a panel restart
   cannot double-count or lose usage.
@@ -439,6 +445,28 @@ authoritative). XTLS is not offered (no renderer support).
 | **SSH** (as a VPN) | ❌ No server in MVP | ZedSecure lists SSH as an engine, but SSH-as-VPN (dynamic SOCKS) is a manual fallback, not a managed multi-user service. The server already has SSH; the panel doesn't need to manage it. |
 | OpenVPN / OpenConnect | ✅ v1.2.0 | Real servers (OpenVPN daemon, ocserv) with `.ovpn` / AnyConnect-profile export; one shared CA under `data/ca/` with the IKEv2 server cert. |
 
+### 5.7 Per-client management (Phase 2, 2026-11-15)
+
+The user editor (`GET/POST /users/{id}/edit`) edits the user fields
+(name, note, traffic limit, expiry as a **date** — stored as
+`expires_at`, end of day 23:59:59 UTC; empty = never) plus one row
+per client:
+
+| Field | Storage | Effect |
+|---|---|---|
+| `flow` (VLESS only) | `clients.flow` | Rendered into the Xray client entry and carried in the share link / sing-box feed. Reality inbounds accept only the Vision variants (the renderer defaults an empty flow to Vision for Reality, so "none" there would build a client that can never connect); TLS accepts none / Vision / Vision-UDP443; security=none accepts only none — saving clears any stale Vision value. |
+| IP limit | `clients.extra.ip_limit` | Stored and shown only — **not enforced** (see §6.4). Empty/0 = unlimited, 1–1000 otherwise. |
+| Frozen | `clients.extra.frozen` | The client is unusable (`client_is_usable` returns False), so it drops out of every rendered config, share link and subscription feed — but keeps credentials, config and traffic history. `POST /users/{id}/freeze` / `unfreeze` set/clear it on all of a user's clients. Distinct from `enabled=False` (admin off-switch) and from delete. |
+| Move | `clients.inbound_id` | To another enabled inbound of the same protocol that has no client for this user yet. Credentials stay; WireGuard/AmneziaWG get a fresh address from the target subnet (the old address is freed). Traffic history is per-user, so it is untouched. The move re-renders configs; links are derived, so they follow automatically. |
+
+Bulk ops (`POST /users/bulk`, checkboxes on the users list):
+enable, disable, delete, traffic reset (only the running counter —
+`traffic_daily` history is kept), and expiry extension (+N days from
+the current expiry when it is still in the future, else from now;
+never-expiring users get now + N days). Every bulk action re-renders
+configs once at the end. No DB schema change: all new per-client
+state lives in the existing `extra` JSON.
+
 ---
 
 ## 6. Subscriptions, links, QR — dual format (mandatory)
@@ -547,6 +575,14 @@ Enforcement runs in the sweeper (every 5 min): expired or over-quota
 users are removed from the rendered configs (so the core drops them)
 and their subscription returns 403. No live-connection killing in MVP
 (Xray `RemoveUser` / `wg set peer remove` are the Phase 2 mechanism).
+
+The per-client IP limit (§5.7) is stored in the client's `extra`
+JSON and shown in the UI, but it is **not enforced**: none of the
+sources above reports per-connection source IPs (Xray's Stats API
+is per-user traffic, `wg show` has no endpoint tracking in the
+panel, sing-box has no session API), so enforcing it would require
+inventing data. It is recorded for a future enforcement mechanism,
+not faked.
 
 ---
 
