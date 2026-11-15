@@ -485,13 +485,17 @@ schema version) lives in the existing `settings` table.
 ### 5.9 Telegram management bot (Phase 4, 2026-11-15)
 
 The whole panel from Telegram — users, inbounds, links, server status —
-through a bot that lives inside the FastAPI app (no second service, no
-polling loop):
+through a bot that lives inside the FastAPI app (no second service).
+Two transports, picked on the settings page (`telegram_transport`
+setting, default `"webhook"`): webhook (Telegram pushes updates to
+the panel) or polling (the panel long-polls `getUpdates` — works on
+any panel port, so it is the right choice for a standard install).
 
 | Piece | How it works |
 |---|---|
-| Transport | Webhook: Telegram POSTs updates to `POST /telegram/webhook/<secret>` on the panel itself (served under the secret WEB_PATH like every other route). The URL carries a random secret stored in the `telegram_webhook_secret` setting — NOT the bot token, which would land in uvicorn's access log on every delivery. The endpoint is inert (404) when the bot is unconfigured or the secret mismatches, so nothing about the bot is revealed to a wrong guess. A malformed body still gets 200 (Telegram retries non-2xx, and retrying garbage helps nobody). |
-| Setup | Settings page: bot token + admin chat ID (the same fields as notifications), then "register webhook" (`setWebhook` with the panel's public URL — domain setting + panel port + WEB_PATH + secret) and "check webhook status" (stores `getWebhookInfo`'s pending count / last error in `telegram_webhook_info`; fetched on demand, never on page render, so a dead Telegram never slows the page). **Port limitation (honest): Telegram only delivers webhooks on ports 443, 80, 88 and 8443, while the installer picks a random panel port (10000–60000). Registration on any other port fails with Telegram's own error plus a warning; the fix is re-running the installer with `--port 8443` (when no inbound uses TCP 8443) or a reverse proxy on 443.** |
+| Transport (webhook) | Telegram POSTs updates to `POST /telegram/webhook/<secret>` on the panel itself (served under the secret WEB_PATH like every other route). The URL carries a random secret stored in the `telegram_webhook_secret` setting — NOT the bot token, which would land in uvicorn's access log on every delivery. The endpoint is inert (404) when the bot is unconfigured or the secret mismatches, so nothing about the bot is revealed to a wrong guess. A malformed body still gets 200 (Telegram retries non-2xx, and retrying garbage helps nobody). |
+| Transport (polling) | A background asyncio task in the panel's lifespan (`_telegram_polling_loop`, same pattern as the sweeper/traffic loops) long-polls `getUpdates` (30 s wait) and dispatches each update through the SAME `bot.handle_update` + `TelegramSender` the webhook uses, one DB session per update — so the two transports behave identically. The task is always started, but it only ever calls `getUpdates` while the transport is `"polling"` and the bot is configured; otherwise it is a 10 s sleeper making zero network calls, and the transport setting is re-read every round, so switching transports takes effect live with no panel restart. The offset lives in memory; duplicates are ignored by `bot.py`'s `_seen_updates`. The long-poll runs in a thread (`asyncio.to_thread` — it is a blocking call) so the event loop never freezes; a fast empty return (the helper returns `[]` on failure) backs off exponentially (5 s → 60 s cap); every failure is caught and logged, never the token. |
+| Setup | Settings page: bot token + admin chat ID (the same fields as notifications), then pick the transport. Webhook: "register webhook" (`setWebhook` with the panel's public URL — domain setting + panel port + WEB_PATH + secret) and "check webhook status" (stores `getWebhookInfo`'s pending count / last error in `telegram_webhook_info`; fetched on demand, never on page render, so a dead Telegram never slows the page). Polling: just save — the panel calls `deleteWebhook` first (a webhook set on Telegram's side suppresses `getUpdates` delivery), and a failed removal is shown as an error instead of pretending polling is live. **Port limitation (honest): Telegram only delivers webhooks on ports 443, 80, 88 and 8443, while the installer picks a random panel port (10000–60000). Registration on any other port fails with Telegram's own error plus a warning; the fix is switching to polling — or re-running the installer with `--port 8443` (when no inbound uses TCP 8443) or a reverse proxy on 443.** |
 | Auth | Only the configured admin chat ID may use the bot; updates from any other chat are ignored silently — no reply, no error, nothing that confirms the bot exists. |
 | Dispatcher | `app/bot.py:handle_update` — never raises (a bad update is logged and dropped). Duplicate `update_id`s are ignored (Telegram redelivers). Commands: `/start` (main menu), `/help`, `/cancel`. Inline keyboards everywhere; views edit the menu message in place and fall back to sending a new message when the edit fails. |
 | What the bot does | Users: paginated list, view (traffic/expiry/frozen/inbounds), create (guided flow: name → pick inbounds → traffic limit → expiry), freeze/unfreeze, extend expiry (+7/+30/+90 days), reset traffic, delete (with confirmation). Inbounds: list with client counts, view, toggle. Links: a user's share links + subscription link (the same links the panel generates; a subscription host or domain is required for share links, and a domain for the subscription URL — without one the bot says so instead of sending a broken link). Status: server status (`app.system_status`) + traffic summary (today + 14 days from `traffic_daily`) + user counts. |
@@ -500,7 +504,8 @@ polling loop):
 | Language | The bot speaks Persian (no per-admin language setting exists to follow); every bot string still has an EN key (`BOT_STRING_KEYS` in `app/bot.py`; the test suite asserts fa/en parity). |
 
 No DB schema change: webhook state (secret, registered URL + time,
-status snapshot) lives in the existing `settings` table.
+status snapshot) and the transport choice (`telegram_transport`)
+live in the existing `settings` table.
 
 ---
 

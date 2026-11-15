@@ -3,7 +3,10 @@
 Phase 3 introduced the one-way notifier (``send_message``); Phase 4
 adds the rest of the Bot API surface the management bot needs:
 inline keyboards (``reply_markup``), message edits, callback answers,
-and webhook registration / status. Everything still goes through one
+and webhook registration / status. The polling transport (Phase 4
+follow-up) adds ``get_updates`` (long-poll) and ``delete_webhook``
+(switching to polling must remove the webhook first, or Telegram
+never delivers to ``getUpdates``). Everything still goes through one
 private ``_post`` helper, so the security rules hold everywhere.
 
 Security rules (never relax these):
@@ -224,6 +227,66 @@ def get_webhook_info(
     return result if isinstance(result, dict) else None
 
 
+def delete_webhook(
+    token: str,
+    *,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> tuple[bool, str]:
+    """Remove the bot's webhook from Telegram's side.
+
+    Required when switching to the polling transport: a webhook set
+    on Telegram's side suppresses ``getUpdates`` delivery, so polling
+    would receive nothing until the webhook is gone. Same contract
+    as ``set_webhook``: returns ``(ok, error_description)`` ("" on
+    success or on a transport failure), never raises, never logs the
+    token. Pending updates are kept (``drop_pending_updates`` is not
+    set) so nothing the admin sent is lost in the switch — the
+    polling loop picks them up.
+    """
+    token = (token or "").strip()
+    if not token:
+        return False, ""
+    data = _post(token, "deleteWebhook", {}, timeout=timeout)
+    if data is None:
+        return False, ""
+    if data.get("ok"):
+        return True, ""
+    description = data.get("description")
+    return False, str(description) if description else ""
+
+
+def get_updates(
+    token: str,
+    offset: Optional[int] = None,
+    timeout: float = 30.0,
+) -> list[dict[str, Any]]:
+    """Long-poll ``getUpdates``; returns the parsed ``result`` list.
+
+    ``timeout`` is the Bot API long-poll wait in seconds (Telegram
+    holds the request up to that long when there is nothing new; max
+    50). The HTTP timeout is ``timeout + 5`` so a full long-poll wait
+    never trips the client timeout. ``offset`` (when given) tells
+    Telegram to skip everything up to and including that update id.
+    Empty list on ANY failure (missing token, transport error, HTTP
+    error, ``ok: false``, a non-list result) — the polling loop
+    treats a fast empty return as a failure and backs off. Never
+    raises, never logs the token. This is a blocking call: the
+    polling loop runs it in a thread (``asyncio.to_thread``) so the
+    30 s wait never blocks the panel's event loop.
+    """
+    token = (token or "").strip()
+    if not token:
+        return []
+    payload: dict[str, Any] = {"timeout": int(timeout)}
+    if offset is not None:
+        payload["offset"] = offset
+    data = _post(token, "getUpdates", payload, timeout=float(timeout) + 5.0)
+    if not _ok(data):
+        return []
+    result = data.get("result") if data else None
+    return list(result) if isinstance(result, list) else []
+
+
 __all__ = [
     "TELEGRAM_API_BASE",
     "DEFAULT_TIMEOUT",
@@ -234,4 +297,6 @@ __all__ = [
     "answer_callback_query",
     "set_webhook",
     "get_webhook_info",
+    "delete_webhook",
+    "get_updates",
 ]

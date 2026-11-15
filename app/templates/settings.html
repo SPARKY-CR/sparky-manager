@@ -40,6 +40,14 @@
       <input type="text" name="telegram_chat_id" value="{{ settings.get('telegram_chat_id', '') }}" dir="ltr">
       <span class="muted">{{ t.telegram_chat_id_hint }}</span>
     </label>
+    <label>
+      {{ t.telegram_transport }}
+      <select name="telegram_transport" dir="ltr">
+        <option value="webhook"{% if settings.get('telegram_transport', 'webhook') == 'webhook' %} selected{% endif %}>{{ t.telegram_transport_webhook }}</option>
+        <option value="polling"{% if settings.get('telegram_transport', 'webhook') == 'polling' %} selected{% endif %}>{{ t.telegram_transport_polling }}</option>
+      </select>
+      <span class="muted">{{ t.telegram_transport_hint }}</span>
+    </label>
     <div class="form-actions">
       <button type="submit" class="btn btn-primary">{{ t.save }}</button>
     </div>

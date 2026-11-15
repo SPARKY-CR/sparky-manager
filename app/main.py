@@ -97,6 +97,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -684,6 +685,13 @@ STRINGS: dict[str, dict[str, str]] = {
         "telegram_webhook_status_failed": "دریافت وضعیت وب‌هوک ناموفق بود — توکن و اتصال را بررسی کنید.",
         "telegram_domain_required": "برای وب‌هوک اول باید دامنه را در تنظیمات وارد کنید.",
         "telegram_webhook_port_warning": "تلگرام فقط روی پورت‌های ۴۴۳، ۸۰، ۸۸ و ۸۴۴۳ وب‌هوک می‌فرستد؛ پورت فعلی پنل در این لیست نیست (نصب‌کننده را با ‎--port 8443‎ دوباره اجرا کنید یا از ریورس‌پروکسی استفاده کنید).",
+        # Telegram management bot — transport (polling, Phase 4 follow-up).
+        "telegram_transport": "روش دریافت پیام‌های ربات",
+        "telegram_transport_webhook": "وب‌هوک",
+        "telegram_transport_polling": "پولینگ (دریافت دوره‌ای)",
+        "telegram_transport_hint": "وب‌هوک فقط روی پورت‌های ۴۴۳، ۸۰، ۸۸ و ۸۴۴۳ کار می‌کند؛ پولینگ روی هر پورتی کار می‌کند و برای نصب استاندارد (پورت تصادفی) گزینهٔ مناسب است. تغییر روش بلافاصله اعمال می‌شود و نیازی به ری‌استارت پنل نیست.",
+        "telegram_polling_active": "پولینگ فعال شد — ربات پیام‌ها را مستقیم از تلگرام می‌گیرد.",
+        "telegram_polling_webhook_failed": "حذف وب‌هوک از تلگرام ناموفق بود — تا وب‌هوک حذف نشود پولینگ پیامی نمی‌گیرد؛ دوباره ذخیره کنید تا تلاش شود.",
         # Telegram management bot — bot strings (Phase 4).
         "bot_welcome": "🤖 ربات مدیریت sparky-manager\n\nاز منو انتخاب کنید:",
         "bot_help": "🤖 راهنمای ربات\n\n/start — منوی اصلی\n/help — همین راهنما\n/cancel — لغو عملیات در حال انجام\n\nاز منو می‌توانید کاربران را ببینید و بسازید، فریز/حذف/تمدید کنید، اینباندها را فعال/غیرفعال کنید، لینک هر کاربر را بگیرید و وضعیت سرور را ببینید.",
@@ -1066,6 +1074,13 @@ STRINGS: dict[str, dict[str, str]] = {
         "telegram_webhook_status_failed": "Could not fetch webhook status — check the token and connection.",
         "telegram_domain_required": "Set a domain in settings first — the webhook needs a public HTTPS URL.",
         "telegram_webhook_port_warning": "Telegram only delivers webhooks on ports 443, 80, 88 and 8443; the panel's current port is not in that list (re-run the installer with --port 8443 or use a reverse proxy).",
+        # Telegram management bot — transport (polling, Phase 4 follow-up).
+        "telegram_transport": "How the bot receives updates",
+        "telegram_transport_webhook": "Webhook",
+        "telegram_transport_polling": "Polling",
+        "telegram_transport_hint": "Webhooks only work on ports 443, 80, 88 and 8443; polling works on any port and is the right choice for a standard install (random port). Switching takes effect immediately — no panel restart needed.",
+        "telegram_polling_active": "Polling active — the bot now fetches updates directly from Telegram.",
+        "telegram_polling_webhook_failed": "Could not remove the webhook from Telegram — polling receives nothing until the webhook is removed; save again to retry.",
         # Telegram management bot — bot strings (Phase 4).
         "bot_welcome": "🤖 sparky-manager management bot\n\nPick from the menu:",
         "bot_help": "🤖 Bot help\n\n/start — main menu\n/help — this help\n/cancel — abort the current operation\n\nFrom the menu you can list and create users, freeze/delete/extend them, enable/disable inbounds, get any user's links, and check server status.",
@@ -2205,6 +2220,129 @@ async def _expiry_sweeper_loop() -> None:
             db.close()
 
 
+def _telegram_polling_token() -> Optional[str]:
+    """The bot token when polling is the active transport, else None.
+
+    Polling is active only when the ``telegram_transport`` setting is
+    ``"polling"`` AND a bot token + admin chat ID are configured —
+    the same gating the webhook route uses, plus the transport check.
+    The setting is re-read every round (see ``_telegram_polling_loop``)
+    so switching transports in the settings page takes effect without
+    a panel restart. Returns None (never raises) when the DB or the
+    telegram/bot modules are unavailable. The token is returned to
+    the caller, never logged.
+    """
+    if telegram_mod is None or bot_mod is None or SessionLocal is None:
+        return None
+    db = SessionLocal()
+    try:
+        settings = get_settings(db)
+    except Exception:  # noqa: BLE001 — a DB error idles the loop
+        return None
+    finally:
+        db.close()
+    transport = (settings.get("telegram_transport") or "").strip().lower()
+    if transport != "polling":
+        return None
+    token = (settings.get("telegram_bot_token") or "").strip()
+    chat_id = (settings.get("telegram_chat_id") or "").strip()
+    if not token or not chat_id:
+        return None
+    return token
+
+
+async def _telegram_polling_loop() -> None:
+    """Long-poll Telegram for bot updates (polling transport).
+
+    The task itself is always started by the lifespan (like the
+    sweeper/traffic loops), but it only ever calls ``getUpdates``
+    while ``_telegram_polling_token()`` returns a token — i.e. while
+    the transport is ``"polling"`` and the bot is configured. With
+    the webhook transport (or an unconfigured bot) the loop is just
+    a 10 s sleeper that makes zero network calls, and switching
+    transports in the settings page takes effect live, with no
+    restart. (Starting the task only at boot when polling was
+    selected would have made every transport switch require a manual
+    panel restart — the self-gating loop is the behavior the
+    settings page promises.)
+
+    Each update is dispatched through the SAME ``bot.handle_update``
+    + ``TelegramSender`` the webhook route uses, with its own DB
+    session per update (mirroring one webhook request per update),
+    so polling and webhook behave identically. The offset lives in
+    memory; duplicates are ignored by ``bot.py``'s ``_seen_updates``.
+
+    The loop never crashes the panel: every failure path is caught
+    and logged (never the token), a fast empty ``getUpdates`` return
+    (the helper returns [] on failure) backs off exponentially, and
+    ``get_updates`` runs in a thread (``asyncio.to_thread``) because
+    it is a blocking 30 s long-poll — awaiting it directly would
+    freeze the panel's event loop for the whole wait. Cancellation
+    (lifespan shutdown) is honoured: ``CancelledError`` is never
+    swallowed.
+    """
+    offset: Optional[int] = None
+    backoff = 0.0
+    while True:
+        try:
+            token = _telegram_polling_token()
+        except Exception:  # noqa: BLE001 — the loop must never die
+            logger.exception("telegram polling config read failed")
+            token = None
+        if token is None:
+            await asyncio.sleep(TELEGRAM_POLL_IDLE_SECONDS)
+            backoff = 0.0
+            continue
+        started = time.monotonic()
+        try:
+            updates = await asyncio.to_thread(
+                telegram_mod.get_updates, token, offset, TELEGRAM_POLL_TIMEOUT
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — get_updates never raises; belt & braces
+            logger.exception("telegram polling getUpdates failed")
+            updates = []
+        if not isinstance(updates, list):
+            updates = []
+        if updates:
+            backoff = 0.0
+            for update in updates:
+                if isinstance(update, dict):
+                    update_id = update.get("update_id")
+                    if isinstance(update_id, int):
+                        offset = (
+                            update_id + 1
+                            if offset is None
+                            else max(offset, update_id + 1)
+                        )
+                if bot_mod is None or SessionLocal is None:
+                    continue
+                db = SessionLocal()
+                try:
+                    bot_mod.handle_update(
+                        db, update, bot_mod.TelegramSender(token)
+                    )
+                except Exception:  # noqa: BLE001 — one bad update must not stop the loop
+                    logger.exception("telegram polling dispatch failed")
+                finally:
+                    db.close()
+        else:
+            # No updates: a slow empty return is a normal long-poll
+            # timeout (re-poll immediately); a fast one means the call
+            # failed (get_updates returns [] on failure) — back off
+            # exponentially so a dead Telegram cannot spin the loop.
+            if time.monotonic() - started < TELEGRAM_POLL_SHORT_CALL_SECONDS:
+                backoff = (
+                    TELEGRAM_POLL_BACKOFF_BASE
+                    if backoff == 0.0
+                    else min(backoff * 2, TELEGRAM_POLL_BACKOFF_MAX)
+                )
+                await asyncio.sleep(backoff)
+            else:
+                backoff = 0.0
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup: create tables, seed defaults, start background loops."""
@@ -2236,6 +2374,10 @@ async def lifespan(app: FastAPI):
     tasks = [
         asyncio.create_task(_traffic_sync_loop()),
         asyncio.create_task(_expiry_sweeper_loop()),
+        # The polling task is always created but only polls while the
+        # transport is "polling" (see _telegram_polling_loop); it is
+        # cancelled with the other loops on shutdown.
+        asyncio.create_task(_telegram_polling_loop()),
     ]
     yield
     for task in tasks:
@@ -4638,6 +4780,22 @@ CHAT_ID_RE = re.compile(r"^-?\d+$")
 # Ports Telegram delivers webhooks to (Bot API rule — a panel on any
 # other port cannot receive webhooks; see _public_panel_url).
 TELEGRAM_WEBHOOK_PORTS = (443, 80, 88, 8443)
+# Bot transports (Phase 4 follow-up): "webhook" is the default (Phase 4
+# behavior, byte-identical); "polling" long-polls getUpdates instead,
+# which works on any panel port. Stored in the settings table as
+# ``telegram_transport`` — no DB schema change.
+TELEGRAM_TRANSPORTS = ("webhook", "polling")
+TELEGRAM_TRANSPORT_DEFAULT = "webhook"
+# Polling loop tuning (see _telegram_polling_loop). The long-poll wait
+# is 30 s (Bot API max is 50); the idle re-check keeps transport
+# switches live without a restart; a fast empty getUpdates return is
+# treated as a failure (the helper returns [] on failure) and backs
+# off exponentially up to the cap.
+TELEGRAM_POLL_TIMEOUT = 30.0
+TELEGRAM_POLL_IDLE_SECONDS = 10.0
+TELEGRAM_POLL_SHORT_CALL_SECONDS = 5.0
+TELEGRAM_POLL_BACKOFF_BASE = 5.0
+TELEGRAM_POLL_BACKOFF_MAX = 60.0
 
 # BackupError.code -> STRINGS key for the restore error message.
 _RESTORE_ERROR_KEYS = {
@@ -4960,6 +5118,7 @@ def save_settings(
     log_level: str = Form(""),
     telegram_bot_token: str = Form(""),
     telegram_chat_id: str = Form(""),
+    telegram_transport: str = Form(""),
     admin: Any = Depends(require_admin),
     db: Session = Depends(db_session),
 ):
@@ -4967,6 +5126,22 @@ def save_settings(
     chat_id = telegram_chat_id.strip()
     if chat_id and not CHAT_ID_RE.match(chat_id):
         return _redirect("/settings", request, err=t["invalid_chat_id"])
+    # The previous transport is read before saving so a switch to
+    # polling can be detected (it needs a deleteWebhook call — see
+    # below). An invalid submitted value keeps the previous one.
+    settings_before = get_settings(db)
+    previous_transport = (
+        (settings_before.get("telegram_transport") or "").strip().lower()
+        or TELEGRAM_TRANSPORT_DEFAULT
+    )
+    if previous_transport not in TELEGRAM_TRANSPORTS:
+        previous_transport = TELEGRAM_TRANSPORT_DEFAULT
+    submitted_transport = telegram_transport.strip().lower()
+    transport = (
+        submitted_transport
+        if submitted_transport in TELEGRAM_TRANSPORTS
+        else previous_transport
+    )
     set_setting(db, "domain", domain.strip())
     set_setting(db, "subscription_host", subscription_host.strip())
     set_setting(db, "reality_sni", reality_sni.strip() or "www.microsoft.com")
@@ -4976,16 +5151,60 @@ def save_settings(
         # Clearing the chat ID disables notifications.
         set_setting(db, "telegram_bot_token", telegram_bot_token.strip())
     set_setting(db, "telegram_chat_id", chat_id)
+    set_setting(db, "telegram_transport", transport)
+    if transport != previous_transport:
+        _audit(
+            db, admin.id, "telegram.transport_change",
+            f"{previous_transport} -> {transport}",
+        )
     if log_level.strip() and panel_log_mod is not None:
         # Applies immediately (no restart); the value is validated
         # against the known levels inside apply_log_level.
         applied = panel_log_mod.apply_log_level(log_level.strip())
         set_setting(db, "log_level", applied)
         logger.info("log level set to %s by %s", applied, admin.username)
+    msg = ""
+    polling_err = ""
+    if transport == "polling" and telegram_mod is not None:
+        # A webhook set on Telegram's side suppresses getUpdates
+        # delivery, so polling receives nothing until the webhook is
+        # gone. The call runs on every save with transport=polling
+        # (it is idempotent), so a failed removal at switch time is
+        # retried silently by later saves. Only a failure AT the
+        # switch is shown: a later failure cannot re-create a
+        # webhook, so showing it would be a false alarm — and a
+        # success is only announced on the switch itself, not on
+        # every unrelated save.
+        effective_token = (
+            telegram_bot_token.strip()
+            or settings_before.get("telegram_bot_token", "")
+        ).strip()
+        if effective_token:
+            ok, error = telegram_mod.delete_webhook(effective_token)
+            if ok:
+                if transport != previous_transport:
+                    msg = t["telegram_polling_active"]
+            elif transport != previous_transport:
+                detail = error.strip() if error else ""
+                polling_err = t["telegram_polling_webhook_failed"] + (
+                    f" {detail}" if detail else ""
+                )
+            else:
+                logger.warning("telegram polling webhook removal failed")
     _audit(db, admin.id, "settings.update", f"domain={domain.strip()!r}")
     errors = rerender_configs(db)
-    err = (t["rerender_failed"] + "; ".join(errors)) if errors else ""
-    return _redirect("/settings", request, err=err)
+    err_parts = []
+    # The polling failure goes FIRST: _redirect truncates err to 500
+    # chars, and the transport switch is the action the admin just
+    # took — its failure must survive even when the re-render also
+    # reports (long) errors.
+    if polling_err:
+        err_parts.append(polling_err)
+    if errors:
+        err_parts.append(t["rerender_failed"] + "; ".join(errors))
+    return _redirect(
+        "/settings", request, msg=msg, err=" ".join(err_parts)
+    )
 
 
 @app.post("/settings/password")
