@@ -19,5 +19,16 @@
       <button type="button" class="btn btn-ghost btn-block" data-toggle-password="password">{{ t.show_password }}</button>
     </div>
   </form>
+  {# The sidebar/topbar language switches only render for a logged-in
+     admin, so the login page gets its own — otherwise a non-Persian
+     speaker has no way to switch before signing in. The ?lang= query
+     also sets the cookie (middleware), so the choice survives login. #}
+  <div class="lang-switch auth-lang">
+    {% if lang == 'fa' %}
+      <a href="{{ request.url.include_query_params(lang="en") }}">English</a>
+    {% else %}
+      <a href="{{ request.url.include_query_params(lang="fa") }}">فارسی</a>
+    {% endif %}
+  </div>
 </div>
 {% endblock %}

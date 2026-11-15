@@ -59,9 +59,9 @@
       </form>
       <div class="lang-switch">
         {% if lang == 'fa' %}
-          <a href="{{ request.url.path }}?lang=en">English</a>
+          <a href="{{ request.url.include_query_params(lang="en") }}">English</a>
         {% else %}
-          <a href="{{ request.url.path }}?lang=fa">فارسی</a>
+          <a href="{{ request.url.include_query_params(lang="fa") }}">فارسی</a>
         {% endif %}
       </div>
     </div>
@@ -82,9 +82,9 @@
       <div class="topbar-actions">
         <div class="lang-switch">
           {% if lang == 'fa' %}
-            <a href="{{ request.url.path }}?lang=en">EN</a>
+            <a href="{{ request.url.include_query_params(lang="en") }}">EN</a>
           {% else %}
-            <a href="{{ request.url.path }}?lang=fa">فا</a>
+            <a href="{{ request.url.include_query_params(lang="fa") }}">فا</a>
           {% endif %}
         </div>
         <a class="icon-btn" href="{{ request.url.path }}" title="{{ t.refresh }}" aria-label="{{ t.refresh }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 3v4h-4"/></svg></a>
@@ -99,9 +99,9 @@
       <div class="top-actions">
         <div class="lang-switch">
           {% if lang == 'fa' %}
-            <a href="{{ request.url.path }}?lang=en">EN</a>
+            <a href="{{ request.url.include_query_params(lang="en") }}">EN</a>
           {% else %}
-            <a href="{{ request.url.path }}?lang=fa">فا</a>
+            <a href="{{ request.url.include_query_params(lang="fa") }}">فا</a>
           {% endif %}
         </div>
         <form method="post" action="{{ base_path }}/logout" class="logout-form">

@@ -42,7 +42,6 @@ binaries ``awg`` / ``awg-quick``).
 from __future__ import annotations
 
 import base64
-import ipaddress
 import secrets
 import shutil
 import string

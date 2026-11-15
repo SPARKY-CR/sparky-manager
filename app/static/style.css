@@ -253,6 +253,9 @@ html[dir="ltr"] .nav-group-label { letter-spacing: 0.08em; text-transform: upper
 .lang-switch { padding: 0 0.3rem; font-size: 0.88rem; }
 .lang-switch a { color: var(--muted); }
 .lang-switch a:hover { color: var(--accent-light); }
+/* Language switch on the login card (the sidebar/topbar switches
+   only render for a logged-in admin). */
+.auth-lang { margin-top: 1.1rem; text-align: center; }
 
 /* Collapsed sidebar (desktop, JS toggle, persisted in localStorage):
    icons only. Labels, group titles and the CTA text hide; the

@@ -789,15 +789,29 @@ def test_long_links_message_is_chunked(db, sender, seeded, monkeypatch):
 
 
 def test_inbounds_list(db, sender, seeded):
+    # 11 seeded inbounds, 8 per page: page 0 holds the first 8
+    # (ordered by port, then tag); wireguard (port 51820) is last,
+    # on page 1 (paginated in the debug pass).
     _configure_bot(db)
     _dispatch(db, _callback("m:inb"), sender)
     text = sender.edited[0][2]
     assert "vless-reality" in text
-    assert "wireguard" in text
+    assert "wireguard" not in text
     assert "vless:443" in text
+    assert "صفحه 1 از 2" in text
     data = _button_data(sender.edited[0][3])
     assert f"i:v:{seeded['inbounds']['vless-reality'].id}" in data
+    assert "i:list:1" in data
+    assert "i:list:0" not in data
     assert "m:main" in data
+    # Page 1: wireguard is there, with a back button and no next.
+    _dispatch(db, _callback("i:list:1"), sender)
+    text = sender.edited[-1][2]
+    assert "wireguard" in text
+    assert "vless-reality" not in text
+    data = _button_data(sender.edited[-1][3])
+    assert "i:list:0" in data
+    assert "i:list:2" not in data
 
 
 def test_inbounds_list_empty(db, sender):

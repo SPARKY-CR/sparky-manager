@@ -12,8 +12,6 @@ import json
 
 import pytest
 
-from app import subscription
-from app.links import build_share_link
 from app.main import _client_dict, _inbound_dict, _links_for_user
 from app.subscription import (
     build_singbox_feed,
@@ -486,7 +484,6 @@ def test_sub_tuic_congestion_from_stream():
 def test_sub_wireguard_endpoint_address_and_mtu(db, seeded):
     # The endpoint reports the client's real allowed_ips (not a
     # hardcoded .2) and the inbound's MTU from its stream.
-    from app.models import Inbound
     wg = seeded["inbounds"]["wireguard"]
     server_public = wg.stream["peer_public_key"]
     wg.stream = {"transport": "udp", "subnet": "10.8.0.0/24",

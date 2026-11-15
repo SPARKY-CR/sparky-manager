@@ -73,7 +73,14 @@ SESSION_COOKIE = "sparky_manager_session"
 
 SESSION_MAX_AGE = 12 * 3600  # 12 hours
 
-NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+# Names/tags: ASCII letters, digits, _ and - only (they appear in
+# subscription URLs and share links, so Persian is not allowed), and
+# at most 64 chars — matching the API's Pydantic cap and the
+# User.name String(64) column. Unbounded names used to be accepted by
+# the web forms and the bot flows; SQLite never enforces VARCHAR
+# lengths, so a multi-kilobyte name would silently land in the DB and
+# overflow bot messages (debug pass, 2026-11-15).
+NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 # ---------------------------------------------------------------------------
 # Settings helpers

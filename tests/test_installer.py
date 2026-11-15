@@ -36,11 +36,8 @@ What is covered:
   and installed versions only.
 """
 
-import re
 import subprocess
 from pathlib import Path
-
-import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 INSTALL_SH = REPO / "install.sh"
@@ -303,7 +300,7 @@ def test_install_amneziawg_never_kills_install(tmp_path):
 def test_minimal_configs_match_panel_validators():
     """The installer's minimal server configs carry the directives
     the panel's own validators require (installer / panel consistency)."""
-    from app import ikev2, openconnect, openvpn
+    from app import ikev2
 
     text = _install_text()
     # OpenVPN minimal config (heredoc after the openvpn command check).
@@ -523,3 +520,190 @@ def test_login_box_trimmed():
         "Installed versions:",
     ):
         assert kept in box, kept
+
+
+# ---------------------------------------------------------------------------
+# Debug pass (2026-11-15): re-install password trap, stale deployed
+# files, uninstaller backing up a live WAL database
+# ---------------------------------------------------------------------------
+
+
+def test_password_prompt_skipped_on_reinstall():
+    """A re-install never asks for (or accepts) an admin password: the
+    installer cannot touch the DB, so a typed password would be
+    printed in the login box without ever working — and would
+    overwrite the login file holding the working password."""
+    text = _install_text()
+    lines = text.splitlines()
+    ask_i = next(
+        i
+        for i, line in enumerate(lines)
+        if line.strip() == 'ask_secret ADMIN_PASSWORD "Admin password"'
+    )
+    assert lines[ask_i - 1].strip() == 'if [ "$REINSTALL" -eq 0 ]; then'
+    # The re-install branch warns about an ignored flag and clears
+    # the flag value, so it can never reach the resolution below.
+    branch = "\n".join(lines[ask_i : ask_i + 8])
+    assert "--admin-password is ignored on a re-install" in branch
+    assert 'ADMIN_PASSWORD=""' in branch
+    # Both --admin-password spellings mark the flag as given.
+    assert '--admin-password)   ADMIN_PASSWORD="$2"; ADMIN_PASSWORD_GIVEN=1; shift 2 ;;' in text
+    assert '--admin-password=*) ADMIN_PASSWORD="${1#--admin-password=}"; ADMIN_PASSWORD_GIVEN=1; shift ;;' in text
+
+
+def _run_password_block(block: str, reinstall: int, password: str,
+                        stored: str) -> str:
+    """Run the extracted password-resolution block in bash; returns
+    the ``PASS=... KNOWN=...`` line it prints."""
+    script = (
+        "set -euo pipefail\n"
+        "info() { :; }\n"
+        f"REINSTALL={reinstall}\n"
+        f'ADMIN_PASSWORD="{password}"\n'
+        f'ADMIN_PASSWORD_STORED="{stored}"\n'
+        + block
+        + "\n"
+        'echo "PASS=${ADMIN_PASSWORD} KNOWN=${PASSWORD_KNOWN}"\n'
+    )
+    proc = _run_bash(script)
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    return proc.stdout.strip().splitlines()[-1]
+
+
+def test_password_resolution_reinstall_uses_stored():
+    """Re-install + stored password: the stored one wins and is known
+    (the login box may print it)."""
+    text = _install_text()
+    block = _extract_block(text, "PASSWORD_KNOWN=1 means", "fi")
+    out = _run_password_block(block, reinstall=1, password="", stored="s3cret")
+    assert out == "PASS=s3cret KNOWN=1", out
+
+
+def test_password_resolution_reinstall_without_stored_is_unknown():
+    """Re-install + no stored password: the DB password is unknown —
+    a generated one must never be printed as if it worked."""
+    text = _install_text()
+    block = _extract_block(text, "PASSWORD_KNOWN=1 means", "fi")
+    out = _run_password_block(block, reinstall=1, password="", stored="")
+    assert out == "PASS= KNOWN=0", out
+
+
+def test_password_resolution_fresh_install_generates():
+    """Fresh install + no password: one is generated and known."""
+    text = _install_text()
+    block = _extract_block(text, "PASSWORD_KNOWN=1 means", "fi")
+    out = _run_password_block(block, reinstall=0, password="", stored="")
+    assert out.startswith("PASS=") and out.endswith(" KNOWN=1"), out
+    assert len(out.split()[0]) > len("PASS="), out  # non-empty
+
+
+def test_password_resolution_supplied_password_kept():
+    """Fresh install + a supplied password (flag or prompt): kept."""
+    text = _install_text()
+    block = _extract_block(text, "PASSWORD_KNOWN=1 means", "fi")
+    out = _run_password_block(block, reinstall=0, password="typed", stored="")
+    assert out == "PASS=typed KNOWN=1", out
+
+
+def test_login_box_password_lines():
+    """The login box says when the password is unchanged (re-install)
+    and when it cannot be shown (re-install, no stored password)."""
+    text = _install_text()
+    box = _extract_block(text, "# Login box", '} > "$LOGIN_FILE"')
+    assert "unchanged by this install" in box
+    assert "installer cannot show it" in box
+    assert "PASSWORD_KNOWN" in box
+    assert "REINSTALL" in box
+
+
+def test_deployed_dirs_cleaned_before_copy():
+    """cp -a never deletes files, so the deployed app/scripts/systemd
+    dirs are removed before the copy — otherwise a module deleted
+    from the repo would linger in /opt and keep being imported."""
+    text = _install_text()
+    lines = text.splitlines()
+    rm_i = next(
+        i for i, line in enumerate(lines)
+        if line.startswith("rm -rf /opt/sparky-manager/app")
+    )
+    cp_i = next(
+        i for i, line in enumerate(lines)
+        if line.startswith('cp -a "${REPO_DIR}/app/."')
+    )
+    mkdir_i = next(
+        i for i, line in enumerate(lines)
+        if line.strip() == "mkdir -p /opt/sparky-manager/app"
+        and i > rm_i
+    )
+    assert rm_i < mkdir_i < cp_i
+    assert "/opt/sparky-manager/scripts" in lines[rm_i]
+    assert "/opt/sparky-manager/systemd" in lines[rm_i]
+    # data/ and venv/ are never touched by the cleanup.
+    assert "/opt/sparky-manager/data" not in lines[rm_i]
+    assert "/opt/sparky-manager/venv" not in lines[rm_i]
+
+
+def test_uninstaller_stops_services_before_backup():
+    """The uninstaller stops the panel BEFORE tarring the data dir:
+    a tar of the live dir can catch the SQLite WAL mid-write."""
+    text = _install_text()
+    fn = _extract_function(text, "uninstall_panel")
+    lines = fn.splitlines()
+    stop_i = next(
+        i for i, line in enumerate(lines)
+        if "systemctl stop sparky-manager" in line
+    )
+    tar_i = next(
+        i for i, line in enumerate(lines) if 'tar -czf "$backup_file"' in line
+    )
+    assert stop_i < tar_i
+
+
+def test_uninstaller_stops_all_managed_services():
+    """Live incident (2026-11-15): a stale ocserv from the old install
+    survived `--uninstall` (it stopped only sparky-manager/xray/
+    sing-box) and still held TCP 443, so the fresh install's xray
+    could not bind 443 and verification failed. The uninstaller now
+    stops + disables every service the panel manages, and brings down
+    the awg0 interface too (wg0 was already brought down, but its
+    unit was never disabled)."""
+    text = _install_text()
+    fn = _extract_function(text, "uninstall_panel")
+    stop_line = next(
+        line for line in fn.splitlines() if "systemctl stop " in line
+    )
+    disable_line = next(
+        line for line in fn.splitlines() if "systemctl disable " in line
+    )
+    for unit in (
+        "sparky-manager",
+        "xray",
+        "sing-box",
+        "ocserv",
+        "openvpn-server@sparky-manager",
+        "strongswan",
+        "wg-quick@wg0",
+        "awg-quick@awg0",
+    ):
+        assert unit in stop_line, unit
+        assert unit in disable_line, unit
+    assert "wg-quick down wg0" in fn
+    assert "awg-quick down awg0" in fn
+
+
+def test_uninstaller_removes_vpn_service_configs():
+    """The installer only writes minimal v12 configs when the file
+    does NOT exist, so a stale ocserv.conf (old 443 default) would
+    survive the wipe and be started again by the fresh install's
+    `enable --now` loop. The uninstaller removes the panel-managed
+    configs — ocpasswd too (it holds user password hashes)."""
+    text = _install_text()
+    fn = _extract_function(text, "uninstall_panel")
+    for path in (
+        "/etc/ocserv/ocserv.conf",
+        "/etc/ocserv/ocpasswd",
+        "/etc/openvpn/server/sparky-manager.conf",
+        "/etc/swanctl/swanctl.conf",
+        "/etc/amnezia/amneziawg/awg0.conf",
+    ):
+        assert path in fn, path

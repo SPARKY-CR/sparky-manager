@@ -20,7 +20,7 @@ from datetime import date
 from app import main as main_mod
 from app import traffic as traffic_mod
 from app import xray_stats as stats_mod
-from app.models import TrafficDaily, User, user_is_usable
+from app.models import TrafficDaily, user_is_usable
 
 # ---------------------------------------------------------------------------
 # Independent protobuf encoder (same shape as test_xray_stats.py's —

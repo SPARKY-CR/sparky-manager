@@ -24,7 +24,7 @@ import pytest
 
 from app import amneziawg, ikev2, links, openconnect, openvpn, subscription, wireguard
 from app import main as main_mod
-from app.models import Client, Inbound, User
+from app.models import Client, Inbound
 
 HOST = "203.0.113.10"
 

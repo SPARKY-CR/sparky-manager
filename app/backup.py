@@ -43,7 +43,6 @@ import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 SCHEMA_VERSION = 1
 BACKUP_MAX_BYTES = 200 * 1024 * 1024  # 200 MiB upload cap

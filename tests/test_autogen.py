@@ -13,8 +13,6 @@ from __future__ import annotations
 import base64
 import socket
 
-import pytest
-
 from app import main as main_mod
 from app import wireguard as wg_mod
 from app import xray as xray_mod

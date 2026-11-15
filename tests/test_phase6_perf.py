@@ -21,7 +21,7 @@ import pytest
 from sqlalchemy import event
 
 from app import webcommon as webcommon_mod
-from app.models import Inbound, TrafficDaily, User
+from app.models import Inbound, TrafficDaily
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "app" / "static"
 

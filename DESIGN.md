@@ -505,11 +505,11 @@ updates to the panel) or polling (the panel long-polls `getUpdates`).
 |---|---|
 | Transport (webhook) | Telegram POSTs updates to `POST /telegram/webhook/<secret>` on the panel itself (served under the secret WEB_PATH like every other route). The URL carries a random secret stored in the `telegram_webhook_secret` setting — NOT the bot token, which would land in uvicorn's access log on every delivery. The endpoint is inert (404) when the bot is unconfigured or the secret mismatches, so nothing about the bot is revealed to a wrong guess. A malformed body still gets 200 (Telegram retries non-2xx, and retrying garbage helps nobody). |
 | Transport (polling) | A background asyncio task in the panel's lifespan (`_telegram_polling_loop`, same pattern as the sweeper/traffic loops) long-polls `getUpdates` (30 s wait) and dispatches each update through the SAME `bot.handle_update` + `TelegramSender` the webhook uses, one DB session per update — so the two transports behave identically. The task is always started, but it only ever calls `getUpdates` while the transport is `"polling"` and the bot is configured; otherwise it is a 10 s sleeper making zero network calls, and the transport setting is re-read every round, so switching transports takes effect live with no panel restart. The offset is persisted in the settings table (`telegram_polling_offset`) after every dispatched update, so a restart resumes where the loop left off instead of re-fetching; duplicates are still ignored by `bot.py`'s `_seen_updates` for the in-flight batch. A module-level guard (`_polling_loop_active`) makes a second worker impossible, and the flag clears on shutdown so a later start is allowed. Each round records its diagnostics (last poll, last update, last error) for the settings page. The long-poll runs in a thread (`asyncio.to_thread` — it is a blocking call) so the event loop never freezes; a fast empty return (the helper returns `[]` on failure) backs off exponentially (5 s → 60 s cap); every failure is caught and logged, never the token. |
-| Setup | Settings page: bot token + admin chat ID (the same fields as notifications), then pick the transport. Saving a new token registers the bot's command menu on Telegram (`setMyCommands`, from `app.bot.BOT_COMMANDS` — start / help / menu / status / users / inbounds / cancel); the same registration is available as a "Register commands" button, and a failure is reported, not fatal. Webhook: "register webhook" (`setWebhook` with the panel's public URL — domain setting + panel port + WEB_PATH + secret) and "check webhook status" (stores `getWebhookInfo`'s pending count / last error in `telegram_webhook_info`; fetched on demand, never on page render, so a dead Telegram never slows the page). Polling: just save — the panel calls `deleteWebhook` first (a webhook set on Telegram's side suppresses `getUpdates` delivery), and a failed removal is shown as an error instead of pretending polling is live. **Port limitation (honest): Telegram only delivers webhooks on ports 443, 80, 88 and 8443, while the installer picks a random panel port (10000–60000). Registration on any other port fails with Telegram's own error plus a warning; the fix is switching to polling — or re-running the installer with `--port 8443` (when no inbound uses TCP 8443) or a reverse proxy on 443.** |
+| Setup | Settings page: bot token + admin chat ID (the same fields as notifications), then pick the transport. Saving a new token registers the bot's command menu on Telegram (`setMyCommands`, from `app.bot.BOT_COMMANDS` — start / help / menu / status / users / inbounds / cancel); the same registration is available as a "Register commands" button, and a failure is reported, not fatal. Webhook: "register webhook" (`setWebhook` with the panel's public URL — domain setting + panel port + WEB_PATH + secret) and "check webhook status" (stores `getWebhookInfo`'s pending count / last error in `telegram_webhook_info`; fetched on demand, never on page render, so a dead Telegram never slows the page). Saving settings with transport=webhook also registers the webhook (set-on-save — the manual button used to be the only path, so switching to webhook left the bot silently dead; fixed in the bot polish, 2026-11-15). The settings page warns when the panel port cannot receive webhooks (no domain + a port outside 443/80/88/8443 names polling as the fix). Polling: just save — the panel calls `deleteWebhook` first (a webhook set on Telegram's side suppresses `getUpdates` delivery), and a failed removal is shown as an error instead of pretending polling is live. **Port limitation (honest): Telegram only delivers webhooks on ports 443, 80, 88 and 8443, while the installer picks a random panel port (10000–60000). Registration on any other port fails with Telegram's own error plus a warning; the fix is switching to polling — or re-running the installer with `--port 8443` (when no inbound uses TCP 8443) or a reverse proxy on 443.** |
 | Diagnostics | The settings page's Telegram section shows the connection mode, the bot identity (`getMe`, fetched on demand by the "Check bot identity" button and cached in `telegram_bot_identity` — id, username, first name, never the token), the authorized chat ID, when the commands were last registered, and — for polling — the last successful poll, the last update received, the last error, and the persisted offset. |
 | Auth | Only the configured admin chat ID may use the bot; updates from any other chat are ignored silently — no reply, no error, nothing that confirms the bot exists. The check runs on every command AND every callback (the dispatcher verifies the chat id before any handler runs); callback data is never trusted as authorization — it only identifies the entity to look up. |
-| Dispatcher | `app/bot.py:handle_update` — never raises (a bad update is logged and dropped). Duplicate `update_id`s are ignored (Telegram redelivers). Commands: `/start` / `/menu` (main menu), `/help`, `/status`, `/users`, `/inbounds`, `/cancel`. Inline keyboards everywhere; views edit the menu message in place and fall back to sending a new message when the edit fails. An expired/invalid button tap is answered with a friendly message + the main menu, never silence and never a stack trace. |
-| What the bot does | Users: paginated list, search (name/note substring), view (traffic/expiry/frozen/inbounds), create (guided flow: name → pick inbounds → traffic limit → expiry), edit (guided: name / traffic limit / expiry, same validation as the web edit route), freeze/unfreeze, extend expiry (+7/+30/+90 days), reset traffic, delete (with confirmation). Inbounds: list with client counts, view, toggle, guided create (VLESS / VMess / Trojan / Shadowsocks / WireGuard, with sensible defaults: auto port, auto tag, panel-default SNI, fresh Reality keypair for VLESS — same stream shape and validation as the web create route via the shared `_check_new_inbound` helper), delete (with confirmation; deletes its clients too). Links: a user's share links + subscription link (the same links the panel generates; a subscription host or domain is required for share links, and a domain for the subscription URL — without one the bot says so instead of sending a broken link). Status: server status (`app.system_status`) + traffic summary (today + 14 days from `traffic_daily`) + user counts. Services: status per service + restart with confirmation, only for services the installer's sudoers block covers (`systemctl restart xray / sing-box / wg-quick@wg0 / openvpn-server@sparky-manager / ocserv / strongswan`); AmneziaWG has no restart entry, so it gets no button and the view says why; the panel itself is not offered (restarting the panel from inside the bot would kill the process before it could report the result). Success is only claimed when the service is actually running afterwards; an unobservable state is reported as unverified, not as success. Backup: creates the backup ZIP (same builder as the settings-page download) and sends it as a document to the admin chat only; a ZIP over Telegram's 50 MB bot-API cap is refused honestly (the web download still works). |
+| Dispatcher | `app/bot.py:handle_update` — never raises (a bad update is logged and dropped). Duplicate `update_id`s are ignored (Telegram redelivers). Commands: `/start` / `/menu` (main menu), `/help`, `/status`, `/users`, `/inbounds`, `/cancel`. Inline keyboards everywhere; views edit the menu message in place and fall back to sending a new message when the edit fails. An expired/invalid button tap is answered with a friendly message + the main menu, never silence and never a stack trace. Messages use HTML parse_mode (`<b>` only) with all user-controlled text escaped via `h()`; long messages are truncated HTML-safely (a cut never splits a tag or an entity — Telegram rejects malformed HTML wholesale). A persistent reply keyboard (Users / Inbounds / Status / Menu) sits below the chat; tapping a key abandons any in-progress guided flow. `/start` sends two messages by design (one message carries one markup: welcome + inline menu, then a hint + the persistent keyboard). |
+| What the bot does | Users: paginated list, search (name/note substring), view (traffic/expiry/frozen/inbounds), create (guided flow: name → pick inbounds → traffic limit → expiry), edit (guided: name / traffic limit / expiry, same validation as the web edit route), freeze/unfreeze, extend expiry (+7/+30/+90 days), reset traffic, delete (with confirmation). Inbounds: paginated list (8 per page) with client counts from one grouped query, view, toggle, guided create (VLESS / VMess / Trojan / Shadowsocks / WireGuard, with sensible defaults: auto port, auto tag, panel-default SNI, fresh Reality keypair for VLESS — same stream shape and validation as the web create route via the shared `_check_new_inbound` helper), delete (with confirmation; deletes its clients too). Links: a user's share links + subscription link (the same links the panel generates; a subscription host or domain is required for share links, and a domain for the subscription URL — without one the bot says so instead of sending a broken link). Status: server status (`app.system_status`) + traffic summary (today + 14 days from `traffic_daily`) + user counts. Services: status per service + restart with confirmation, only for services the installer's sudoers block covers (`systemctl restart xray / sing-box / wg-quick@wg0 / openvpn-server@sparky-manager / ocserv / strongswan`); AmneziaWG has no restart entry, so it gets no button and the view says why; the panel itself is not offered (restarting the panel from inside the bot would kill the process before it could report the result). Success is only claimed when the service is actually running afterwards; an unobservable state is reported as unverified, not as success. Backup: creates the backup ZIP (same builder as the settings-page download) and sends it as a document to the admin chat only; a ZIP over Telegram's 50 MB bot-API cap is refused honestly (the web download still works). |
 | Semantics | Every state change reuses the web route's exact behavior: same validation (name format/uniqueness, limit/expiry parsing, port/tag/clash checks), same audit action names (detail marked `[telegram]`), same `rerender_configs` call — a re-render failure is reported in the reply, not hidden. The create flow's inbound picker defaults to all enabled inbounds (the web form's behavior) and lets the admin narrow the set; `_create_clients_for_user` takes an optional inbound filter for that. |
 | Conversation state | In-memory only (`_conversations`, per chat id, 10-minute timeout) — no DB schema change. `/cancel` aborts; any other command or menu tap abandons the flow (except paging through search results, which keeps the query — it lives in the conversation state because a Persian query would not fit Telegram's 64-byte callback-data limit). |
 | Language | The bot speaks Persian (no per-admin language setting exists to follow); every bot string still has an EN key (`BOT_STRING_KEYS` in `app/bot.py`; the test suite asserts fa/en parity). The setMyCommands descriptions are Persian too. |
@@ -900,7 +900,7 @@ sparky-manager/
 │   ├── sparky-manager.service
 │   ├── xray.service           # or use the cores' shipped units
 │   └── sing-box.service
-├── tests/                     # 956 tests (conftest.py: seeded DB + CSRF client)
+├── tests/                     # 1067 tests (conftest.py: seeded DB + CSRF client)
 │   ├── test_links.py          # link round-trips for all 9 schemes
 │   ├── test_render.py         # golden configs → xray -test / sing-box check
 │   ├── test_subscription.py   # v2rayNG + sing-box feeds parse cleanly
@@ -1044,7 +1044,7 @@ the UI works offline and with JS disabled (progressive enhancement).
   `app/openconnect.py` guards the removed `crypt` module (the
   `openssl passwd` fallback is the live path on 3.13+).
 - **main.py split (first increment).** `main.py` was 6,262 lines;
-  after the split it is ~4,550 (4,546 at the end of Phase 7, with the
+  after the split it was ~4,550 (4,546 at the end of Phase 7, with the
   docs-pages flags and dead-import cleanup).
   The i18n dicts moved to `app/i18n.py`, the shared web plumbing
   (session/auth/CSRF, settings/audit, template/redirect helpers,
@@ -1170,6 +1170,148 @@ template resolves).
   with tests asserting 404 on the panel app and on a web-path-mounted
   root app. The panel's own `/api` endpoints are unaffected (still
   401 unauthenticated).
+
+## 15. Post-upgrade fixes + debug pass (2026-11-15)
+
+After the professional upgrade landed on the live server, Morteza
+found live issues and asked for a complete check of the project.
+`main.py` is 4,766 lines at this point (4,546 at the end of Phase 7;
+the fix batch and bot polish added routes, diagnostics and the
+webhook set-on-save path). The full suite is 1067 tests.
+
+- **Fix batch (evening, after the server upgrade).** The language
+  toggle reverted on navigation (the `lang` cookie was only set on
+  redirects) — a middleware now sets it on every response carrying a
+  valid `?lang=`; the installer reuses the saved Reality SNI from
+  `panel.env` on re-install (no prompt, like the port/web-path);
+  the login box lost its protocol lists, logs line and subscriptions
+  line; the add-inbound form hides behind a `<details>` (the page is
+  empty until the admin asks to add); the footer dropped "— فاز ۱".
+- **Bot polish (evening).** The webhook was kept and fixed properly:
+  `set_webhook` runs on every settings save with transport=webhook
+  (it used to be reachable only from the manual button, so switching
+  to webhook left the bot silently dead), the settings page warns
+  when the panel port cannot receive webhooks, and `getWebhookInfo`
+  diagnostics are cached (5 min). Menus use HTML parse_mode with
+  `h()` escaping, regrouped inline keyboards (2 per row) and a
+  persistent reply keyboard (see §8).
+- **Debug pass (evening).** Full-suite run + static checks + a
+  page-by-page live-behavior review + an installer end-to-end read.
+  Fixed: the re-install password trap (see below); the uninstaller
+  leaving VPN services running (see §15.3 — live incident, stale
+  ocserv held TCP 443 and broke a fresh install); stale deployed
+  files (the installer now removes `app/`/`scripts/`/`systemd/`
+  before copying — `cp -a` never deletes); the uninstaller stopping
+  services before its backup tar (see WAL); `NAME_RE` capped at 64
+  chars (web + bot + API agree); HTML-safe truncation of bot
+  messages; the bot inbound list paginated (8/page) with one grouped
+  client-count query instead of one COUNT per inbound; the logs page
+  limit label; language toggles preserving query params (via
+  `request.url.include_query_params`) plus a toggle on the login
+  page; ~30 dead imports removed. Verified clean: no automatic
+  deletion path anywhere (all `db.delete` sites are explicit admin
+  actions; the expiry sweeper only re-renders), i18n parity (488
+  keys each), CSRF on 26 of 28 POST routes (the 2 documented
+  exemptions), no dead module-level functions. Found but NOT fixed:
+  the installer re-prompts the domain with an empty default on
+  re-install (a domain cert would be regenerated with CN=IP —
+  recommend defaulting from the existing cert's DNS SAN); no
+  pre-start port-conflict check before the cores start (see §15.3);
+  IPv6 literals confuse the webhook port check (`":" in domain`);
+  user notes have no length cap; the add-user form stays visible (the
+  most common admin action — collapsing it was not asked for).
+  Full report: kept in the project notes (not shipped in the repo).
+
+### 15.1 The admin password on re-install (installer trap, fixed)
+
+The installer can only SET the admin password on a fresh install
+(the panel seeds its admin from `SPARKY_ADMIN_PASSWORD` when no
+admin exists). Before this fix, a re-install still prompted for a
+password — and a typed password was stored in `install.env` and
+printed in the login box while the DB kept the old one, overwriting
+the only record of the working password. Now the prompt is skipped
+on re-install (`install.env` exists), `--admin-password` on a
+re-install is ignored with a loud warning, and the login box prints
+the stored password with an "(unchanged by this install…)" note —
+or "(unchanged — the installer cannot show it…)" when no stored
+password exists. Caveat: a password changed in the panel (Settings
+→ Security) is NOT written back to `install.env` (the panel user
+cannot write that file), so after an in-panel change the login box
+prints the stale password with the note; the panel password is the
+current one.
+
+### 15.2 SQLite WAL — what is and is not a backup
+
+`panel.db` runs in WAL mode: the main file can be 4 KB while all
+live data sits in a 523 KB `panel.db-wal`. A plain `cp panel.db`
+copies only the main file — no tables, useless as a backup (this
+happened on the live server: `/root/panel.db.bak-2026-11-15`).
+Rules:
+
+- **Valid backups:** the panel's Settings → Backup (SQLite backup
+  API — a WAL-safe standalone snapshot), or a copy of the WHOLE
+  `data/` dir (main file + `-wal` + `-shm`) taken while the panel
+  is stopped.
+- **Panel backup** (`create_backup_zip`) uses the SQLite backup API.
+  **Restore** (`swap_db_file`) removes the old `-wal`/`-shm`
+  sidecars before the atomic `os.replace`, after disposing the
+  engine; validation checkpoints bare DB uploads and rejects a
+  table-less file (so a lone 4 KB copy fails validation instead of
+  corrupting anything).
+- **Uninstaller:** stops the services BEFORE the backup tar, so the
+  panel checkpoints the WAL on shutdown and the tarball holds a
+  clean database.
+- **`scripts/backup.sh`** (and `sparky-manager backup`) tar the
+  live data dir while the panel runs: crash-consistent (SQLite
+  replays the WAL on open), but a torn WAL-frame read can silently
+  lose the last seconds of transactions. For a guaranteed-clean
+  snapshot, use the panel's Settings → Backup.
+- **Checkpointing:** no periodic checkpoint is needed — SQLite
+  auto-checkpoints at 1,000 WAL pages and the panel's write volume
+  is tiny. An explicit engine dispose on shutdown is a recommended
+  small improvement (clean shutdowns checkpoint the WAL), not a
+  behavior change made here.
+
+### 15.3 Uninstaller left VPN services running (live incident, fixed)
+
+`uninstall_panel()` stopped and disabled only sparky-manager, xray
+and sing-box — never ocserv, openvpn-server@sparky-manager or
+strongswan, and it brought down wg0 without disabling its unit
+(awg0 was untouched entirely). On 2026-11-15 a wipe + fresh install
+failed verification: a stale `ocserv-main` from the early-morning
+install still held TCP 443 with an old 443 config (the current
+minimal default is 4433), while the fresh minimal Xray config binds
+VLESS+Reality on 443. It only broke then because the old xray had no
+443 listener (all inbounds deleted). Two compounding details: the
+uninstaller removed none of the panel-managed v12 configs
+(`ocserv.conf`, `ocpasswd`, `openvpn/server/sparky-manager.conf`,
+`swanctl.conf`, `awg0.conf`), and the installer writes minimal
+versions only when the file does NOT exist — so the stale 443
+config would have been started again by the fresh install's
+`enable --now` loop (xray starts first, so it would have won 443
+and the install would have passed — but ocserv would stay failed,
+and on a reboot it could win 443 before xray).
+
+Fix: the uninstaller now stops + disables all eight units
+(sparky-manager, xray, sing-box, ocserv,
+openvpn-server@sparky-manager, strongswan, wg-quick@wg0,
+awg-quick@awg0), brings down both WireGuard interfaces, and removes
+the five panel-managed v12 config files. Safe because the panel
+restarts these services on demand with freshly rendered configs —
+and only when an enabled inbound of that type exists
+(`ocserv_inbounds` is filtered on `i.enabled`, main.py:587) —
+and `systemctl restart` starts a stopped unit even when disabled.
+
+**Not implemented: a pre-start port-conflict check.** Before
+`systemctl enable --now xray sing-box sparky-manager`, the installer
+could check the ports the rendered configs will bind (panel port,
+Xray TCP 443/8388, sing-box UDP 443, WireGuard UDP 51820) with
+`ss -tlnp`/`ss -ulnp` and fail fast naming the holder. Deliberately
+left as a recommendation: on a re-install the panel's own services
+already hold those ports, so the check must exempt the panel's own
+PIDs (or run after stopping them), and the `ss` parsing + UDP +
+IPv6 edge cases make it a feature, not a one-liner. The uninstall
+fix above closes the reported failure mode.
 
 ---
 

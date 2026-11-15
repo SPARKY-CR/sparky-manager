@@ -23,9 +23,9 @@ from app import charts as charts_mod
 from app import main as main_mod
 from app import system_status as system_status_mod
 from app import telegram as telegram_mod
-from app.db import SessionLocal, init_db
+from app.db import SessionLocal
 from app.models import Admin, AuditLog, TrafficDaily, User
-from tests.conftest import ADMIN_PASSWORD, ADMIN_USERNAME
+from tests.conftest import ADMIN_PASSWORD
 
 
 # ---------------------------------------------------------------------------

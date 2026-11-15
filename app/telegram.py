@@ -27,6 +27,7 @@ Security rules (never relax these):
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Optional
 
 logger = logging.getLogger("sparky-manager")
@@ -37,6 +38,30 @@ DEFAULT_TIMEOUT = 10.0
 MAX_MESSAGE_LENGTH = 4096
 # Bot API limit for a document a bot may send (sendDocument).
 MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
+
+
+def _truncate_html_safe(text: str, limit: int) -> str:
+    """Truncate ``text`` to at most ``limit`` chars without breaking
+    the HTML the bot uses (only ``<b>...</b>`` pairs, plus the
+    ``&amp;``/``&lt;``/``&gt;``/``&quot;`` entities ``h()`` produces).
+
+    A dumb cut can split a tag (``<b``) or an entity (``&am``) in two,
+    and Telegram rejects the whole message for malformed HTML — so the
+    admin would see nothing at all. The cut therefore drops a trailing
+    partial tag/entity, appends "…", and closes any still-open ``<b>``.
+    Five chars are reserved up front (1 for "…" + 4 for "</b>") so the
+    result never exceeds ``limit``. Plain-text callers keep the dumb
+    cut (no markup can break there).
+    """
+    if len(text) <= limit:
+        return text
+    cut = text[: max(0, limit - 5)]
+    cut = re.sub(r"<[^>]*$", "", cut)
+    cut = re.sub(r"&[a-zA-Z0-9#]*$", "", cut)
+    out = cut + "…"
+    if out.count("<b>") > out.count("</b>"):
+        out += "</b>"
+    return out
 
 
 def mask_token(token: str) -> str:
@@ -170,7 +195,10 @@ def send_message(
     if not token or not chat_id or not text:
         return False
     if len(text) > MAX_MESSAGE_LENGTH:
-        text = text[: MAX_MESSAGE_LENGTH - 1] + "…"
+        if parse_mode:
+            text = _truncate_html_safe(text, MAX_MESSAGE_LENGTH)
+        else:
+            text = text[: MAX_MESSAGE_LENGTH - 1] + "…"
 
     payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
     if reply_markup is not None:
@@ -203,7 +231,10 @@ def edit_message_text(
     if not token or not chat_id or not text or not message_id:
         return False
     if len(text) > MAX_MESSAGE_LENGTH:
-        text = text[: MAX_MESSAGE_LENGTH - 1] + "…"
+        if parse_mode:
+            text = _truncate_html_safe(text, MAX_MESSAGE_LENGTH)
+        else:
+            text = text[: MAX_MESSAGE_LENGTH - 1] + "…"
 
     payload: dict[str, Any] = {
         "chat_id": chat_id,

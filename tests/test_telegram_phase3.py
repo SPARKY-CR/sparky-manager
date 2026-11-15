@@ -30,13 +30,10 @@ import pytest
 from app import bot as bot_mod
 from app import main as main_mod
 from app import telegram as telegram_mod
-from app.db import SessionLocal
 from app.models import AuditLog, Client, Inbound, User
-from tests.conftest import ADMIN_PASSWORD, ADMIN_USERNAME
 from tests.test_telegram_bot import (
     ADMIN_CHAT,
     OTHER_CHAT,
-    SECRET,
     TOKEN,
     FakeSender,
     _button_data,

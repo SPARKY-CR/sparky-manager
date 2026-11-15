@@ -142,6 +142,9 @@ CONVERSATION_TIMEOUT = 600.0
 SEEN_UPDATE_TTL = 3600.0
 MAX_SEEN_UPDATES = 5000
 USERS_PAGE_SIZE = 8
+# Same page size for the inbound list (paginated in the debug pass —
+# an unpaginated list could exceed Telegram's 4096-char cap).
+INBOUNDS_PAGE_SIZE = 8
 # Bot API messages cap at 4096 chars; chunk long texts below that.
 MESSAGE_CHUNK = 4000
 
@@ -1764,20 +1767,34 @@ def _on_user_callback(ctx: _Ctx, message_id: Optional[int], parts: list) -> Opti
 
 
 def _show_inbounds(
-    ctx: _Ctx, message_id: Optional[int], note: Optional[str] = None
+    ctx: _Ctx,
+    message_id: Optional[int],
+    page: int = 0,
+    note: Optional[str] = None,
 ) -> None:
+    """The inbound list, paginated like the user list (8 per page).
+
+    Client counts come from the one grouped query in
+    ``clients_count_by_inbound`` — the per-inbound COUNT this used to
+    issue was the bot's last N+1 (debug pass, 2026-11-15).
+    """
     t = ctx.t
     inbounds = ctx.db.query(Inbound).order_by(Inbound.port, Inbound.tag).all()
-    lines = [_b(t["bot_inbounds_title"]), ""]
+    pages = max(1, (len(inbounds) + INBOUNDS_PAGE_SIZE - 1) // INBOUNDS_PAGE_SIZE)
+    page = max(0, min(page, pages - 1))
+    rows = inbounds[page * INBOUNDS_PAGE_SIZE : (page + 1) * INBOUNDS_PAGE_SIZE]
+    counts = ctx.panel.clients_count_by_inbound(ctx.db)
+    lines = [
+        _b(t["bot_inbounds_title"].format(page=page + 1, pages=pages)),
+        "",
+    ]
     kb_rows: list[list[tuple[str, str]]] = []
     if not inbounds:
         lines.append(t["bot_no_inbounds"])
     tag_buttons: list[tuple[str, str]] = []
-    for inbound in inbounds:
+    for inbound in rows:
         emoji = "✅" if inbound.enabled else "❌"
-        count = (
-            ctx.db.query(Client).filter(Client.inbound_id == inbound.id).count()
-        )
+        count = counts.get(inbound.id, 0)
         lines.append(
             f"{emoji} {h(inbound.tag)} — {inbound.protocol}:{inbound.port} "
             f"({count} {t['clients']})"
@@ -1786,6 +1803,13 @@ def _show_inbounds(
     # Two tag buttons per row (button text is plain — never escaped).
     for i in range(0, len(tag_buttons), 2):
         kb_rows.append(tag_buttons[i : i + 2])
+    nav: list[tuple[str, str]] = []
+    if page > 0:
+        nav.append((t["bot_prev"], f"i:list:{page - 1}"))
+    if page < pages - 1:
+        nav.append((t["bot_next"], f"i:list:{page + 1}"))
+    if nav:
+        kb_rows.append(nav)
     kb_rows.append([(t["bot_new_inbound"], "i:new")])
     kb_rows.append([(t["bot_back_main"], "m:main")])
     text = "\n".join(lines)
@@ -2080,7 +2104,8 @@ def _toggle_inbound(ctx: _Ctx, message_id: Optional[int], inbound_id: int) -> Op
 def _on_inbound_callback(ctx: _Ctx, message_id: Optional[int], parts: list) -> Optional[str]:
     action = parts[1] if len(parts) > 1 else ""
     if action == "list":
-        _show_inbounds(ctx, message_id)
+        page = _parse_int(parts[2]) if len(parts) > 2 else 0
+        _show_inbounds(ctx, message_id, page or 0)
         return None
     if action == "new":
         if len(parts) > 2:

@@ -14,7 +14,6 @@ from sqlalchemy.exc import IntegrityError
 
 from app.models import Client, Inbound, User, client_is_usable, user_is_usable
 from app.traffic import is_online, sync_traffic
-from tests.conftest import HOST
 
 
 def _user(**kwargs):

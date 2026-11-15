@@ -460,14 +460,24 @@ def test_inbounds_list_pairs_tag_buttons(db, sender, seeded):
     _configure_bot(db)
     _dispatch(db, _callback("m:inb"), sender)
     rows = sender.edited[0][3]["inline_keyboard"]
-    # Tag buttons pair up 2-per-row (10 seeded inbounds → 5 tag rows),
-    # then the new + back rows, each alone.
-    n_tags = len(seeded["inbounds"])
-    expected = [2] * (n_tags // 2) + ([1] if n_tags % 2 else []) + [1, 1]
-    assert [len(row) for row in rows] == expected
+    # 11 seeded inbounds, 8 per page: page 0 shows 8 tags as 4 pairs,
+    # then the nav row (next only), then the new + back rows.
+    assert [len(row) for row in rows] == [2, 2, 2, 2, 1, 1, 1]
     data = _button_data(sender.edited[0][3])
-    assert data[-2:] == ["i:new", "m:main"]
-    assert sorted(data[:-2]) == sorted(
+    assert data[-3:] == ["i:list:1", "i:new", "m:main"]
+    page0 = sorted(data[:-3])
+    assert len(page0) == 8
+    assert all(d.startswith("i:v:") for d in page0)
+    # Page 1: the remaining 3 tags pair as [2, 1], then prev + new + back.
+    _dispatch(db, _callback("i:list:1"), sender)
+    rows = sender.edited[-1][3]["inline_keyboard"]
+    assert [len(row) for row in rows] == [2, 1, 1, 1, 1]
+    data = _button_data(sender.edited[-1][3])
+    assert data[-3:] == ["i:list:0", "i:new", "m:main"]
+    page1 = sorted(data[:-3])
+    assert len(page1) == 3
+    # Both pages together cover every seeded inbound exactly once.
+    assert sorted(page0 + page1) == sorted(
         f"i:v:{inbound.id}" for inbound in seeded["inbounds"].values()
     )
 

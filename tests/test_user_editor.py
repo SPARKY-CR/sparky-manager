@@ -30,7 +30,7 @@ from app.models import (
     client_is_frozen,
     client_is_usable,
 )
-from tests.conftest import HOST, SS_METHOD, SS_PASSWORD
+from tests.conftest import HOST
 
 
 # ---------------------------------------------------------------------------
