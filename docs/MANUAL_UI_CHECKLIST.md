@@ -56,6 +56,11 @@
 - [ ] **Logs**: the log viewer renders, the level filter works, the
       download link downloads `panel.log`, and Clear asks for
       confirmation.
+- [ ] **Cores**: seven cards (Xray, sing-box, WireGuard, AmneziaWG,
+      OpenVPN, OpenConnect, IKEv2), each with a live status badge;
+      a running core offers Stop + Restart, a stopped one Start;
+      View log expands the journal tail; a restart shows the real
+      state afterwards (not a blind success).
 - [ ] **Language switch**: `?lang=en` renders every page in English,
       left-to-right, with no clipped text; switching back to Persian
       restores RTL. Long Persian strings do not overflow their cards.

@@ -42,6 +42,8 @@ def _pages(seeded):
         "/inbounds",
         f"/inbounds/{vless.id}/edit",
         "/logs",
+        "/cores",
+        "/cores?log=xray",
     ]
     for section in ("general", "telegram", "security", "backup",
                     "services", "advanced"):

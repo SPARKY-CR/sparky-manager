@@ -13,6 +13,7 @@
 {% elif '/users' in here %}{% set crumb = t.users %}
 {% elif here.endswith('/settings') %}{% set crumb = t.settings %}
 {% elif here.endswith('/logs') %}{% set crumb = t.logs %}
+{% elif here.endswith('/cores') %}{% set crumb = t.cores %}
 {% endif %}
 <div class="app-shell">
   {% if admin %}
@@ -46,6 +47,7 @@
       <div class="nav-group">
         <span class="nav-group-label">{{ t.nav_system }}</span>
         <a class="nav-link{{ ' active' if here.endswith('/settings') }}" href="{{ base_path }}/settings"{% if here.endswith('/settings') %} aria-current="page"{% endif %}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h9M19 7h1M4 17h3M13 17h7"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg><span class="nav-text">{{ t.settings }}</span></a>
+        <a class="nav-link{{ ' active' if here.endswith('/cores') }}" href="{{ base_path }}/cores"{% if here.endswith('/cores') %} aria-current="page"{% endif %}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg><span class="nav-text">{{ t.cores }}</span></a>
       </div>
     </nav>
     <div class="side-foot">

@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %} — {{ t.cores }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ t.cores }}</h1>
+</div>
+<p class="field-hint">{{ t.cores_desc }}</p>
+
+{# One card per core. The offered actions depend on the live state:
+   a running core gets Stop + Restart, a stopped one gets Start, an
+   unobservable one gets all three (the result is re-checked after
+   the action, so a wrong guess is reported honestly, never hidden).
+   The log tail loads only on demand (?log=<key>) — no journal call
+   for a plain page view. #}
+<div class="core-grid">
+{% for core in cores %}
+  <div class="card core-card">
+    <div class="core-head">
+      <h2 dir="ltr">{{ names[core.key] }}</h2>
+      {% if core.state == "running" %}<span class="badge badge-ok">{{ t.service_running }}</span>
+      {% elif core.state == "stopped" %}<span class="badge badge-off">{{ t.service_stopped }}</span>
+      {% else %}<span class="badge badge-warn">{{ t.service_unknown }}</span>{% endif %}
+    </div>
+    <p class="muted"><code dir="ltr">{{ core.unit }}</code></p>
+    {% if core.inbounds %}
+      <p class="muted">{{ t.core_inbounds_enabled.format(n=core.inbounds) }}</p>
+    {% else %}
+      <p class="field-hint">{{ t.core_no_inbound_hint }}</p>
+    {% endif %}
+    <div class="core-actions">
+      {% if core.state != "running" %}
+      <form method="post" action="{{ base_path }}/cores/{{ core.key }}/start" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-small btn-primary">{{ t.core_start }}</button>
+      </form>
+      {% endif %}
+      {% if core.state != "stopped" %}
+      <form method="post" action="{{ base_path }}/cores/{{ core.key }}/stop" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-small btn-danger">{{ t.core_stop }}</button>
+      </form>
+      <form method="post" action="{{ base_path }}/cores/{{ core.key }}/restart" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-small">{{ t.core_restart }}</button>
+      </form>
+      {% endif %}
+      {% if log_key == core.key %}
+      <a class="btn btn-small" href="{{ base_path }}/cores">{{ t.core_hide_log }}</a>
+      {% else %}
+      <a class="btn btn-small" href="{{ base_path }}/cores?log={{ core.key }}">{{ t.core_view_log }}</a>
+      {% endif %}
+    </div>
+    {% if log_key == core.key %}
+    <h3>{{ t.core_log_title.format(name=names[core.key]) }}</h3>
+    {% if log_text %}
+    <pre class="log-line log-output" dir="ltr">{{ log_text }}</pre>
+    {% else %}
+    <p class="muted">{{ t.core_log_unavailable }}</p>
+    {% endif %}
+    {% endif %}
+  </div>
+{% endfor %}
+</div>
+{% endblock %}

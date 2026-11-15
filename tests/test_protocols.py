@@ -175,7 +175,7 @@ def test_openvpn_server_config_renders_and_validates(tmp_path, ca):
     assert "port 1194" in content
     assert "proto udp" in content
     assert "server 10.9.0.0 255.255.255.0" in content
-    assert "client-cert-not-required" in content
+    assert "verify-client-cert none" in content
     assert "auth-user-pass-verify" in content
     assert "cipher AES-256-GCM" in content
     problems = openvpn.validate_server_config(
@@ -186,6 +186,29 @@ def test_openvpn_server_config_renders_and_validates(tmp_path, ca):
         auth_script=str(auth_script),
     )
     assert problems == [], problems
+
+
+def test_openvpn_server_config_has_no_openvpn_26_removed_options():
+    """Regression (live crash-loop, 2026-11-15): OpenVPN 2.6 REMOVED
+    `client-cert-not-required` — a config carrying it makes the
+    server exit fatally on start (Ubuntu 26.04 ships 2.6.x). The
+    rendered config must use the 2.5+ spelling and carry none of
+    the other options 2.6 removed."""
+    content = openvpn.render_server_config(
+        port=1194, network="10.9.0.0/24",
+        ca_cert="/etc/openvpn/ca.pem", server_cert="/etc/openvpn/cert.pem",
+        server_key="/etc/openvpn/key.pem",
+    )
+    assert "verify-client-cert none" in content
+    for removed in (
+        "client-cert-not-required",
+        "tls-remote",
+        "ifconfig-pool-linear",
+        "ncp-disable",
+        "key-method",
+        "ns-cert-type",
+    ):
+        assert removed not in content, removed
 
 
 def test_openvpn_server_config_rejects_bad_subnet():

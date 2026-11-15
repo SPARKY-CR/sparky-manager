@@ -410,12 +410,16 @@ def _journal_tail(unit: str, lines: int = 50) -> str:
     return _redact(tail[-1500:])
 
 
-def _restart_service(name: str) -> Optional[str]:
-    """``systemctl restart <name>`` (via sudo when available); returns
-    an error string or None. The error carries the command's own
-    output plus the service's journal tail — never again a bare
-    "control process exited" with no underlying output."""
-    rc, stdout, stderr = _run_privileged("systemctl", "restart", name, timeout=30)
+def _control_service(name: str, action: str) -> Optional[str]:
+    """``systemctl <action> <name>`` (via sudo when available); returns
+    an error string or None. ``action`` is one of ``start`` / ``stop``
+    / ``restart`` — the caller validates it (never a raw path param).
+    The error carries the command's own output plus the service's
+    journal tail — never again a bare "control process exited" with
+    no underlying output."""
+    rc, stdout, stderr = _run_privileged(
+        "systemctl", action, name, timeout=30
+    )
     if rc == 0:
         return None
     err = (stderr or stdout or "").strip()
@@ -423,7 +427,15 @@ def _restart_service(name: str) -> Optional[str]:
     journal = _journal_tail(name)
     if journal:
         detail += f"\njournal ({name}):\n{journal}"
-    return f"restart of {name} failed: {detail}"
+    return f"{action} of {name} failed: {detail}"
+
+
+def _restart_service(name: str) -> Optional[str]:
+    """``systemctl restart <name>`` (via sudo when available); returns
+    an error string or None. The re-render path's restart helper —
+    a thin wrapper over :func:`_control_service` so the Cores page
+    and the re-render path share one implementation."""
+    return _control_service(name, "restart")
 
 
 def _privileged_runner(argv: list[str], timeout: int = 30) -> tuple[int, str, str]:
@@ -4058,6 +4070,159 @@ def logs_clear(
         return _redirect("/logs", request, msg=t["log_cleared"])
     logger.exception("clearing the log file failed")
     return _redirect("/logs", request, err=t["log_clear"])
+
+
+# ---------------------------------------------------------------------------
+# Cores (HTML) — start / stop / restart each core, view its journal
+# ---------------------------------------------------------------------------
+
+# Service key -> display name (shared by the page and the flash
+# messages; the dashboard/settings templates carry their own copies).
+_CORE_NAMES = {
+    "xray": "Xray",
+    "sing-box": "sing-box",
+    "wireguard": "WireGuard",
+    "amneziawg": "AmneziaWG",
+    "openvpn": "OpenVPN",
+    "openconnect": "OpenConnect",
+    "ikev2": "IKEv2",
+}
+
+# Service key -> inbound `core` value, for the "no enabled inbound"
+# hint: the panel normally starts a core on demand when an enabled
+# inbound of that type exists, so a core with no enabled inbound is
+# usually stopped on purpose — the page says so instead of looking
+# broken. (sing-box's inbound core value is "singbox", no hyphen.)
+_CORE_INBOUND_CORES = {
+    "xray": "xray",
+    "sing-box": "singbox",
+    "wireguard": "wireguard",
+    "amneziawg": "amneziawg",
+    "openvpn": "openvpn",
+    "openconnect": "openconnect",
+    "ikev2": "ikev2",
+}
+
+_CORE_ACTIONS = ("start", "stop", "restart")
+
+
+def _core_units() -> dict[str, str]:
+    """Service key -> systemd unit (the same source as the status
+    collector, so the page can never disagree with the dashboard)."""
+    return {key: unit for key, unit, _procs, _iface in system_status_mod.SERVICES}
+
+
+def _core_states() -> dict[str, str]:
+    """Live states, all-unknown when the collector fails."""
+    try:
+        return system_status_mod.service_states()
+    except Exception:  # noqa: BLE001 — status must never break the page
+        return {key: "unknown" for key, *_ in system_status_mod.SERVICES}
+
+
+@app.get("/cores", response_class=HTMLResponse)
+def cores_page(
+    request: Request,
+    log: str = Query(""),
+    admin: Any = Depends(require_admin),
+    db: Session = Depends(db_session),
+):
+    units = _core_units()
+    states = _core_states()
+    # Enabled inbounds per core (one query) for the on-demand hint.
+    enabled_by_core: dict[str, int] = {}
+    for inbound in db.query(Inbound).filter(Inbound.enabled.is_(True)).all():
+        enabled_by_core[inbound.core] = enabled_by_core.get(inbound.core, 0) + 1
+    cores = [
+        {
+            "key": key,
+            "unit": unit,
+            "state": states.get(key, "unknown"),
+            "inbounds": enabled_by_core.get(_CORE_INBOUND_CORES.get(key, ""), 0),
+        }
+        for key, unit in units.items()
+    ]
+    log_key = log if log in units else ""
+    log_text = _journal_tail(units[log_key]) if log_key else ""
+    return templates.TemplateResponse(request, "cores.html",
+        _template_ctx(
+            request,
+            {
+                "admin": admin,
+                "cores": cores,
+                "names": _CORE_NAMES,
+                "log_key": log_key,
+                "log_text": log_text,
+            },
+        ),
+    )
+
+
+@app.post("/cores/{key}/{action}")
+def cores_action(
+    request: Request,
+    key: str,
+    action: str,
+    admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
+    db: Session = Depends(db_session),
+):
+    t = t_for(get_lang(request))
+    units = _core_units()
+    if key not in units or action not in _CORE_ACTIONS:
+        raise HTTPException(status_code=404, detail="unknown core or action")
+    unit = units[key]
+    name = _CORE_NAMES[key]
+    action_label = {
+        "start": t["core_start"],
+        "stop": t["core_stop"],
+        "restart": t["core_restart"],
+    }[action]
+    error = _control_service(unit, action)
+    if error is not None:
+        logger.warning(
+            "cores action failed: %s %s — %s", action, unit, _redact(error)
+        )
+        _audit(db, admin.id, f"service.{action}", f"{key} [web] failed")
+        # The failure flash is short (flash text travels in the URL);
+        # the journal tail is on the page itself via ?log=<key>.
+        return _redirect(
+            f"/cores?log={key}",
+            request,
+            err=t["core_action_failed"].format(action=action_label, name=name),
+        )
+    _audit(db, admin.id, f"service.{action}", f"{key} [web]")
+    # A zero exit code is not proof the service is in the expected
+    # state — re-check, and say so honestly when it is not (or when
+    # the state cannot be observed at all).
+    state = _core_states().get(key, "unknown")
+    expected = "stopped" if action == "stop" else "running"
+    if state == expected:
+        done_key = {
+            "start": "core_started",
+            "stop": "core_stopped",
+            "restart": "core_restarted",
+        }[action]
+        return _redirect("/cores", request, msg=t[done_key].format(name=name))
+    if state == "unknown":
+        return _redirect(
+            "/cores",
+            request,
+            msg=t["core_action_unverified"].format(
+                action=action_label, name=name
+            ),
+        )
+    state_label = {
+        "running": t["service_running"],
+        "stopped": t["service_stopped"],
+    }.get(state, t["service_unknown"])
+    return _redirect(
+        f"/cores?log={key}",
+        request,
+        err=t["core_action_mismatch"].format(
+            action=action_label, name=name, state=state_label
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

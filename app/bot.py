@@ -73,6 +73,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+import re
 import secrets
 import time
 from dataclasses import dataclass
@@ -164,11 +165,11 @@ BOT_SNI_PROTOCOLS = (
 
 # Service key -> display name (shared by the status view and the
 # services view) and key -> systemd unit the panel may restart.
-# AmneziaWG is deliberately absent from the restart map: the
-# installer's sudoers block grants no `systemctl restart
-# awg-quick@awg0` (only `start`), so offering the button would
-# always fail — the services view says so instead. The panel itself
-# (sparky-manager) is also absent: restarting the panel from inside
+# Every core is restartable: the installer's sudoers block (v15)
+# grants `systemctl restart` for all 7 units, including AmneziaWG
+# (before v15 only `start` was granted for awg-quick@awg0, so the
+# bot offered no AWG restart button). The panel itself
+# (sparky-manager) is still absent: restarting the panel from inside
 # the bot would kill the process before it could report the result.
 _SERVICE_NAMES = {
     "xray": "Xray",
@@ -183,6 +184,7 @@ _SERVICE_RESTART_UNITS = {
     "xray": "xray",
     "sing-box": "sing-box",
     "wireguard": "wg-quick@wg0",
+    "amneziawg": "awg-quick@awg0",
     "openvpn": "openvpn-server@sparky-manager",
     "openconnect": "ocserv",
     "ikev2": "strongswan",
@@ -335,7 +337,8 @@ BOT_STRING_KEYS = (
     "bot_service_restarted",
     "bot_service_restart_failed",
     "bot_service_restart_unverified",
-    "bot_services_awg_note",
+    "bot_failure_log_attached",
+    "bot_failure_log_truncated",
     "bot_backup_title",
     "bot_backup_hint",
     "bot_backup_send",
@@ -689,15 +692,78 @@ def _rerender(ctx: _Ctx) -> list[str]:
         return [ctx.t["bot_action_failed"]]
 
 
+# Failure logs in the bot: the full journal tail is copyable — inline
+# in a <pre> block when it fits, as a .log file when it does not. The
+# budget is well under Telegram's 4096-char cap because the note is
+# appended to a view message (users / inbounds / services list) that
+# takes space of its own.
+_FAILURE_LOG_INLINE_BUDGET = 1500
+# Lines of the log shown in the note when the full log goes to a file.
+_FAILURE_LOG_PREVIEW_LINES = 5
+
+# systemctl's `See "systemctl status ..." and "journalctl -xeu ..."`
+# hint is not actionable from Telegram (the admin cannot run
+# systemctl from a chat) — strip it from bot-facing error text,
+# line by line, whatever unit it names.
+_SYSTEMD_HINT_RE = re.compile(r'^\s*See "systemctl status .*$', re.MULTILINE)
+
+
+def _strip_systemd_hint(text: str) -> str:
+    """Drop systemctl's "See systemctl status ... / journalctl ..."
+    boilerplate lines; keep the real error + the journal."""
+    cleaned = _SYSTEMD_HINT_RE.sub("", text or "")
+    return "\n".join(
+        line for line in cleaned.splitlines() if line.strip()
+    ).strip()
+
+
+def _failure_note(ctx: _Ctx, title: str, error_text: str, filename: str) -> str:
+    """A copyable failure note for the admin.
+
+    The cleaned error goes in a ``<pre>`` block (copyable with a
+    long press) when it fits the inline budget. When it does not,
+    the FULL log is sent as a ``.log`` file and the note shows only
+    the first lines (cut at a line boundary, never mid-line) plus a
+    marker pointing at the file. When the file send fails, the note
+    falls back to the same line-boundary preview with a "truncated"
+    marker — a mid-line cut inside a ``<pre>`` block is never
+    produced.
+    """
+    cleaned = _strip_systemd_hint(error_text)
+    if not cleaned:
+        return title
+    if len(cleaned) <= _FAILURE_LOG_INLINE_BUDGET:
+        return f"{title}\n<pre>{h(cleaned)}</pre>"
+    document = getattr(ctx.sender, "document", None)
+    sent = False
+    if callable(document):
+        try:
+            sent = bool(document(ctx.chat_id, filename, cleaned.encode("utf-8")))
+        except Exception:  # noqa: BLE001 — the file must not break the note
+            logger.exception("telegram bot failure-log file send failed")
+            sent = False
+    preview = "\n".join(cleaned.splitlines()[:_FAILURE_LOG_PREVIEW_LINES])
+    marker = (
+        ctx.t["bot_failure_log_attached"]
+        if sent
+        else ctx.t["bot_failure_log_truncated"]
+    )
+    return f"{title}\n<pre>{h(preview)}</pre>\n{marker}"
+
+
 def _rerender_note(ctx: _Ctx, errors: list[str]) -> Optional[str]:
-    """One-line warning appended to a reply when re-rendering failed.
+    """Warning appended to a reply when re-rendering failed.
 
     The error text comes from the system (config validators, shell
     output) and can contain anything, so it is HTML-escaped — one
-    stray ``<`` would fail the whole reply."""
+    stray ``<`` would fail the whole reply. Long errors go to a file
+    (see :func:`_failure_note`); the note itself never cuts mid-line.
+    """
     if not errors:
         return None
-    return "⚠️ " + ctx.t["bot_rerender_failed"] + " " + h("; ".join(errors)[:400])
+    return "⚠️ " + _failure_note(
+        ctx, ctx.t["bot_rerender_failed"], "\n".join(errors), "rerender-error.log"
+    )
 
 
 def _show(ctx: _Ctx, message_id: Optional[int], text: str, keyboard: Any = None) -> None:
@@ -2489,8 +2555,7 @@ def _show_services(
 ) -> None:
     """Every service with its state; a restart button for each
     service the panel may actually restart (see
-    ``_SERVICE_RESTART_UNITS`` — AmneziaWG has no sudoers entry for
-    restart, so it gets no button and the note below says why)."""
+    ``_SERVICE_RESTART_UNITS`` — all 7 cores since sudoers v15)."""
     t = ctx.t
     states = _service_states(ctx)
     state_labels = {
@@ -2512,8 +2577,6 @@ def _show_services(
             kb_rows.append(
                 [(f"{t['bot_service_restart']} {_SERVICE_NAMES[key]}", f"s:rst:{key}")]
             )
-    lines.append("")
-    lines.append(t["bot_services_awg_note"])
     text = "\n".join(lines)
     if note:
         text += "\n\n" + note
@@ -2560,10 +2623,11 @@ def _restart_service_via_bot(
         logger.exception("telegram bot service restart failed")
         error = t["bot_action_failed"]
     if error is not None:
-        note = (
-            t["bot_service_restart_failed"].format(name=name)
-            + " "
-            + h(str(error)[:800])
+        note = _failure_note(
+            ctx,
+            t["bot_service_restart_failed"].format(name=name),
+            str(error),
+            f"{key}-restart-error.log",
         )
         _show_services(ctx, message_id, note=note)
         return None

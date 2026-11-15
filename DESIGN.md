@@ -509,8 +509,8 @@ updates to the panel) or polling (the panel long-polls `getUpdates`).
 | Diagnostics | The settings page's Telegram section shows the connection mode, the bot identity (`getMe`, fetched on demand by the "Check bot identity" button and cached in `telegram_bot_identity` — id, username, first name, never the token), the authorized chat ID, when the commands were last registered, and — for polling — the last successful poll, the last update received, the last error, and the persisted offset. |
 | Auth | Only the configured admin chat ID may use the bot; updates from any other chat are ignored silently — no reply, no error, nothing that confirms the bot exists. The check runs on every command AND every callback (the dispatcher verifies the chat id before any handler runs); callback data is never trusted as authorization — it only identifies the entity to look up. |
 | Dispatcher | `app/bot.py:handle_update` — never raises (a bad update is logged and dropped). Duplicate `update_id`s are ignored (Telegram redelivers). Commands: `/start` / `/menu` (main menu), `/help`, `/status`, `/users`, `/inbounds`, `/cancel`. Inline keyboards everywhere; views edit the menu message in place and fall back to sending a new message when the edit fails. An expired/invalid button tap is answered with a friendly message + the main menu, never silence and never a stack trace. Messages use HTML parse_mode (`<b>` only) with all user-controlled text escaped via `h()`; long messages are truncated HTML-safely (a cut never splits a tag or an entity — Telegram rejects malformed HTML wholesale). A persistent reply keyboard (Users / Inbounds / Status / Menu) sits below the chat; tapping a key abandons any in-progress guided flow. `/start` sends two messages by design (one message carries one markup: welcome + inline menu, then a hint + the persistent keyboard). |
-| What the bot does | Users: paginated list, search (name/note substring), view (traffic/expiry/frozen/inbounds), create (guided flow: name → pick inbounds → traffic limit → expiry), edit (guided: name / traffic limit / expiry, same validation as the web edit route), freeze/unfreeze, extend expiry (+7/+30/+90 days), reset traffic, delete (with confirmation). Inbounds: paginated list (8 per page) with client counts from one grouped query, view, toggle, guided create (all fourteen protocols the panel supports, with sensible defaults: auto port, auto tag, panel-default SNI, fresh Reality keypair for VLESS, the native cores' default subnets — same stream shape and validation as the web create route via the shared `_check_new_inbound` helper), delete (with confirmation; deletes its clients too). Links: a user's share links + subscription link (the same links the panel generates; a subscription host or domain is required for share links, and a domain for the subscription URL — without one the bot says so instead of sending a broken link). Status: server status (`app.system_status`) + traffic summary (today + 14 days from `traffic_daily`) + user counts. Services: status per service + restart with confirmation, only for services the installer's sudoers block covers (`systemctl restart xray / sing-box / wg-quick@wg0 / openvpn-server@sparky-manager / ocserv / strongswan`); AmneziaWG has no restart entry, so it gets no button and the view says why; the panel itself is not offered (restarting the panel from inside the bot would kill the process before it could report the result). Success is only claimed when the service is actually running afterwards; an unobservable state is reported as unverified, not as success. Backup: creates the backup ZIP (same builder as the settings-page download) and sends it as a document to the admin chat only; a ZIP over Telegram's 50 MB bot-API cap is refused honestly (the web download still works). |
-| Semantics | Every state change reuses the web route's exact behavior: same validation (name format/uniqueness, limit/expiry parsing, port/tag/clash checks), same audit action names (detail marked `[telegram]`), same `rerender_configs` call — a re-render failure is reported in the reply, not hidden. The create flow's inbound picker defaults to all enabled inbounds (the web form's behavior) and lets the admin narrow the set; `_create_clients_for_user` takes an optional inbound filter for that. |
+| What the bot does | Users: paginated list, search (name/note substring), view (traffic/expiry/frozen/inbounds), create (guided flow: name → pick inbounds → traffic limit → expiry), edit (guided: name / traffic limit / expiry, same validation as the web edit route), freeze/unfreeze, extend expiry (+7/+30/+90 days), reset traffic, delete (with confirmation). Inbounds: paginated list (8 per page) with client counts from one grouped query, view, toggle, guided create (all fourteen protocols the panel supports, with sensible defaults: auto port, auto tag, panel-default SNI, fresh Reality keypair for VLESS, the native cores' default subnets — same stream shape and validation as the web create route via the shared `_check_new_inbound` helper), delete (with confirmation; deletes its clients too). Links: a user's share links + subscription link (the same links the panel generates; a subscription host or domain is required for share links, and a domain for the subscription URL — without one the bot says so instead of sending a broken link). Status: server status (`app.system_status`) + traffic summary (today + 14 days from `traffic_daily`) + user counts. Services: status per service + restart with confirmation for all seven cores (the installer's sudoers block, v15, grants `systemctl restart` for every unit, including `awg-quick@awg0`); the panel itself is not offered (restarting the panel from inside the bot would kill the process before it could report the result). Success is only claimed when the service is actually running afterwards; an unobservable state is reported as unverified, not as success. Backup: creates the backup ZIP (same builder as the settings-page download) and sends it as a document to the admin chat only; a ZIP over Telegram's 50 MB bot-API cap is refused honestly (the web download still works). |
+| Semantics | Every state change reuses the web route's exact behavior: same validation (name format/uniqueness, limit/expiry parsing, port/tag/clash checks), same audit action names (detail marked `[telegram]`), same `rerender_configs` call — a re-render failure is reported in the reply, not hidden: the error goes in a copyable `<pre>` block, or the full log is sent as a `.log` file when it is too long for one message (systemd's \"See systemctl status ...\" hint is stripped — it is not actionable from a chat). The create flow's inbound picker defaults to all enabled inbounds (the web form's behavior) and lets the admin narrow the set; `_create_clients_for_user` takes an optional inbound filter for that. |
 | Conversation state | In-memory only (`_conversations`, per chat id, 10-minute timeout) — no DB schema change. `/cancel` aborts; any other command or menu tap abandons the flow (except paging through search results, which keeps the query — it lives in the conversation state because a Persian query would not fit Telegram's 64-byte callback-data limit). |
 | Language | The bot speaks Persian (no per-admin language setting exists to follow); every bot string still has an EN key (`BOT_STRING_KEYS` in `app/bot.py`; the test suite asserts fa/en parity). The setMyCommands descriptions are Persian too. |
 
@@ -900,7 +900,7 @@ sparky-manager/
 │   ├── sparky-manager.service
 │   ├── xray.service           # or use the cores' shipped units
 │   └── sing-box.service
-├── tests/                     # 1101 tests (conftest.py: seeded DB + CSRF client)
+├── tests/                     # 1130 tests (conftest.py: seeded DB + CSRF client)
 │   ├── test_links.py          # link round-trips for all 9 schemes
 │   ├── test_render.py         # golden configs → xray -test / sing-box check
 │   ├── test_subscription.py   # v2rayNG + sing-box feeds parse cleanly
@@ -1175,9 +1175,10 @@ template resolves).
 
 After the professional upgrade landed on the live server, Morteza
 found live issues and asked for a complete check of the project.
-`main.py` is 4,766 lines at this point (4,546 at the end of Phase 7;
-the fix batch and bot polish added routes, diagnostics and the
-webhook set-on-save path). The full suite is 1101 tests.
+`main.py` is 4,922 lines at this point (4,546 at the end of Phase 7;
+the post-upgrade batches added routes, diagnostics, the webhook
+set-on-save path, the Cores page and the bot UX work). The full suite
+is 1130 tests; i18n parity is 514 keys each.
 
 - **Fix batch (evening, after the server upgrade).** The language
   toggle reverted on navigation (the `lang` cookie was only set on
@@ -1247,6 +1248,33 @@ webhook set-on-save path). The full suite is 1101 tests.
   (diagnostics), and the Telegram action buttons sit in two
   wrapping rows. The full suite is 1101 tests; i18n parity is 495
   keys each.
+- **Cores page + copyable bot logs + OpenVPN 2.6 fix (evening).**
+  A dedicated Cores page (`/cores`, System group in the nav): one
+  card per core (Xray, sing-box, WireGuard, AmneziaWG, OpenVPN,
+  OpenConnect, IKEv2) with its live state (from
+  `app.system_status` — unobservable is \"unknown\", never
+  \"stopped\"), Start / Stop / Restart buttons matched to the state
+  (running → Stop + Restart, stopped → Start, unknown → all three),
+  the enabled-inbound count or an \"on demand\" hint when no enabled
+  inbound uses the core, and a View-log action showing the journal
+  tail on demand (`_journal_tail`, already sudoers-covered for all
+  8 units). Every action re-checks the actual state afterwards and
+  reports success / mismatch / unverified honestly; a failure
+  redirects to the page with that core's log already expanded (the
+  flash itself stays short — it travels in the URL). All actions
+  are CSRF-protected POSTs, audited as `service.start` /
+  `service.stop` / `service.restart`. The sudoers block is now v15:
+  `start` + `stop` for every managed unit and `restart
+  awg-quick@awg0` (exact unit names, no wildcards in the new rules)
+  — so the bot's services view offers AmneziaWG restart too (it
+  used to refuse it, and the \"cannot restart\" note is gone). The
+  panel itself is deliberately not start/stop-managed from the
+  page. Bot failure logs are copyable now: the cleaned error goes
+  in a `<pre>` block when it fits (1500 chars), otherwise the full
+  log is sent as a `.log` file with a short preview note; systemd's
+  \"See systemctl status ...\" hint is stripped from bot-facing
+  errors (not actionable from a chat), and no cut ever lands
+  mid-line. And the OpenVPN crash-loop is fixed (see §15.4).
 
 ### 15.1 The admin password on re-install (installer trap, fixed)
 
@@ -1338,6 +1366,30 @@ already hold those ports, so the check must exempt the panel's own
 PIDs (or run after stopping them), and the `ss` parsing + UDP +
 IPv6 edge cases make it a feature, not a one-liner. The uninstall
 fix above closes the reported failure mode.
+
+### 15.4 OpenVPN 2.6 removed `client-cert-not-required` (live incident, fixed)
+
+On 2026-11-15 the bot created an OpenVPN inbound and the service
+restart failed; the journal showed `openvpn: REMOVED OPTION:
+--client-cert-not-required, use '--verify-client-cert none'
+instead` followed by `Exiting due to fatal error`, and systemd
+crash-looped the unit (restart counter 25). The option was removed
+in OpenVPN 2.6 — Ubuntu 26.04 ships 2.6.x — and both the panel
+renderer (`app/openvpn.py`) and the installer's minimal config
+carried it. The docstring even claimed the old option was \"still
+accepted\" in 2.6; it is not.
+
+Fix: both configs now use `verify-client-cert none`, which exists
+since OpenVPN 2.5 and works on 22.04/24.04/26.04 alike. A grep
+confirmed no other 2.6-removed option (`tls-remote`,
+`ifconfig-pool-linear`, `ncp-disable`, `key-method`,
+`ns-cert-type`) appears anywhere in the tree. Regression test: the
+rendered server config must contain `verify-client-cert none` and
+none of the removed options, and the installer's minimal config
+gets the same assertions. Immediate relief on the live server was
+`systemctl stop openvpn-server@sparky-manager` (ends the loop);
+the fix reaches the server with the next installer re-run, which
+re-renders the config.
 
 ---
 

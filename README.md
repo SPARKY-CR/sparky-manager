@@ -11,7 +11,7 @@ Public project, MIT licensed. **Built from scratch** — no fork, no copied
 code from 3X-UI, vpn-ui, Marzban, or any other panel.
 
 > **Status: professional upgrade complete on branch
-> `upgrade/professional`** (base: `main` at v1.2.0). 1101 tests pass;
+> `upgrade/professional`** (base: `main` at v1.2.0). 1130 tests pass;
 > the rendered Xray config passes `xray run -test` against real
 > Xray 26.11.9 and the rendered sing-box config passes `sing-box
 > check` against real sing-box 1.14.4. The panel is installed and
@@ -175,7 +175,8 @@ atomically, and re-renders configs — treat the ZIP like a private key:
 it contains every password, private key, and the bot token; restore is
 roundtrip-tested but has not been exercised on a live panel yet, so
 keep a copy of the current database before restoring), server status (CPU load, RAM, disk, uptime,
-and per-service state for every core), and 14-day traffic charts on
+and per-service state for every core), a Cores page to start/stop/restart each core separately
+and view its journal, and 14-day traffic charts on
 the dashboard and each user page (server-rendered SVG, no external
 libraries; days without traffic show as zero).
 
@@ -197,13 +198,11 @@ webhook". The settings page shows the Telegram connection status
 (mode, bot identity, last poll, last update, last error). Only that
 chat ID can use the bot; anyone else gets no reply at all. The webhook
 URL carries a random secret (not the bot token) and lives under the
-panel's secret web path. Two limitations: Telegram only delivers
+panel's secret web path. One limitation: Telegram only delivers
 webhooks on ports 443, 80, 88 and 8443, while the installer picks a
 random panel port — if webhook registration fails, switch to polling,
 or re-run the installer with `--port 8443` (when no inbound uses TCP
-8443) or put a reverse proxy on 443 in front of the panel; and
-AmneziaWG cannot be restarted from the bot (the installer does not
-grant the needed sudo access).
+8443) or put a reverse proxy on 443 in front of the panel.
 
 ## Configuration
 
@@ -250,7 +249,7 @@ pip install pytest
 python -m pytest -q
 ```
 
-The suite (1101 tests) covers config rendering (golden configs
+The suite (1130 tests) covers config rendering (golden configs
 validated against real Xray/sing-box binaries where available), link
 builders, subscriptions, user/inbound management, the Telegram bot,
 CSRF/auth boundaries, the gRPC stats client, and the UI (every page

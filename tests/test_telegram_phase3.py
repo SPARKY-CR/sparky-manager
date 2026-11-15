@@ -889,11 +889,11 @@ def test_services_view_shows_statuses_and_restart_buttons(
     assert "Xray" in text and "WireGuard" in text
     assert "در حال اجرا" in text and "متوقف" in text
     data = _button_data(sender.edited[-1][3])
-    for key in ("xray", "sing-box", "wireguard", "openvpn", "openconnect", "ikev2"):
+    for key in ("xray", "sing-box", "wireguard", "amneziawg", "openvpn",
+                "openconnect", "ikev2"):
         assert f"s:rst:{key}" in data
-    # AmneziaWG has no restart button (no sudoers entry) — and the
-    # view says so.
-    assert "s:rst:amneziawg" not in data
+    # AmneziaWG has a restart button too since sudoers v15 grants
+    # `systemctl restart awg-quick@awg0` (before v15 it had none).
     assert "AmneziaWG" in text
 
 
@@ -953,16 +953,25 @@ def test_service_restart_unverified(db, sender, fake_status, monkeypatch):
     )
 
 
-def test_service_restart_amneziawg_refused(db, sender, monkeypatch):
+def test_service_restart_amneziawg_allowed(db, sender, fake_status, monkeypatch):
+    """AmneziaWG restart works since sudoers v15 grants
+    `systemctl restart awg-quick@awg0` (before v15 the bot refused
+    it — no sudoers entry)."""
     _configure_bot(db)
     restarted: list = []
     monkeypatch.setattr(
         main_mod, "_restart_service",
         lambda name: restarted.append(name) or None,
     )
+    _dispatch(db, _callback("s:rst:amneziawg"), sender)
+    assert "ریستارت شود" in sender.edited[-1][2]
     _dispatch(db, _callback("s:rst:amneziawg:ok"), sender)
-    assert restarted == []
-    assert "دیگر معتبر نیست" in sender.edited[-1][2]
+    assert restarted == ["awg-quick@awg0"]
+    assert "ریستارت شد" in sender.edited[-1][2]
+    assert (
+        db.query(AuditLog).filter(AuditLog.action == "service.restart").count()
+        == 1
+    )
 
 
 def test_service_restart_cancel(db, sender, fake_status, monkeypatch):

@@ -78,10 +78,10 @@ def _fake_httpx_post(calls, status_code=200, payload=None):
 
 
 def _assert_valid_bot_html(text: str) -> None:
-    """No bare <, > or & outside <b>...</b> tags — Telegram rejects a
-    message whose HTML is malformed, so one stray character fails
-    the whole reply."""
-    stripped = re.sub(r"</?b>", "", text)
+    """No bare <, > or & outside the supported Telegram tags (<b> and
+    <pre>) — Telegram rejects a message whose HTML is malformed, so one
+    stray character fails the whole reply."""
+    stripped = re.sub(r"</?(?:b|pre)>", "", text)
     assert "<" not in stripped, f"bare < in: {text!r}"
     assert ">" not in stripped, f"bare > in: {text!r}"
     assert re.search(r"&(?!amp;|lt;|gt;|quot;)", stripped) is None, (

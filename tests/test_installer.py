@@ -1,4 +1,4 @@
-"""Installer tests (v14): extraction tests under real ``set -euo pipefail``.
+"""Installer tests (v15): extraction tests under real ``set -euo pipefail``.
 
 The v9.2 lesson: installer logic must be tested under the real shell
 flags, or SIGPIPE-style bugs hide. These tests extract functions /
@@ -9,7 +9,7 @@ end here (it needs root, apt and the network).
 What is covered:
 * ``bash -n install.sh`` (syntax).
 * The sudoers block: valid under ``visudo -cf`` and carries every
-  command the panel needs (v14 additions included).
+  command the panel needs (v15 additions included).
 * ``pick_random_web_path`` (v9.2 regression): 12 chars, ``[a-z0-9]``,
   never exits 141 under ``set -euo pipefail``.
 * ``generate_vpn_ca``: creates a CA + server cert with the right
@@ -90,7 +90,7 @@ def test_installer_syntax():
     assert proc.returncode == 0, proc.stderr
 
 
-def test_sudoers_block_validates_and_covers_v14():
+def test_sudoers_block_validates_and_covers_v15():
     text = _install_text()
     block = _extract_heredoc(
         text, "cat > /etc/sudoers.d/sparky-manager <<'EOF'"
@@ -98,7 +98,7 @@ def test_sudoers_block_validates_and_covers_v14():
     # The file cat writes ends with a newline; visudo rejects a file
     # without the terminator ("missing line terminator at end of file").
     assert block.endswith("\n")
-    # Every command the panel needs (v14 additions included).
+    # Every command the panel needs (v15 additions included).
     # NOTE: `wg-quick strip` has NO rule here — it runs unprivileged
     # (see app.wgapply), and the syncconf temp path is a lone
     # trailing `*`: newer sudo rejects wildcards embedded in a
@@ -109,8 +109,21 @@ def test_sudoers_block_validates_and_covers_v14():
         "/usr/bin/systemctl restart openvpn-server@sparky-manager",
         "/usr/bin/systemctl restart ocserv",
         "/usr/bin/systemctl restart strongswan",
+        "/usr/bin/systemctl restart awg-quick@awg0",
         "/usr/bin/systemctl start wg-quick@wg0",
         "/usr/bin/systemctl start awg-quick@awg0",
+        "/usr/bin/systemctl start xray",
+        "/usr/bin/systemctl start sing-box",
+        "/usr/bin/systemctl start openvpn-server@sparky-manager",
+        "/usr/bin/systemctl start ocserv",
+        "/usr/bin/systemctl start strongswan",
+        "/usr/bin/systemctl stop xray",
+        "/usr/bin/systemctl stop sing-box",
+        "/usr/bin/systemctl stop wg-quick@wg0",
+        "/usr/bin/systemctl stop awg-quick@awg0",
+        "/usr/bin/systemctl stop openvpn-server@sparky-manager",
+        "/usr/bin/systemctl stop ocserv",
+        "/usr/bin/systemctl stop strongswan",
         "/usr/bin/wg show wg0",
         "/usr/bin/awg show awg0",
         "/usr/bin/wg syncconf wg0 *",
@@ -313,8 +326,12 @@ def test_minimal_configs_match_panel_validators():
     for directive in (
         "port 1194", "proto udp", "dev tun", "ca ", "cert ", "key ",
         "server 10.9.0.0", "auth-user-pass-verify", "cipher AES-256-GCM",
+        "verify-client-cert none",
     ):
         assert directive in ovpn, directive
+    # OpenVPN 2.6 removed `client-cert-not-required` (live crash-loop,
+    # 2026-11-15) — the minimal config must not carry it either.
+    assert "client-cert-not-required" not in ovpn
     # ocserv minimal config.
     ocserv = _extract_heredoc(text, "cat > /etc/ocserv/ocserv.conf <<EOF")
     for directive in (
