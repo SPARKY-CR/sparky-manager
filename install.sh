@@ -41,6 +41,7 @@ WEB_PATH=""          # empty = not given; resolved below (random on fresh instal
 WEB_PATH_GIVEN=0      # 1 when --web-path is passed
 DOMAIN=""
 REALITY_SNI="www.microsoft.com"
+REALITY_SNI_GIVEN=0  # 1 when --reality-sni is passed
 ADMIN_PASSWORD=""
 YES=0
 UNINSTALL=0
@@ -172,8 +173,8 @@ while [ $# -gt 0 ]; do
         --web-path=*)       WEB_PATH="${1#--web-path=}"; WEB_PATH_GIVEN=1; shift ;;
         --domain)           DOMAIN="$2"; shift 2 ;;
         --domain=*)         DOMAIN="${1#--domain=}"; shift ;;
-        --reality-sni)      REALITY_SNI="$2"; shift 2 ;;
-        --reality-sni=*)    REALITY_SNI="${1#--reality-sni=}"; shift ;;
+        --reality-sni)      REALITY_SNI="$2"; REALITY_SNI_GIVEN=1; shift 2 ;;
+        --reality-sni=*)    REALITY_SNI="${1#--reality-sni=}"; REALITY_SNI_GIVEN=1; shift ;;
         --admin-password)   ADMIN_PASSWORD="$2"; shift 2 ;;
         --admin-password=*) ADMIN_PASSWORD="${1#--admin-password=}"; shift ;;
         *)                  die "Unknown option: $1 (see --help)" ;;
@@ -357,6 +358,22 @@ if [ "$WEB_PATH_GIVEN" -eq 0 ]; then
     fi
 fi
 
+# Reality SNI: re-used from panel.env on a re-install, --reality-sni
+# always wins. Fresh installs keep the default (www.microsoft.com)
+# and are still asked at the prompt below; a re-install skips the
+# prompt entirely (the saved value is already the admin's choice).
+SNI_SAVED=0
+if [ "$REALITY_SNI_GIVEN" -eq 0 ]; then
+    if [ -f /opt/sparky-manager/data/panel.env ]; then
+        _saved_sni="$(grep -E '^SPARKY_REALITY_SNI=' /opt/sparky-manager/data/panel.env | tail -n 1 | cut -d= -f2 | tr -d "'" || true)"
+        if [ -n "$_saved_sni" ]; then
+            REALITY_SNI="$_saved_sni"
+            SNI_SAVED=1
+            info "Reusing existing Reality SNI ${REALITY_SNI} from a previous install."
+        fi
+    fi
+fi
+
 # ---------------------------------------------------------------------------
 # Interactive prompts (all skippable with --yes / flags)
 # ---------------------------------------------------------------------------
@@ -370,7 +387,9 @@ case "$WEB_PATH" in
     *[!A-Za-z0-9_-]*) die "Invalid web path: $WEB_PATH (use letters, digits, '-' or '_')" ;;
 esac
 ask DOMAIN "Domain (empty = no domain, bare IP)" "$DOMAIN"
-ask REALITY_SNI "Reality SNI" "$REALITY_SNI"
+if [ "$SNI_SAVED" -eq 0 ]; then
+    ask REALITY_SNI "Reality SNI" "$REALITY_SNI"
+fi
 ask_secret ADMIN_PASSWORD "Admin password"
 
 case "$PANEL_PORT" in
@@ -1623,21 +1642,6 @@ umask 077
         echo "  available as an option in the panel settings."
     fi
     echo ""
-    echo "  Default VPN (no domain needed):"
-    echo "    VLESS+Reality  TCP 443  (SNI: ${REALITY_SNI})"
-    echo "    Hysteria2      UDP 443"
-    echo "    WireGuard      UDP 51820"
-    echo "    Shadowsocks    TCP 8388"
-    echo ""
-    echo "  More protocols in the panel (create as inbounds):"
-    echo "    OpenVPN        UDP 1194  (.ovpn file)"
-    echo "    OpenConnect    TCP+UDP 4433  (AnyConnect profile)"
-    echo "    AmneziaWG      UDP 51821  (vpn:// link + .conf)"
-    echo "    IKEv2          UDP 500 + 4500  (.mobileconfig)"
-    echo ""
-    echo "  Panel logs: Logs page in the panel (data/logs/panel.log)."
-    echo ""
-    echo "  Subscriptions, QR codes and users are inside the panel."
     echo "  Reprint this anytime:  sudo sparky-manager info"
     echo "  Installed versions:    Xray ${XRAY_TAG}, sing-box ${SINGBOX_TAG}"
     echo "============================================================"
