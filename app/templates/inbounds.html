@@ -130,7 +130,7 @@
     <div class="field-grid">
       <label>
         {{ t.tag }}
-        <input type="text" name="tag" pattern="[a-zA-Z0-9_-]+" value="{{ suggested.tag }}">
+        <input type="text" name="tag" pattern="[a-zA-Z0-9_-]+" placeholder="{{ t.auto }}">
       </label>
       <label>
         {{ t.core }}
@@ -165,7 +165,7 @@
       </label>
       <label>
         {{ t.port }}
-        <input type="number" name="port" id="inbound-port" min="1" max="65535" value="{{ suggested.port if suggested.port else '' }}">
+        <input type="number" name="port" id="inbound-port" min="1" max="65535" placeholder="{{ t.auto }}">
       </label>
       <label>
         {{ t.network }}
@@ -179,7 +179,7 @@
       </label>
       <label>
         {{ t.sni }}
-        <input type="text" name="sni" placeholder="www.microsoft.com" value="{{ suggested.sni }}">
+        <input type="text" name="sni" placeholder="{{ suggested.sni }}">
       </label>
       <label>
         {{ t.path }}
@@ -192,7 +192,6 @@
     </div>
     <div class="form-actions">
       <button type="submit" class="btn btn-primary">{{ t.create }}</button>
-      <a class="btn btn-small" href="{{ base_path }}/inbounds">🎲 {{ t.new_values }}</a>
     </div>
   </form>
 </details>

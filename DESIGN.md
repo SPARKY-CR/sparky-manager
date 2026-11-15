@@ -917,7 +917,7 @@ sparky-manager/
 │   ├── sparky-manager.service
 │   ├── xray.service           # or use the cores' shipped units
 │   └── sing-box.service
-├── tests/                     # 1447 tests (conftest.py: seeded DB + CSRF client)
+├── tests/                     # 1472 tests (conftest.py: seeded DB + CSRF client)
 │   ├── test_links.py          # link round-trips for all 9 schemes
 │   ├── test_render.py         # golden configs → xray -test / sing-box check
 │   ├── test_subscription.py   # v2rayNG + sing-box feeds parse cleanly
@@ -1197,7 +1197,7 @@ found live issues and asked for a complete check of the project.
 `main.py` is 4,922 lines at this point (4,546 at the end of Phase 7;
 the post-upgrade batches added routes, diagnostics, the webhook
 set-on-save path, the Cores page and the bot UX work). The full suite
-is 1447 tests; i18n parity is 769 keys each.
+is 1472 tests; i18n parity is 769 keys each.
 
 - **Fix batch (evening, after the server upgrade).** The language
   toggle reverted on navigation (the `lang` cookie was only set on
@@ -1680,6 +1680,75 @@ webhook delivery to a real receiver, HWID enforcement against a
 real Happ/v2RayTun client, and the PWA-adjacent pages were
 verified by tests only — the first real login / delivery / fetch
 after deploy is the true check.
+
+### 15.7 Fix batch — inbound auto-fill, sub without domain, bot hint (2026-11-16)
+
+Three user-reported fixes, no schema change, no new dependency,
+no install.sh / sudoers / requirements / CI change. The full suite
+is 1472 tests; i18n parity is 769 keys each (one key added —
+`auto` — one removed — `new_values`).
+
+1. **Inbound auto-fill bug.** The add-inbound form pre-filled tag
+   `vless-<port>` (computed once for "vless" in the GET handler)
+   and a random port; nothing updated them when the protocol
+   dropdown changed, so an OpenVPN inbound got tag `vless-54729`,
+   and the pre-filled port defeated the create route's
+   preferred-port logic (1194 for OpenVPN, ...). The form now
+   leaves tag/port empty (placeholders only — `t.auto`) and the
+   server derives both from the SUBMITTED protocol+port via the
+   existing helpers; the SNI is a placeholder only, and the server
+   applies the configured default for xray/sing-box cores when the
+   field is left empty (the bot's create flow already did this),
+   so one-click VLESS creation keeps getting Reality. A duplicate
+   typed tag never errors anymore — 3X-UI behaviour: the backend
+   re-generates it via the new `ensure_unique_tag` (`-2`…`-99`,
+   truncating the base to stay inside NAME_RE's 64 chars);
+   `suggest_inbound_tag` delegates to it, so the bot path is
+   unchanged. The 🎲 re-roll button is gone (nothing to re-roll)
+   and its `new_values` i18n key with it. **Deliberate deviation
+   from the 3X-UI research:** the tag scheme stays
+   `<protocol>-<port>` instead of 3X-UI's
+   `in-{port}-{transport}` — the tag is the admin-visible name in
+   sparky (table, links, audit log) and the protocol in the name
+   is informative; changing the scheme would also change
+   bot-created tags, which share the helper. **Trade-off:** a
+   no-security inbound can no longer be created in one shot from
+   the create form (an empty SNI means the default for
+   xray/sing-box); the admin sets security to none on the edit
+   page afterwards. The already-misnamed inbound is renamed via
+   the edit page — no data migration.
+
+2. **Subscription link without a domain.** `_public_panel_url`
+   returns None without a domain, so the bot's Links view silently
+   omitted the subscription link. New `_subscription_panel_url`
+   (main.py, next to `_public_panel_url`): the domain wins when
+   set, else the `subscription_host` setting (usually the bare
+   server IP) with the same scheme-strip / embedded-port /
+   PANEL_PORT normalization; None when neither is set. The bot's
+   `_send_links` uses it; the webhook flow keeps calling
+   `_public_panel_url` directly (domain-only — Telegram cannot
+   register a webhook on an IP:port URL). The web UI needed no
+   change: its sub URLs are already built from the request URL.
+
+3. **Bot quick-menu hint.** /start and /menu sent a second message
+   ("🎛️ منوی سریع:") carrying the persistent reply keyboard. The
+   message is now sent via the new `send_message_id` (telegram.py,
+   returning the message id from the sendMessage result) and
+   deleted at once via the new `delete_message` — the reply
+   keyboard persists client-side after its message is deleted, so
+   the chat shows no hint text while the buttons stay.
+   `_install_reply_keyboard` (bot.py) wraps both calls: a failed
+   send (no id) or a failed delete is not fatal — the worst case
+   is the hint staying visible, exactly like before. The keyboard,
+   `_on_text` label matching and the guided-flow fall-through are
+   untouched. The webhook/polling test stubs now cover
+   `send_message_id`/`delete_message` too (they previously stubbed
+   only `send_message`, so the hint send hit the real network in
+   tests).
+
+Honest limitation: no live Telegram verification — the
+delete-after-send behaviour is verified by tests only; the first
+real /start after deploy is the true check.
 
 ---
 

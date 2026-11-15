@@ -133,9 +133,18 @@ def test_webhook_works_without_csrf_token(test_client, db, monkeypatch):
     main_mod.set_setting(db, "telegram_chat_id", "987654321")
     main_mod.set_setting(db, "telegram_webhook_secret", "test-secret")
     sent = []
+    deleted = []
     monkeypatch.setattr(
         telegram_mod, "send_message",
         lambda token, chat_id, text, **kw: sent.append(text) or True,
+    )
+    monkeypatch.setattr(
+        telegram_mod, "send_message_id",
+        lambda token, chat_id, text, **kw: sent.append(text) or 99,
+    )
+    monkeypatch.setattr(
+        telegram_mod, "delete_message",
+        lambda token, chat_id, mid: deleted.append(mid) or True,
     )
     resp = test_client.post_raw("/telegram/webhook/test-secret", json={
         "update_id": 424242,
@@ -147,9 +156,10 @@ def test_webhook_works_without_csrf_token(test_client, db, monkeypatch):
     })
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
-    # /start sends welcome + reply-keyboard hint.
+    # /start sends welcome + reply-keyboard hint, then deletes the hint.
     assert len(sent) == 2
     assert "sparky-manager" in sent[0]
+    assert deleted == [99]
 
 
 @pytest.mark.parametrize("path", [

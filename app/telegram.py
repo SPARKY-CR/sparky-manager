@@ -194,11 +194,37 @@ def send_message(
     forum or the topic does not exist (no silent fallback — a wrong
     topic id must be visible, not quietly ignored).
     """
+    return _ok(
+        _send_message_data(
+            token,
+            chat_id,
+            text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            message_thread_id=message_thread_id,
+            timeout=timeout,
+        )
+    )
+
+
+def _send_message_data(
+    token: str,
+    chat_id: str,
+    text: str,
+    *,
+    reply_markup: Optional[dict[str, Any]] = None,
+    parse_mode: Optional[str] = None,
+    message_thread_id: Optional[int] = None,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> Optional[dict[str, Any]]:
+    """Shared send path for :func:`send_message` and
+    :func:`send_message_id`: validate, truncate, post ``sendMessage``,
+    return the parsed Bot API dict (``None`` on any failure)."""
     token = (token or "").strip()
     chat_id = (chat_id or "").strip()
     text = (text or "").strip()
     if not token or not chat_id or not text:
-        return False
+        return None
     if len(text) > MAX_MESSAGE_LENGTH:
         if parse_mode:
             text = _truncate_html_safe(text, MAX_MESSAGE_LENGTH)
@@ -212,7 +238,66 @@ def send_message(
         payload["parse_mode"] = parse_mode
     if message_thread_id is not None:
         payload["message_thread_id"] = int(message_thread_id)
-    return _ok(_post(token, "sendMessage", payload, timeout=timeout))
+    return _post(token, "sendMessage", payload, timeout=timeout)
+
+
+def send_message_id(
+    token: str,
+    chat_id: str,
+    text: str,
+    *,
+    reply_markup: Optional[dict[str, Any]] = None,
+    parse_mode: Optional[str] = None,
+    message_thread_id: Optional[int] = None,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> Optional[int]:
+    """Send ``text`` like :func:`send_message`, but return the sent
+    message's id (``None`` on failure) instead of a bool — the caller
+    needs the id to delete the message again (the bot's
+    reply-keyboard installer sends the keyboard, then deletes its
+    own message so the chat shows no hint text). Same never-raise /
+    never-log-the-token contract."""
+    data = _send_message_data(
+        token,
+        chat_id,
+        text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        message_thread_id=message_thread_id,
+        timeout=timeout,
+    )
+    if not _ok(data):
+        return None
+    result = data.get("result") if isinstance(data, dict) else None
+    if not isinstance(result, dict):
+        return None
+    message_id = result.get("message_id")
+    return int(message_id) if isinstance(message_id, int) else None
+
+
+def delete_message(
+    token: str,
+    chat_id: str,
+    message_id: int,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> bool:
+    """Delete a message the bot sent (Bot API ``deleteMessage``).
+    True on success; False (never raises) when the message is
+    already gone, too old to delete, or Telegram is unreachable.
+    Deleting the reply-keyboard installer's message leaves the
+    keyboard in place client-side — the delete only removes the
+    visible hint text."""
+    chat_id = (chat_id or "").strip()
+    if not token or not chat_id or not message_id:
+        return False
+    return _ok(
+        _post(
+            token,
+            "deleteMessage",
+            {"chat_id": chat_id, "message_id": message_id},
+            timeout=timeout,
+        )
+    )
 
 
 def edit_message_text(

@@ -413,7 +413,7 @@ def _end_conversation(chat_id: int) -> None:
 class TelegramSender:
     """Bot API sender bound to one bot token (built by the webhook route).
 
-    The three methods are the whole surface the dispatcher needs; tests
+    These methods are the whole surface the dispatcher needs; tests
     inject a fake with the same methods. ``send`` returns False (never
     raises) when Telegram is unreachable — the dispatcher treats a
     failed reply as "the admin did not see it" and moves on.
@@ -437,6 +437,24 @@ class TelegramSender:
             reply_markup=reply_markup,
             parse_mode="HTML",
         )
+
+    def send_id(
+        self, chat_id: int, text: str, reply_markup: Optional[dict] = None
+    ) -> Optional[int]:
+        """Send like :meth:`send` but return the message id (None on
+        failure) — for messages the bot deletes right after sending."""
+        return telegram_mod.send_message_id(
+            self.token,
+            str(chat_id),
+            text,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )
+
+    def delete(self, chat_id: int, message_id: int) -> bool:
+        """Delete a message the bot sent. False on failure (the
+        message may already be gone) — never raises."""
+        return telegram_mod.delete_message(self.token, str(chat_id), message_id)
 
     def edit(
         self,
@@ -529,6 +547,35 @@ def _main_reply_kb(t: dict[str, str]) -> dict[str, Any]:
         "resize_keyboard": True,
         "is_persistent": True,
     }
+
+
+def _install_reply_keyboard(ctx: _Ctx) -> None:
+    """(Re-)install the persistent reply keyboard, invisibly.
+
+    One message can only carry one reply markup, so the keyboard
+    rides along as a second, short message — which is then deleted
+    immediately: the reply keyboard persists client-side after its
+    message is deleted, so the chat shows no "🎛️ منوی سریع:" hint
+    text while the buttons stay one tap away. A failed send (no
+    message id) or a failed delete is not fatal — the worst case is
+    the hint message staying visible, exactly like before this fix.
+    Never raises.
+    """
+    try:
+        message_id = ctx.sender.send_id(
+            ctx.chat_id,
+            ctx.t["bot_reply_keyboard_hint"],
+            reply_markup=_main_reply_kb(ctx.t),
+        )
+    except Exception:  # noqa: BLE001 — a failed install must not break /start
+        logger.exception("telegram reply keyboard install failed")
+        return
+    if message_id is None:
+        return
+    try:
+        ctx.sender.delete(ctx.chat_id, message_id)
+    except Exception:  # noqa: BLE001 — delete failure leaves the hint visible
+        logger.exception("telegram reply keyboard hint delete failed")
 
 
 def _flow_kb(
@@ -940,14 +987,10 @@ def _on_command(ctx: _Ctx, text: str) -> None:
         ctx.sender.send(
             ctx.chat_id, _titled(t["bot_welcome"]), reply_markup=_main_menu_kb(t)
         )
-        # (Re-)install the persistent reply keyboard: one message can
-        # only carry one reply markup, so the quick menu rides along
-        # as a second, short message.
-        ctx.sender.send(
-            ctx.chat_id,
-            t["bot_reply_keyboard_hint"],
-            reply_markup=_main_reply_kb(t),
-        )
+        # (Re-)install the persistent reply keyboard — sent, then
+        # deleted at once, so the chat shows no hint text while the
+        # buttons stay (see _install_reply_keyboard).
+        _install_reply_keyboard(ctx)
     elif command == "/help":
         ctx.sender.send(
             ctx.chat_id, _titled(t["bot_help"]), reply_markup=_main_menu_kb(t)
@@ -1755,9 +1798,9 @@ def _flow_edit_expiry(ctx: _Ctx, conv: dict, text: str) -> None:
 def _send_links(ctx: _Ctx, message_id: Optional[int], user_id: int) -> None:
     """The user's share links + subscription link (same links the panel
     generates). A host is required for share links (subscription_host
-    or domain setting); the subscription URL additionally needs a
-    domain — without one the admin gets an honest message, not a
-    broken link."""
+    or domain setting); the subscription URL uses the domain when set,
+    else the subscription_host fallback (no domain needed) — without
+    either it is omitted, not a broken link."""
     t = ctx.t
     user = ctx.db.get(User, user_id)
     if user is None:
@@ -1781,7 +1824,7 @@ def _send_links(ctx: _Ctx, message_id: Optional[int], user_id: int) -> None:
         )
         return
     links = ctx.panel._links_for_user(ctx.db, user, host, settings)
-    sub_url = ctx.panel._public_panel_url(settings, f"/sub/{user.sub_token}")
+    sub_url = ctx.panel._subscription_panel_url(settings, f"/sub/{user.sub_token}")
     if not links and not sub_url:
         _show(
             ctx,

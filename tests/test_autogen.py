@@ -1,6 +1,9 @@
 """Auto-generation + privilege fixes (v11).
 
-- Inbound form pre-fill: free port, unique tag, Reality keypair.
+- Inbound form: tag/port left empty (placeholders only) and derived
+  by the server from the submitted protocol+port; duplicate tags are
+  re-generated (-2…-99) instead of erroring; empty SNI means the
+  panel default for xray/sing-box cores (fix batch, 3X-UI behaviour).
 - ``_restart_service`` / ``wg show`` go through ``sudo -n`` when
   sudo exists (the panel runs as an unprivileged user; the installer
   grants NOPASSWD sudo for exactly those commands).
@@ -100,17 +103,35 @@ def test_suggest_inbound_tag_unique(db):
 # Inbound form: pre-fill + auto-generation on POST
 # ---------------------------------------------------------------------------
 
-def test_inbounds_page_prefills(authed_client):
+def test_inbounds_page_has_no_prefilled_values(authed_client):
+    """Fix batch: the add form leaves tag/port empty (the pre-filled
+    tag was computed once for "vless" and never updated on protocol
+    change — an OpenVPN inbound got tag vless-54729). The server
+    derives both from the submitted protocol+port instead."""
     resp = authed_client.get("/inbounds")
     assert resp.status_code == 200
     html = resp.text
     assert 'id="inbound-port"' in html
-    assert "🎲" in html  # regenerate button
-    # The pre-filled port is a free one in range.
     import re
-    m = re.search(r'id="inbound-port"[^>]*value="(\d+)"', html)
-    assert m, "port input has no pre-filled value"
-    assert 10000 <= int(m.group(1)) <= 60000
+    # Tag input: no value, "auto" placeholder.
+    m = re.search(r'name="tag"[^>]*>', html)
+    assert m, "tag input missing"
+    assert 'value=' not in m.group(0)
+    assert 'placeholder="خودکار"' in m.group(0)
+    # Port input: no value, "auto" placeholder.
+    m = re.search(r'id="inbound-port"[^>]*>', html)
+    assert m, "port input missing"
+    assert 'value=' not in m.group(0)
+    assert 'placeholder="خودکار"' in m.group(0)
+    # SNI input: no value either — the configured SNI is a placeholder
+    # only (the server applies it as the default for xray/sing-box).
+    m = re.search(r'name="sni"[^>]*>', html)
+    assert m, "sni input missing"
+    assert 'value=' not in m.group(0)
+    assert 'placeholder="www.microsoft.com"' in m.group(0)
+    # The re-roll button is gone: with nothing pre-filled there is
+    # nothing to re-roll.
+    assert "🎲" not in html
 
 
 def test_create_inbound_auto_port_and_tag(authed_client, db):
@@ -158,7 +179,9 @@ def test_create_inbound_reserved_port_still_rejected(authed_client):
     assert resp.status_code in (302, 303)
 
 
-def test_create_inbound_taken_tag_still_rejected(authed_client):
+def test_create_inbound_taken_tag_is_regenerated(authed_client, db):
+    """Fix batch (3X-UI behaviour): a duplicate tag never errors —
+    the backend silently re-generates it (-2…-99)."""
     resp = authed_client.post(
         "/inbounds",
         data={"tag": "vless-reality", "core": "xray", "protocol": "vless",
@@ -166,6 +189,14 @@ def test_create_inbound_taken_tag_still_rejected(authed_client):
         follow_redirects=False,
     )
     assert resp.status_code in (302, 303)
+    # (The redirect may carry a re-render err= — the seeded
+    # tuic/anytls/naive inbounds have no certs in the test env — but
+    # the inbound itself is created; the row assertion below is the
+    # real check.)
+    row = db.query(main_mod.Inbound).filter(
+        main_mod.Inbound.tag == "vless-reality-2").first()
+    assert row is not None
+    assert row.protocol == "vless"
 
 
 # ---------------------------------------------------------------------------

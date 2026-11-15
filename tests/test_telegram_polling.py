@@ -593,9 +593,18 @@ def test_loop_dedups_repeated_update(db, monkeypatch, fast_loop):
     _configure_bot(db)
     main_mod.set_setting(db, "telegram_transport", "polling")
     sent: list = []
+    deleted: list = []
     monkeypatch.setattr(
         telegram_mod, "send_message",
         lambda token, chat_id, text, **kw: sent.append(text) or True,
+    )
+    monkeypatch.setattr(
+        telegram_mod, "send_message_id",
+        lambda token, chat_id, text, **kw: sent.append(text) or 99,
+    )
+    monkeypatch.setattr(
+        telegram_mod, "delete_message",
+        lambda token, chat_id, mid: deleted.append(mid) or True,
     )
     update = _message("/start", update_id=201)
     calls: list = []
@@ -607,6 +616,7 @@ def test_loop_dedups_repeated_update(db, monkeypatch, fast_loop):
     monkeypatch.setattr(telegram_mod, "get_updates", _get_updates)
     _run_loop()
     # /start sends 2 messages (welcome + reply-keyboard hint) — the
-    # duplicate update must not add more.
+    # duplicate update must not add more (nor a second hint delete).
     assert len(sent) == 2
     assert "sparky-manager" in sent[0]
+    assert deleted == [99]

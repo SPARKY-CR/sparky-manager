@@ -2151,19 +2151,30 @@ def suggest_protocol_port(db: Session, protocol: str, transport: str) -> int:
     return suggest_free_port(db, transport)
 
 
-def suggest_inbound_tag(db: Session, protocol: str, port: int) -> str:
-    """Unique tag for a new inbound: ``<protocol>-<port>``, with a
-    ``-2`` / ``-3`` … suffix while the tag is taken (same idea as
-    3X-UI's auto-composed inbound tags)."""
-    base = f"{protocol}-{port}"
+def ensure_unique_tag(db: Session, base: str) -> str:
+    """``base`` made unique among inbound tags, 3X-UI style: returned
+    as-is when free, else ``-2`` / ``-3`` … (up to ``-99``) while
+    taken. Candidates are kept inside NAME_RE's 64-char limit by
+    truncating the base — a 64-char typed tag that is taken still
+    gets a usable variant instead of an invalid-name error. A
+    duplicate tag therefore never errors at creation; the check in
+    :func:`_check_new_inbound` stays as the race guard only."""
     taken = {row[0] for row in db.query(Inbound.tag).all()}
     if base not in taken:
         return base
     for n in range(2, 100):
-        candidate = f"{base}-{n}"
+        suffix = f"-{n}"
+        candidate = f"{base[: 64 - len(suffix)]}{suffix}"
         if candidate not in taken:
             return candidate
-    return f"{base}-{secrets.token_hex(3)}"
+    return f"{base[:57]}-{secrets.token_hex(3)}"
+
+
+def suggest_inbound_tag(db: Session, protocol: str, port: int) -> str:
+    """Unique tag for a new inbound: ``<protocol>-<port>``, with a
+    ``-2`` / ``-3`` … suffix while the tag is taken (same idea as
+    3X-UI's auto-composed inbound tags)."""
+    return ensure_unique_tag(db, f"{protocol}-{port}")
 
 
 def _new_reality_keypair() -> dict[str, str]:
@@ -3206,16 +3217,17 @@ def inbounds_page(
 ):
     inbounds = db.query(Inbound).order_by(Inbound.port, Inbound.tag).all()
     settings = get_settings(db)
-    # Pre-fill the form like 3X-UI does: a free port, a unique tag and
-    # the configured Reality SNI, so the admin can submit as-is.
-    try:
-        suggested_port = suggest_free_port(db, "tcp")
-        suggested_tag = suggest_inbound_tag(db, "vless", suggested_port)
-    except ValueError:
-        suggested_port, suggested_tag = 0, "vless"
+    # Fix batch: the form NO LONGER pre-fills tag/port. A pre-filled
+    # tag was computed once for "vless" and never updated when the
+    # protocol changed, so an OpenVPN inbound got tag vless-54729;
+    # a pre-filled port defeated the create route's preferred-port
+    # logic (1194 for OpenVPN, ...). Tag and port are empty now and
+    # the server derives them from the SUBMITTED protocol+port
+    # (3X-UI behaviour: nothing auto-filled, the server derives).
+    # Only the SNI hint survives, as a placeholder — the server
+    # applies it as the default for xray/sing-box cores when the
+    # field is left empty (see create_inbound).
     suggested = {
-        "tag": suggested_tag,
-        "port": suggested_port,
         "sni": settings.get("reality_sni") or "www.microsoft.com",
     }
     # Phase 4: client counts for the inbounds table (same grouped
@@ -3302,10 +3314,12 @@ def create_inbound(
         transport = "tcp"
     # Auto-generation: an empty port (0) means "pick a free one" and
     # an empty tag means "derive it from protocol + port" — the form
-    # comes pre-filled with both, so accepting the defaults just works.
-    # The preferred port per protocol is tried first (1194 for
-    # OpenVPN, 4433 for OpenConnect, 51821 for AmneziaWG, 500 for
-    # IKEv2) and a random free port is the fallback.
+    # leaves both empty, so the server derives them from the
+    # SUBMITTED protocol+port (a pre-filled tag could never do that:
+    # it was computed once for "vless"). The preferred port per
+    # protocol is tried first (1194 for OpenVPN, 4433 for OpenConnect,
+    # 51821 for AmneziaWG, 500 for IKEv2) and a random free port is
+    # the fallback.
     if not port:
         try:
             port = suggest_protocol_port(db, protocol, transport)
@@ -3313,6 +3327,12 @@ def create_inbound(
             return _redirect("/inbounds", request, err=t["invalid_port"])
     if not tag:
         tag = suggest_inbound_tag(db, protocol, port)
+    else:
+        # 3X-UI behaviour: a duplicate tag never errors — the backend
+        # silently re-generates it (-2…-99). _check_new_inbound keeps
+        # its tag_exists guard for the (vanishing) race between this
+        # regeneration and the commit.
+        tag = ensure_unique_tag(db, tag)
     check = _check_new_inbound(db, protocol, port, tag, transport)
     if check is not None:
         return _redirect("/inbounds", request, err=t[check])
@@ -3335,6 +3355,16 @@ def create_inbound(
         stream["awg_params"] = amneziawg_mod.generate_awg_params()
     elif protocol == "ikev2":
         stream["subnet"] = ikev2_mod.DEFAULT_NETWORK
+    # The form no longer pre-fills the SNI (it was meaningless for
+    # the native cores, and a stale pre-filled value is exactly the
+    # auto-fill bug). For xray/sing-box cores an empty SNI still
+    # means "the panel default" — the same rule the bot's create
+    # flow already applies when the admin taps Default — so
+    # one-click VLESS creation keeps getting Reality. A no-security
+    # inbound is made via the edit page afterwards.
+    if not sni.strip() and core in ("xray", "singbox"):
+        settings = get_settings(db)
+        sni = settings.get("reality_sni") or "www.microsoft.com"
     if sni.strip() and core in ("xray", "singbox"):
         reality_block: dict[str, Any] = {"sni": sni.strip(), "dest": f"{sni.strip()}:443"}
         if protocol == "vless":
@@ -3564,6 +3594,35 @@ def _public_panel_url(settings: dict[str, str], path: str = "") -> Optional[str]
     else:
         host = f"{domain}:{PANEL_PORT}"
     return f"https://{host}{WEB_PATH}{path}"
+
+
+def _subscription_panel_url(settings: dict[str, str], path: str = "") -> Optional[str]:
+    """Public https URL for a SUBSCRIPTION path, or None when neither
+    a domain nor a subscription host is set.
+
+    Like :func:`_public_panel_url`, but with a subscription-specific
+    fallback: when no domain is configured, the ``subscription_host``
+    setting (usually the bare server IP) is used instead, so the
+    subscription link works with no domain at all. The fallback is
+    ONLY for subscription URLs — the webhook flow must stay
+    domain-only (Telegram cannot register a webhook on an IP:port
+    URL, and ``telegram_domain_required`` is the honest error there),
+    so it keeps calling :func:`_public_panel_url` directly.
+    """
+    url = _public_panel_url(settings, path)
+    if url is not None:
+        return url
+    host = (settings.get("subscription_host") or "").strip()
+    host = re.sub(r"^https?://", "", host, flags=re.IGNORECASE).strip().rstrip("/")
+    if not host:
+        return None
+    if ":" in host:
+        base = host
+    elif PANEL_PORT == 443:
+        base = host
+    else:
+        base = f"{host}:{PANEL_PORT}"
+    return f"https://{base}{WEB_PATH}{path}"
 
 
 def _mask_webhook_url(url: str) -> str:

@@ -80,17 +80,32 @@ class FakeSender:
     """Records bot replies (send / edit / answer / document) instead
     of calling Telegram."""
 
-    def __init__(self, edit_ok=True, document_ok=True):
+    def __init__(self, edit_ok=True, document_ok=True, delete_ok=True):
         self.sent: list = []  # (chat_id, text, reply_markup)
         self.edited: list = []  # (chat_id, message_id, text, reply_markup)
         self.answered: list = []  # (callback_query_id, text)
         self.documents: list = []  # (chat_id, filename, data)
+        self.deleted: list = []  # (chat_id, message_id)
         self.edit_ok = edit_ok
         self.document_ok = document_ok
+        self.delete_ok = delete_ok
+        self._next_message_id = 1
 
     def send(self, chat_id, text, reply_markup=None):
         self.sent.append((chat_id, text, reply_markup))
         return True
+
+    def send_id(self, chat_id, text, reply_markup=None):
+        """Like send, but returns a message id (recorded in `sent`
+        too, so the two-message /start assertions still hold)."""
+        self.sent.append((chat_id, text, reply_markup))
+        message_id = self._next_message_id
+        self._next_message_id += 1
+        return message_id
+
+    def delete(self, chat_id, message_id):
+        self.deleted.append((chat_id, message_id))
+        return self.delete_ok
 
     def edit(self, chat_id, message_id, text, reply_markup=None):
         self.edited.append((chat_id, message_id, text, reply_markup))
@@ -346,6 +361,14 @@ def test_telegram_sender_delegates(monkeypatch):
         telegram_mod, "answer_callback_query",
         lambda token, qid, text=None, **kw: calls.append(("answer", token, qid, text)) or True,
     )
+    monkeypatch.setattr(
+        telegram_mod, "send_message_id",
+        lambda token, chat_id, text, **kw: calls.append(("send_id", token, chat_id, text, kw)) or 77,
+    )
+    monkeypatch.setattr(
+        telegram_mod, "delete_message",
+        lambda token, chat_id, mid: calls.append(("delete", token, chat_id, mid)) or True,
+    )
     sender = bot_mod.TelegramSender("tok-xyz")
     sender.send(42, "hi", reply_markup={"inline_keyboard": []})
     sender.edit(42, 7, "new")
@@ -353,6 +376,11 @@ def test_telegram_sender_delegates(monkeypatch):
     assert calls[0][0] == "send" and calls[0][1] == "tok-xyz"
     assert calls[1][0] == "edit" and calls[1][3] == 7
     assert calls[2] == ("answer", "tok-xyz", "cb-1", "toast")
+    assert sender.send_id(42, "kb") == 77
+    assert calls[3][0] == "send_id" and calls[3][3] == "kb"
+    assert calls[3][4]["parse_mode"] == "HTML"
+    assert sender.delete(42, 77) is True
+    assert calls[4] == ("delete", "tok-xyz", "42", 77)
 
 
 # ---------------------------------------------------------------------------
@@ -1132,11 +1160,21 @@ def test_create_flow_failure_reports_and_survives(db, sender, monkeypatch):
 @pytest.fixture()
 def webhook_calls(monkeypatch):
     """Capture TelegramSender's Bot API calls during webhook tests."""
-    calls = {"sent": [], "edited": [], "answered": []}
+    calls = {"sent": [], "edited": [], "answered": [], "deleted": []}
     monkeypatch.setattr(
         telegram_mod, "send_message",
         lambda token, chat_id, text, **kw: calls["sent"].append(
             (token, chat_id, text, kw.get("reply_markup"))) or True,
+    )
+    monkeypatch.setattr(
+        telegram_mod, "send_message_id",
+        lambda token, chat_id, text, **kw: calls["sent"].append(
+            (token, chat_id, text, kw.get("reply_markup"))) or 99,
+    )
+    monkeypatch.setattr(
+        telegram_mod, "delete_message",
+        lambda token, chat_id, mid: calls["deleted"].append(
+            (token, chat_id, mid)) or True,
     )
     monkeypatch.setattr(
         telegram_mod, "edit_message_text",
@@ -1176,12 +1214,13 @@ def test_webhook_admin_start_delivers(test_client, db, webhook_calls):
     resp = test_client.post(f"/telegram/webhook/{SECRET}", json=_message("/start"))
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
-    # /start sends welcome + reply-keyboard hint.
+    # /start sends welcome + reply-keyboard hint, then deletes the hint.
     assert len(webhook_calls["sent"]) == 2
     token, chat_id, text, markup = webhook_calls["sent"][0]
     assert token == TOKEN
     assert chat_id == str(ADMIN_CHAT)
     assert "sparky-manager" in text
+    assert webhook_calls["deleted"] == [(TOKEN, str(ADMIN_CHAT), 99)]
 
 
 def test_webhook_stranger_update_200_but_silent(test_client, db, webhook_calls):
@@ -1245,6 +1284,7 @@ def test_webhook_respects_web_prefix(mounted_client, db, webhook_calls):
     )
     assert resp.status_code == 200
     assert len(webhook_calls["sent"]) == 2
+    assert webhook_calls["deleted"] == [(TOKEN, str(ADMIN_CHAT), 99)]
 
 
 # ---------------------------------------------------------------------------

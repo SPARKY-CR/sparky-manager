@@ -35,10 +35,11 @@ def test_add_form_collapsed_when_inbounds_exist(authed_client, db, seeded):
     _assert_form_inside_collapsed_details(resp.text)
     # The filter-strip button opens the form.
     assert 'href="#add-inbound-form"' in resp.text
-    # Suggested values are still the form's initial values.
+    # The form fields are present but NOT pre-filled (fix batch:
+    # tag/port derive server-side; the SNI is a placeholder only).
     assert 'name="tag"' in resp.text
     assert 'name="sni"' in resp.text
-    assert 'value="www.microsoft.com"' in resp.text
+    assert 'placeholder="www.microsoft.com"' in resp.text
 
 
 def test_add_form_collapsed_on_empty_page(authed_client, db, seeded):
