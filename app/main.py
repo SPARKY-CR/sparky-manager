@@ -3367,14 +3367,6 @@ def settings_page(
         server_status = system_status_mod.collect_server_status(DATA_DIR)
     except Exception:  # noqa: BLE001
         server_status = None
-    webhook_info = None
-    raw_info = settings.get("telegram_webhook_info", "")
-    if raw_info:
-        try:
-            parsed = json.loads(raw_info)
-            webhook_info = parsed if isinstance(parsed, dict) else None
-        except ValueError:
-            webhook_info = None
     # Effective transport (invalid stored values fall back to the
     # default, exactly like save_settings normalizes them).
     effective_transport = (settings.get("telegram_transport") or "").strip().lower()
@@ -3398,15 +3390,15 @@ def settings_page(
     # Webhook diagnostics (bot polish): getWebhookInfo on page load
     # when the transport is webhook and a bot token is configured,
     # cached briefly (see _get_webhook_info_cached) so a slow
-    # Telegram never slows every render. The fetch refreshes the
-    # stored ``telegram_webhook_info`` too, so the webhook section
-    # below shows fresh data as well. A failed fetch shows
-    # "unavailable" in the diagnostics area, never a 500.
+    # Telegram never slows every render. The diagnostics list is the
+    # single place showing the live status (pending updates, last
+    # error); the webhook section below shows only the registered
+    # URL + registration time. A failed fetch shows "unavailable"
+    # in the diagnostics area, never a 500.
     webhook_info_display = None
     if effective_transport == "webhook" and settings.get("telegram_bot_token"):
         fresh_info = _get_webhook_info_cached(db, settings["telegram_bot_token"])
         if fresh_info is not None:
-            webhook_info = fresh_info
             webhook_info_display = {
                 "url": _mask_webhook_url(fresh_info.get("url", "") or ""),
                 "pending": fresh_info.get("pending_update_count"),
@@ -3442,7 +3434,6 @@ def settings_page(
             "telegram_webhook_registered_at": settings.get(
                 "telegram_webhook_registered_at", ""
             ),
-            "telegram_webhook_info": webhook_info,
             "telegram_webhook_warning": webhook_warning,
             "telegram_webhook_info_display": webhook_info_display,
             "telegram_bot_identity": bot_identity,

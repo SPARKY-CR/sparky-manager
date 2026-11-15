@@ -700,11 +700,24 @@ def test_inbound_create_protocol_picker(db, sender):
     _configure_bot(db)
     _dispatch(db, _callback("i:new"), sender)
     data = _button_data(sender.edited[-1][3])
-    for protocol in ("vless", "vmess", "trojan", "shadowsocks", "wireguard"):
+    # All 14 protocols the web panel supports are offered.
+    for protocol in (
+        "vless",
+        "vmess",
+        "trojan",
+        "shadowsocks",
+        "hysteria2",
+        "tuic",
+        "anytls",
+        "naive",
+        "shadowtls",
+        "wireguard",
+        "amneziawg",
+        "openvpn",
+        "openconnect",
+        "ikev2",
+    ):
         assert f"i:new:{protocol}" in data
-    # Protocols the flow cannot configure are NOT offered.
-    assert "i:new:hysteria2" not in data
-    assert "i:new:ikev2" not in data
 
 
 def test_inbound_create_vless_full_flow(db, sender, rerender_stub):
@@ -811,7 +824,7 @@ def test_inbound_create_port_reserved(db, sender):
 
 def test_inbound_create_invalid_protocol_shows_stale(db, sender):
     _configure_bot(db)
-    _dispatch(db, _callback("i:new:hysteria2"), sender)
+    _dispatch(db, _callback("i:new:notaprotocol"), sender)
     assert "دیگر معتبر نیست" in sender.edited[-1][2]
 
 

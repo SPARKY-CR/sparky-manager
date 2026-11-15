@@ -58,6 +58,14 @@ Telegram rejects malformed HTML), a persistent reply keyboard
 :func:`_on_text` matches the exact labels), and two-column inline
 keyboards where they fit. Handlers, flows, callback data and command
 behavior are unchanged — presentation only.
+
+Menu + bot UX polish adds: inbound creation for every protocol the
+web panel supports (``BOT_CREATE_PROTOCOLS``), and Skip/Back buttons
+on every guided flow — an empty message cannot be sent on Telegram,
+so every optional step has a visible Skip button that submits the
+default, and every multi-step flow has a Back button (both are
+``c:`` callbacks, handled step-by-step in
+:func:`_on_create_callback`). No prompt says "leave empty" anymore.
 """
 
 from __future__ import annotations
@@ -101,13 +109,58 @@ BOT_COMMANDS = (
     {"command": "cancel", "description": "لغو عملیات در حال انجام"},
 )
 
-# Protocols the bot's guided inbound-create flow offers (the ones a
-# chat flow can configure with sensible defaults — no TLS cert
-# uploads, no per-protocol option maze). Core is derived: wireguard
-# is native, the rest are Xray.
-BOT_CREATE_PROTOCOLS = ("vless", "vmess", "trojan", "shadowsocks", "wireguard")
-# Protocols where an SNI prompt is meaningful (TLS / Reality).
-BOT_SNI_PROTOCOLS = ("vless", "vmess", "trojan")
+# Protocols the bot's guided inbound-create flow offers — every
+# protocol the web panel supports, each created with the web create
+# route's defaults (subnets, AWG params, preferred ports), so the
+# two paths can never disagree. Core is derived from the protocol:
+# hysteria2 is Xray (the default owner per the ``hysteria2_core``
+# setting — the admin can move it to sing-box from the panel).
+BOT_CREATE_PROTOCOLS = (
+    "vless",
+    "vmess",
+    "trojan",
+    "shadowsocks",
+    "hysteria2",
+    "tuic",
+    "anytls",
+    "naive",
+    "shadowtls",
+    "wireguard",
+    "amneziawg",
+    "openvpn",
+    "openconnect",
+    "ikev2",
+)
+BOT_PROTOCOL_CORES = {
+    "vless": "xray",
+    "vmess": "xray",
+    "trojan": "xray",
+    "shadowsocks": "xray",
+    "hysteria2": "xray",
+    "tuic": "singbox",
+    "anytls": "singbox",
+    "naive": "singbox",
+    "shadowtls": "singbox",
+    "wireguard": "wireguard",
+    "amneziawg": "amneziawg",
+    "openvpn": "openvpn",
+    "openconnect": "openconnect",
+    "ikev2": "ikev2",
+}
+# Protocols where an SNI prompt is meaningful (TLS / Reality — the
+# SNI becomes the TLS server name, or the ShadowTLS handshake
+# target). The native cores use certificates/keys, not SNI, and
+# Shadowsocks has no TLS at all.
+BOT_SNI_PROTOCOLS = (
+    "vless",
+    "vmess",
+    "trojan",
+    "hysteria2",
+    "tuic",
+    "anytls",
+    "naive",
+    "shadowtls",
+)
 
 # Service key -> display name (shared by the status view and the
 # services view) and key -> systemd unit the panel may restart.
@@ -293,6 +346,13 @@ BOT_STRING_KEYS = (
     # Bot polish: persistent reply keyboard.
     "bot_reply_menu",
     "bot_reply_keyboard_hint",
+    # Menu + bot UX polish: skip buttons for optional steps (an
+    # empty message cannot be sent on Telegram) and clear-search.
+    "bot_skip_unlimited",
+    "bot_skip_never",
+    "bot_skip_auto",
+    "bot_skip_default",
+    "bot_clear_search",
 )
 
 # ---------------------------------------------------------------------------
@@ -466,6 +526,29 @@ def _main_reply_kb(t: dict[str, str]) -> dict[str, Any]:
         "resize_keyboard": True,
         "is_persistent": True,
     }
+
+
+def _flow_kb(
+    t: dict[str, str], skip_key: Optional[str] = None, back: bool = True
+) -> dict[str, Any]:
+    """Keyboard for a guided-flow text step.
+
+    ``skip_key`` is the i18n key of the Skip button (``bot_skip_*``)
+    for an OPTIONAL step — the only way to submit the default value,
+    because Telegram cannot send an empty message (a prompt saying
+    "leave empty" is a dead end). ``back`` adds the Back button
+    (``c:back`` — step-driven, see :func:`_on_create_callback`).
+    Cancel is always present. A required first step passes neither
+    and gets Cancel only.
+    """
+    row: list[tuple[str, str]] = []
+    if skip_key is not None:
+        row.append((t[skip_key], "c:skip"))
+    if back:
+        row.append((t["bot_back"], "c:back"))
+    rows = [row] if row else []
+    rows.append([(t["bot_cancel"], "c:cancel")])
+    return _kb(rows)
 
 
 def h(value: Any) -> str:
@@ -906,6 +989,7 @@ def _inbound_picker_kb(ctx: _Ctx, inbounds: list, selected: set) -> dict[str, An
             [(f"{mark} {inbound.tag} ({inbound.protocol})", f"c:tg:{inbound.id}")]
         )
     rows.append([(t["bot_create_confirm"], "c:done"), (t["bot_cancel"], "c:cancel")])
+    rows.append([(t["bot_back"], "c:back")])
     return _kb(rows)
 
 
@@ -934,10 +1018,18 @@ def _flow_name(ctx: _Ctx, conv: dict, text: str) -> None:
     t = ctx.t
     name = text.strip()
     if not ctx.panel.NAME_RE.match(name):
-        ctx.sender.send(ctx.chat_id, t["bot_create_name_invalid"])
+        ctx.sender.send(
+            ctx.chat_id,
+            t["bot_create_name_invalid"],
+            reply_markup=_kb([[(t["bot_cancel"], "c:cancel")]]),
+        )
         return
     if ctx.db.query(User).filter(User.name == name).first() is not None:
-        ctx.sender.send(ctx.chat_id, t["bot_create_name_exists"])
+        ctx.sender.send(
+            ctx.chat_id,
+            t["bot_create_name_exists"],
+            reply_markup=_kb([[(t["bot_cancel"], "c:cancel")]]),
+        )
         return
     inbounds = _enabled_inbounds(ctx)
     if not inbounds:  # raced with the last inbound being disabled
@@ -958,25 +1050,39 @@ def _flow_name(ctx: _Ctx, conv: dict, text: str) -> None:
 
 
 def _flow_limit(ctx: _Ctx, conv: dict, text: str) -> None:
-    """Create step 3: traffic limit in GB (0 / empty = unlimited)."""
+    """Create step 3: traffic limit in GB (the Unlimited button
+    means unlimited)."""
     t = ctx.t
     try:
         conv["data"]["limit_bytes"] = _parse_limit_gb(text)
     except ValueError:
-        ctx.sender.send(ctx.chat_id, t["bot_create_limit_invalid"])
+        ctx.sender.send(
+            ctx.chat_id,
+            t["bot_create_limit_invalid"],
+            reply_markup=_flow_kb(t, "bot_skip_unlimited"),
+        )
         return
     conv["step"] = "expiry"
     conv["expires"] = time.monotonic() + CONVERSATION_TIMEOUT
-    ctx.sender.send(ctx.chat_id, t["bot_create_expiry"])
+    ctx.sender.send(
+        ctx.chat_id,
+        t["bot_create_expiry"],
+        reply_markup=_flow_kb(t, "bot_skip_never"),
+    )
 
 
 def _flow_expiry(ctx: _Ctx, conv: dict, text: str) -> None:
-    """Create step 4: expiry in days (0 / empty = never), then create."""
+    """Create step 4: expiry in days (the Never button means no
+    expiry), then create."""
     t = ctx.t
     try:
         expires_at = _parse_expiry_days(text, ctx.now)
     except ValueError:
-        ctx.sender.send(ctx.chat_id, t["bot_create_expiry_invalid"])
+        ctx.sender.send(
+            ctx.chat_id,
+            t["bot_create_expiry_invalid"],
+            reply_markup=_flow_kb(t, "bot_skip_never"),
+        )
         return
     name = conv["data"]["name"]
     selected = set(conv["data"].get("selected") or set())
@@ -1022,7 +1128,17 @@ def _flow_expiry(ctx: _Ctx, conv: dict, text: str) -> None:
 
 
 def _on_create_callback(ctx: _Ctx, message_id: Optional[int], parts: list) -> Optional[str]:
-    """Create-flow buttons: toggle an inbound, confirm, or cancel."""
+    """Flow-control buttons (``c:`` family): cancel, skip, back, and
+    the create flow's inbound picker.
+
+    "c:" is the shared flow family — every guided flow's prompts use
+    ``c:cancel`` (and now ``c:skip`` / ``c:back``), so this handler
+    is step-driven: Skip submits the current step's default value
+    (the ONLY way to submit "empty" — Telegram cannot send an empty
+    message), Back returns to the previous step without abandoning
+    the flow. A Skip/Back tap on a step that has no such action (a
+    stale keyboard) gets the friendly stale answer, never a crash.
+    """
     t = ctx.t
     action = parts[1] if len(parts) > 1 else ""
     if action == "cancel":
@@ -1030,7 +1146,83 @@ def _on_create_callback(ctx: _Ctx, message_id: Optional[int], parts: list) -> Op
         _show(ctx, message_id, t["bot_cancelled"], _main_menu_kb(t))
         return None
     conv = _get_conversation(ctx.chat_id)
-    if conv is None or conv["step"] != "inbounds":
+    if conv is None:
+        _show(ctx, message_id, t["bot_flow_expired"], _main_menu_kb(t))
+        return None
+    if action == "skip":
+        # Each optional step's default is what its text handler does
+        # with "" — the Skip button just invokes that path.
+        step = conv["step"]
+        if step == "limit":
+            _flow_limit(ctx, conv, "")
+        elif step == "expiry":
+            _flow_expiry(ctx, conv, "")
+        elif step == "edit_limit":
+            _flow_edit_limit(ctx, conv, "")
+        elif step == "edit_expiry":
+            _flow_edit_expiry(ctx, conv, "")
+        elif step == "inb_port":
+            _flow_inbound_port(ctx, conv, "")
+        elif step == "inb_sni":
+            _flow_inbound_sni(ctx, conv, "")
+        else:
+            _show_stale(ctx, message_id)
+        return None
+    if action == "back":
+        step = conv["step"]
+        conv["expires"] = time.monotonic() + CONVERSATION_TIMEOUT
+        if step == "inbounds":
+            # Back to the name step (the name is re-entered; the
+            # picker selection is rebuilt when it is given again).
+            conv["step"] = "name"
+            _show(
+                ctx,
+                message_id,
+                _titled(t["bot_create_name"]),
+                _kb([[(t["bot_cancel"], "c:cancel")]]),
+            )
+        elif step == "limit":
+            conv["step"] = "inbounds"
+            inbounds = _enabled_inbounds(ctx)
+            selected = conv["data"].get("selected") or {
+                i.id for i in inbounds
+            }
+            _show(
+                ctx,
+                message_id,
+                t["bot_create_pick_inbounds"],
+                _inbound_picker_kb(ctx, inbounds, selected),
+            )
+        elif step == "expiry":
+            conv["step"] = "limit"
+            _show(
+                ctx, message_id, t["bot_create_limit"], _flow_kb(t, "bot_skip_unlimited")
+            )
+        elif step in ("edit_name", "edit_limit", "edit_expiry"):
+            user_id = conv["data"].get("user_id")
+            _end_conversation(ctx.chat_id)
+            if isinstance(user_id, int):
+                _show_edit_menu(ctx, message_id, user_id)
+            else:
+                _show_users(ctx, message_id, page=0)
+        elif step == "search":
+            _end_conversation(ctx.chat_id)
+            _show_users(ctx, message_id, page=0)
+        elif step == "inb_port":
+            _end_conversation(ctx.chat_id)
+            _show_inbound_protocol_picker(ctx, message_id)
+        elif step == "inb_sni":
+            conv["step"] = "inb_port"
+            _show(
+                ctx,
+                message_id,
+                t["bot_create_inbound_port"],
+                _flow_kb(t, "bot_skip_auto"),
+            )
+        else:
+            _show_stale(ctx, message_id)
+        return None
+    if conv["step"] != "inbounds":
         _show(ctx, message_id, t["bot_flow_expired"], _main_menu_kb(t))
         return None
     if action == "tg":
@@ -1064,7 +1256,7 @@ def _on_create_callback(ctx: _Ctx, message_id: Optional[int], parts: list) -> Op
             ctx,
             message_id,
             t["bot_create_limit"],
-            _kb([[(t["bot_cancel"], "c:cancel")]]),
+            _flow_kb(t, "bot_skip_unlimited"),
         )
         return None
     _show_stale(ctx, message_id)
@@ -1221,6 +1413,12 @@ def _show_users(
         nav.append((t["bot_next"], f"u:list:{page + 1}"))
     if nav:
         kb_rows.append(nav)
+    if query:
+        # The filter lives in the conversation state while paging,
+        # so without this button there is no way back to the full
+        # list from the results themselves (an empty message cannot
+        # be sent to clear it).
+        kb_rows.append([(t["bot_clear_search"], "u:clear")])
     kb_rows.append([(t["bot_search"], "u:search"), (t["bot_new_user"], "u:new")])
     kb_rows.append([(t["bot_back_main"], "m:main")])
     text = "\n".join(lines)
@@ -1236,14 +1434,15 @@ def _start_search(ctx: _Ctx, message_id: Optional[int]) -> None:
         ctx,
         message_id,
         _titled(ctx.t["bot_search_prompt"]),
-        _kb([[(ctx.t["bot_cancel"], "c:cancel")]]),
+        _flow_kb(ctx.t),
     )
 
 
 def _flow_search(ctx: _Ctx, conv: dict, text: str) -> None:
-    """Search step: filter the user list by the query (an empty
-    query clears the filter). The step becomes ``search_results``
-    so paging keeps the query (see _on_callback)."""
+    """Search step: filter the user list by the query. The step
+    becomes ``search_results`` so paging keeps the query (see
+    _on_callback); the Clear button on the results ends the filter
+    (an empty message cannot be sent on Telegram)."""
     query = text.strip()
     if not query:
         _end_conversation(ctx.chat_id)
@@ -1370,12 +1569,13 @@ def _start_edit(
     if prompt is None:
         _show_stale(ctx, message_id)
         return
+    skip_keys = {"limit": "bot_skip_unlimited", "expiry": "bot_skip_never"}
     _start_conversation(ctx.chat_id, f"edit_{field}", {"user_id": user_id})
     _show(
         ctx,
         message_id,
         prompt,
-        _kb([[(t["bot_cancel"], "c:cancel")]]),
+        _flow_kb(t, skip_keys.get(field)),
     )
 
 
@@ -1413,7 +1613,11 @@ def _flow_edit_name(ctx: _Ctx, conv: dict, text: str) -> None:
         return
     name = text.strip()
     if not ctx.panel.NAME_RE.match(name):
-        ctx.sender.send(ctx.chat_id, t["bot_create_name_invalid"])
+        ctx.sender.send(
+            ctx.chat_id,
+            t["bot_create_name_invalid"],
+            reply_markup=_flow_kb(t),
+        )
         return
     clash = (
         ctx.db.query(User)
@@ -1421,14 +1625,19 @@ def _flow_edit_name(ctx: _Ctx, conv: dict, text: str) -> None:
         .first()
     )
     if clash is not None:
-        ctx.sender.send(ctx.chat_id, t["bot_create_name_exists"])
+        ctx.sender.send(
+            ctx.chat_id,
+            t["bot_create_name_exists"],
+            reply_markup=_flow_kb(t),
+        )
         return
     user.name = name
     _finish_user_edit(ctx, user)
 
 
 def _flow_edit_limit(ctx: _Ctx, conv: dict, text: str) -> None:
-    """Edit step: traffic limit in GB (0 / empty = unlimited)."""
+    """Edit step: traffic limit in GB (the Unlimited button means
+    unlimited)."""
     t = ctx.t
     user = _apply_user_edit(ctx, conv)
     if user is None:
@@ -1440,13 +1649,18 @@ def _flow_edit_limit(ctx: _Ctx, conv: dict, text: str) -> None:
     try:
         user.traffic_limit_bytes = _parse_limit_gb(text)
     except ValueError:
-        ctx.sender.send(ctx.chat_id, t["bot_create_limit_invalid"])
+        ctx.sender.send(
+            ctx.chat_id,
+            t["bot_create_limit_invalid"],
+            reply_markup=_flow_kb(t, "bot_skip_unlimited"),
+        )
         return
     _finish_user_edit(ctx, user)
 
 
 def _flow_edit_expiry(ctx: _Ctx, conv: dict, text: str) -> None:
-    """Edit step: expiry in days from today (0 / empty = never).
+    """Edit step: expiry in days from today (the Never button means
+    no expiry).
 
     The web edit route takes a calendar date; the bot takes days,
     like its create flow — the validation (a valid future expiry or
@@ -1463,7 +1677,11 @@ def _flow_edit_expiry(ctx: _Ctx, conv: dict, text: str) -> None:
     try:
         user.expires_at = _parse_expiry_days(text, ctx.now)
     except ValueError:
-        ctx.sender.send(ctx.chat_id, t["bot_create_expiry_invalid"])
+        ctx.sender.send(
+            ctx.chat_id,
+            t["bot_create_expiry_invalid"],
+            reply_markup=_flow_kb(t, "bot_skip_never"),
+        )
         return
     _finish_user_edit(ctx, user)
 
@@ -1724,6 +1942,11 @@ def _on_user_callback(ctx: _Ctx, message_id: Optional[int], parts: list) -> Opti
     if action == "search":
         _start_search(ctx, message_id)
         return None
+    if action == "clear":
+        # The conversation (and its query) is already ended by the
+        # dispatcher for non-"c:" taps — show the unfiltered list.
+        _show_users(ctx, message_id, page=0)
+        return None
     user_id = _parse_int(parts[2]) if len(parts) > 2 else None
     if user_id is None:
         _show_stale(ctx, message_id)
@@ -1823,6 +2046,21 @@ def _show_inbounds(
 # ---------------------------------------------------------------------------
 
 
+def _bot_inbound_transport(panel: Any, protocol: str) -> str:
+    """Transport for a bot-created inbound — the same rule as the
+    web create route: the protocol default (UDP for hysteria2 /
+    tuic / wireguard / amneziawg / openvpn), with IKEv2 and
+    AmneziaWG forced UDP and OpenConnect forced TCP. The clash check
+    depends on it: Hysteria2 on UDP 443 must not "clash" with VLESS
+    on TCP 443, and a second Hysteria2 on UDP 443 must."""
+    transport = panel._stream_transport({}, protocol)
+    if protocol in ("ikev2", "amneziawg"):
+        transport = "udp"
+    elif protocol == "openconnect":
+        transport = "tcp"
+    return transport
+
+
 def _show_inbound_protocol_picker(ctx: _Ctx, message_id: Optional[int]) -> None:
     """First step of the inbound-create flow: pick a protocol."""
     t = ctx.t
@@ -1836,7 +2074,7 @@ def _show_inbound_protocol_picker(ctx: _Ctx, message_id: Optional[int]) -> None:
 
 
 def _start_inbound_create(ctx: _Ctx, message_id: Optional[int], protocol: str) -> None:
-    """Second step: ask for the port (empty = automatic)."""
+    """Second step: ask for the port (the Auto button picks one)."""
     if protocol not in BOT_CREATE_PROTOCOLS:
         _show_stale(ctx, message_id)
         return
@@ -1845,30 +2083,37 @@ def _start_inbound_create(ctx: _Ctx, message_id: Optional[int], protocol: str) -
         ctx,
         message_id,
         ctx.t["bot_create_inbound_port"],
-        _kb([[(ctx.t["bot_cancel"], "c:cancel")]]),
+        _flow_kb(ctx.t, "bot_skip_auto"),
     )
 
 
 def _flow_inbound_port(ctx: _Ctx, conv: dict, text: str) -> None:
-    """Inbound-create step 2: the port (empty = auto-suggested).
+    """Inbound-create step 2: the port (the Auto button picks one).
 
     Validation is the shared ``_check_new_inbound`` helper (same
     checks as the web create route: range, reserved ports, clash).
+    Every error reply carries the step keyboard, so the admin can
+    always tap Auto or Back instead of retyping.
     """
     t = ctx.t
     protocol = conv["data"]["protocol"]
-    transport = ctx.panel._stream_transport({"transport": "tcp"}, protocol)
+    transport = _bot_inbound_transport(ctx.panel, protocol)
+    kb = _flow_kb(t, "bot_skip_auto")
     raw = text.strip()
     if not raw:
         try:
             port = ctx.panel.suggest_protocol_port(ctx.db, protocol, transport)
         except ValueError:
-            ctx.sender.send(ctx.chat_id, t["bot_create_inbound_port_invalid"])
+            ctx.sender.send(
+                ctx.chat_id, t["bot_create_inbound_port_invalid"], reply_markup=kb
+            )
             return
     else:
         port = _parse_int(raw)
         if port is None:
-            ctx.sender.send(ctx.chat_id, t["bot_create_inbound_port_invalid"])
+            ctx.sender.send(
+                ctx.chat_id, t["bot_create_inbound_port_invalid"], reply_markup=kb
+            )
             return
     # The tag is auto-generated at create time (unique by
     # construction), so the check runs against a placeholder tag —
@@ -1877,15 +2122,22 @@ def _flow_inbound_port(ctx: _Ctx, conv: dict, text: str) -> None:
         ctx.db, protocol, port, f"__bot_check_{port}", transport
     )
     if check == "invalid_port":
-        ctx.sender.send(ctx.chat_id, t["bot_create_inbound_port_invalid"])
+        ctx.sender.send(
+            ctx.chat_id, t["bot_create_inbound_port_invalid"], reply_markup=kb
+        )
         return
     if check == "port_reserved":
-        ctx.sender.send(ctx.chat_id, t["bot_create_inbound_port_reserved"])
+        ctx.sender.send(
+            ctx.chat_id, t["bot_create_inbound_port_reserved"], reply_markup=kb
+        )
         return
     if check == "port_in_use":
-        ctx.sender.send(ctx.chat_id, t["bot_create_inbound_port_in_use"])
+        ctx.sender.send(
+            ctx.chat_id, t["bot_create_inbound_port_in_use"], reply_markup=kb
+        )
         return
     conv["data"]["port"] = port
+    conv["data"]["transport"] = transport
     conv["expires"] = time.monotonic() + CONVERSATION_TIMEOUT
     if protocol in BOT_SNI_PROTOCOLS:
         settings = ctx.panel.get_settings(ctx.db)
@@ -1897,26 +2149,32 @@ def _flow_inbound_port(ctx: _Ctx, conv: dict, text: str) -> None:
             t["bot_create_inbound_sni"].format(
                 protocol=protocol.upper(), sni=h(default_sni)
             ),
+            reply_markup=_flow_kb(t, "bot_skip_default"),
         )
         return
     _create_inbound_from_flow(ctx, conv)
 
 
 def _flow_inbound_sni(ctx: _Ctx, conv: dict, text: str) -> None:
-    """Inbound-create step 3: the SNI (empty = the panel default)."""
+    """Inbound-create step 3: the SNI (the Default button keeps the
+    panel default)."""
     sni = text.strip() or conv["data"].get("default_sni") or "www.microsoft.com"
     conv["data"]["sni"] = sni
     _create_inbound_from_flow(ctx, conv)
 
 
 def _create_inbound_from_flow(ctx: _Ctx, conv: dict) -> None:
-    """Create the inbound (same stream shape as the web create
-    route: auto tag, fresh Reality keypair for VLESS, WG subnet)."""
+    """Create the inbound — the same stream shape as the web create
+    route: auto tag, fresh Reality keypair for VLESS, the native
+    cores' default subnets (and fresh AmneziaWG obfuscation params),
+    SNI block for the Xray / sing-box cores."""
     t = ctx.t
     protocol = conv["data"]["protocol"]
     port = conv["data"]["port"]
-    core = "wireguard" if protocol == "wireguard" else "xray"
-    transport = ctx.panel._stream_transport({"transport": "tcp"}, protocol)
+    core = BOT_PROTOCOL_CORES[protocol]
+    transport = conv["data"].get("transport") or _bot_inbound_transport(
+        ctx.panel, protocol
+    )
     tag = ctx.panel.suggest_inbound_tag(ctx.db, protocol, port)
     # Re-validate at create time: another admin may have taken the
     # port while this flow was running.
@@ -1927,11 +2185,22 @@ def _create_inbound_from_flow(ctx: _Ctx, conv: dict) -> None:
             ctx.chat_id, t["bot_create_inbound_failed"], reply_markup=_main_menu_kb(t)
         )
         return
-    stream: dict[str, Any] = {"network": "tcp", "transport": transport}
+    stream: dict[str, Any] = {"network": transport, "transport": transport}
+    # Protocol-specific defaults, mirroring the web create route
+    # (the renderers read these from the inbound stream).
     if protocol == "wireguard":
         stream["subnet"] = "10.8.0.0/24"
+    elif protocol == "openvpn":
+        stream["subnet"] = ctx.panel.openvpn_mod.DEFAULT_NETWORK
+    elif protocol == "openconnect":
+        stream["subnet"] = ctx.panel.openconnect_mod.DEFAULT_NETWORK
+    elif protocol == "amneziawg":
+        stream["subnet"] = ctx.panel.amneziawg_mod.DEFAULT_NETWORK
+        stream["awg_params"] = ctx.panel.amneziawg_mod.generate_awg_params()
+    elif protocol == "ikev2":
+        stream["subnet"] = ctx.panel.ikev2_mod.DEFAULT_NETWORK
     sni = conv["data"].get("sni")
-    if sni and core == "xray":
+    if sni and core in ("xray", "singbox"):
         reality_block: dict[str, Any] = {"sni": sni, "dest": f"{sni}:443"}
         if protocol == "vless":
             pair = ctx.panel._new_reality_keypair()

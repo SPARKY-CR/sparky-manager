@@ -5,9 +5,15 @@
   <h1>{{ t.users }}</h1>
 </div>
 
-<div class="card">
-  <h2>{{ t.add_user }}</h2>
-  <form method="post" action="{{ base_path }}/users">
+{# The add form lives in a <details> (JS-free collapse, like the
+   inbounds add form): the page shows just the filters / table until
+   the admin asks to add. The empty-state button links to
+   #add-user-form — navigating to a fragment inside a closed
+   <details> opens it (HTML spec). The <summary> replaces the old
+   <h2> as the card's heading. #}
+<details class="card add-form" id="add-user">
+  <summary class="btn btn-primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true" style="width:16px;height:16px"><path d="M12 5v14M5 12h14"/></svg>{{ t.add_user }}</summary>
+  <form method="post" action="{{ base_path }}/users" id="add-user-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="field-grid">
       <label>
@@ -31,7 +37,7 @@
       <button type="submit" class="btn btn-primary">{{ t.create }}</button>
     </div>
   </form>
-</div>
+</details>
 
 {# Server-side search / filter / sort (Phase 4): a GET form, so the
    view is bookmarkable. Bad values fall back to defaults server-side. #}
@@ -138,6 +144,7 @@
   <div class="empty">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.2 3.4-5 6.5-5s5.7 1.8 6.5 5"/><circle cx="17" cy="9" r="2.8"/><path d="M16.5 14.6c2.6.3 4.4 1.9 5 4.4"/></svg>
     <p class="muted">{{ t.no_users }}</p>
+    <p><a class="btn btn-small btn-primary" href="#add-user-form">{{ t.add_user }}</a></p>
   </div>
   {% endif %}
 </div>

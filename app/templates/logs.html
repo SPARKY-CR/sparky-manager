@@ -27,7 +27,7 @@
       <input type="number" name="limit" min="50" max="2000" step="50" value="{{ limit }}">
     </label>
     <div class="form-actions">
-      <button type="submit" class="btn btn-primary">{{ t.log_search }}</button>
+      <button type="submit" class="btn btn-primary">{{ t.filter_apply }}</button>
       <a class="btn btn-small" href="{{ base_path }}/logs/download">{{ t.log_download }}</a>
     </div>
   </form>
@@ -50,7 +50,7 @@
         <tr>
           <td><span class="chip" dir="ltr">{{ f.name }}</span></td>
           <td><span class="num" dir="ltr">{{ (f.size_bytes / 1024) | round(1) }} KB</span></td>
-          <td><span class="badge {{ 'badge-ok' if f.current else 'badge-off' }}">{{ t.enabled if f.current else t.disabled }}</span></td>
+          <td><span class="badge {{ 'badge-ok' if f.current else 'badge-off' }}">{{ t.log_file_current if f.current else t.log_file_archived }}</span></td>
         </tr>
         {% endfor %}
       </tbody>

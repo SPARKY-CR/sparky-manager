@@ -949,6 +949,10 @@ body.auth-page .container { max-width: 440px; padding-top: 2rem; }
   h1 { font-size: 1.3rem; }
   .auth-card { padding: 1.5rem 1.2rem; }
   .filter-strip { flex-direction: column; align-items: stretch; }
+  /* In column direction the search box's 220px flex-basis became a
+     HEIGHT — a tall empty area with the magnifier (absolutely
+     positioned at top: 50%) floating in the middle. Reset it. */
+  .filter-search { flex: 0 0 auto; min-width: 0; }
   .filter-select select { flex: 1 1 auto; width: 100%; }
   /* Card tables (Phase 4): wide tables become stacked cards on
      phones instead of horizontal scrolling. Each cell shows its

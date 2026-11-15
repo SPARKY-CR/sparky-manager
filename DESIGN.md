@@ -509,7 +509,7 @@ updates to the panel) or polling (the panel long-polls `getUpdates`).
 | Diagnostics | The settings page's Telegram section shows the connection mode, the bot identity (`getMe`, fetched on demand by the "Check bot identity" button and cached in `telegram_bot_identity` — id, username, first name, never the token), the authorized chat ID, when the commands were last registered, and — for polling — the last successful poll, the last update received, the last error, and the persisted offset. |
 | Auth | Only the configured admin chat ID may use the bot; updates from any other chat are ignored silently — no reply, no error, nothing that confirms the bot exists. The check runs on every command AND every callback (the dispatcher verifies the chat id before any handler runs); callback data is never trusted as authorization — it only identifies the entity to look up. |
 | Dispatcher | `app/bot.py:handle_update` — never raises (a bad update is logged and dropped). Duplicate `update_id`s are ignored (Telegram redelivers). Commands: `/start` / `/menu` (main menu), `/help`, `/status`, `/users`, `/inbounds`, `/cancel`. Inline keyboards everywhere; views edit the menu message in place and fall back to sending a new message when the edit fails. An expired/invalid button tap is answered with a friendly message + the main menu, never silence and never a stack trace. Messages use HTML parse_mode (`<b>` only) with all user-controlled text escaped via `h()`; long messages are truncated HTML-safely (a cut never splits a tag or an entity — Telegram rejects malformed HTML wholesale). A persistent reply keyboard (Users / Inbounds / Status / Menu) sits below the chat; tapping a key abandons any in-progress guided flow. `/start` sends two messages by design (one message carries one markup: welcome + inline menu, then a hint + the persistent keyboard). |
-| What the bot does | Users: paginated list, search (name/note substring), view (traffic/expiry/frozen/inbounds), create (guided flow: name → pick inbounds → traffic limit → expiry), edit (guided: name / traffic limit / expiry, same validation as the web edit route), freeze/unfreeze, extend expiry (+7/+30/+90 days), reset traffic, delete (with confirmation). Inbounds: paginated list (8 per page) with client counts from one grouped query, view, toggle, guided create (VLESS / VMess / Trojan / Shadowsocks / WireGuard, with sensible defaults: auto port, auto tag, panel-default SNI, fresh Reality keypair for VLESS — same stream shape and validation as the web create route via the shared `_check_new_inbound` helper), delete (with confirmation; deletes its clients too). Links: a user's share links + subscription link (the same links the panel generates; a subscription host or domain is required for share links, and a domain for the subscription URL — without one the bot says so instead of sending a broken link). Status: server status (`app.system_status`) + traffic summary (today + 14 days from `traffic_daily`) + user counts. Services: status per service + restart with confirmation, only for services the installer's sudoers block covers (`systemctl restart xray / sing-box / wg-quick@wg0 / openvpn-server@sparky-manager / ocserv / strongswan`); AmneziaWG has no restart entry, so it gets no button and the view says why; the panel itself is not offered (restarting the panel from inside the bot would kill the process before it could report the result). Success is only claimed when the service is actually running afterwards; an unobservable state is reported as unverified, not as success. Backup: creates the backup ZIP (same builder as the settings-page download) and sends it as a document to the admin chat only; a ZIP over Telegram's 50 MB bot-API cap is refused honestly (the web download still works). |
+| What the bot does | Users: paginated list, search (name/note substring), view (traffic/expiry/frozen/inbounds), create (guided flow: name → pick inbounds → traffic limit → expiry), edit (guided: name / traffic limit / expiry, same validation as the web edit route), freeze/unfreeze, extend expiry (+7/+30/+90 days), reset traffic, delete (with confirmation). Inbounds: paginated list (8 per page) with client counts from one grouped query, view, toggle, guided create (all fourteen protocols the panel supports, with sensible defaults: auto port, auto tag, panel-default SNI, fresh Reality keypair for VLESS, the native cores' default subnets — same stream shape and validation as the web create route via the shared `_check_new_inbound` helper), delete (with confirmation; deletes its clients too). Links: a user's share links + subscription link (the same links the panel generates; a subscription host or domain is required for share links, and a domain for the subscription URL — without one the bot says so instead of sending a broken link). Status: server status (`app.system_status`) + traffic summary (today + 14 days from `traffic_daily`) + user counts. Services: status per service + restart with confirmation, only for services the installer's sudoers block covers (`systemctl restart xray / sing-box / wg-quick@wg0 / openvpn-server@sparky-manager / ocserv / strongswan`); AmneziaWG has no restart entry, so it gets no button and the view says why; the panel itself is not offered (restarting the panel from inside the bot would kill the process before it could report the result). Success is only claimed when the service is actually running afterwards; an unobservable state is reported as unverified, not as success. Backup: creates the backup ZIP (same builder as the settings-page download) and sends it as a document to the admin chat only; a ZIP over Telegram's 50 MB bot-API cap is refused honestly (the web download still works). |
 | Semantics | Every state change reuses the web route's exact behavior: same validation (name format/uniqueness, limit/expiry parsing, port/tag/clash checks), same audit action names (detail marked `[telegram]`), same `rerender_configs` call — a re-render failure is reported in the reply, not hidden. The create flow's inbound picker defaults to all enabled inbounds (the web form's behavior) and lets the admin narrow the set; `_create_clients_for_user` takes an optional inbound filter for that. |
 | Conversation state | In-memory only (`_conversations`, per chat id, 10-minute timeout) — no DB schema change. `/cancel` aborts; any other command or menu tap abandons the flow (except paging through search results, which keeps the query — it lives in the conversation state because a Persian query would not fit Telegram's 64-byte callback-data limit). |
 | Language | The bot speaks Persian (no per-admin language setting exists to follow); every bot string still has an EN key (`BOT_STRING_KEYS` in `app/bot.py`; the test suite asserts fa/en parity). The setMyCommands descriptions are Persian too. |
@@ -900,7 +900,7 @@ sparky-manager/
 │   ├── sparky-manager.service
 │   ├── xray.service           # or use the cores' shipped units
 │   └── sing-box.service
-├── tests/                     # 1067 tests (conftest.py: seeded DB + CSRF client)
+├── tests/                     # 1101 tests (conftest.py: seeded DB + CSRF client)
 │   ├── test_links.py          # link round-trips for all 9 schemes
 │   ├── test_render.py         # golden configs → xray -test / sing-box check
 │   ├── test_subscription.py   # v2rayNG + sing-box feeds parse cleanly
@@ -1177,7 +1177,7 @@ After the professional upgrade landed on the live server, Morteza
 found live issues and asked for a complete check of the project.
 `main.py` is 4,766 lines at this point (4,546 at the end of Phase 7;
 the fix batch and bot polish added routes, diagnostics and the
-webhook set-on-save path). The full suite is 1067 tests.
+webhook set-on-save path). The full suite is 1101 tests.
 
 - **Fix batch (evening, after the server upgrade).** The language
   toggle reverted on navigation (the `lang` cookie was only set on
@@ -1218,9 +1218,35 @@ webhook set-on-save path). The full suite is 1067 tests.
   recommend defaulting from the existing cert's DNS SAN); no
   pre-start port-conflict check before the cores start (see §15.3);
   IPv6 literals confuse the webhook port check (`":" in domain`);
-  user notes have no length cap; the add-user form stays visible (the
-  most common admin action — collapsing it was not asked for).
+  user notes have no length cap.
   Full report: kept in the project notes (not shipped in the repo).
+- **Menu + bot UX polish (evening).** The bot's guided inbound
+  creation now covers all fourteen protocols the web panel
+  supports (`BOT_CREATE_PROTOCOLS` in `app/bot.py`: Xray hysteria2,
+  sing-box tuic/anytls/naive/shadowtls, and the native
+  amneziawg/openvpn/openconnect/ikev2), each created with the web
+  create route's defaults (subnets, fresh AmneziaWG params, TLS
+  SNI where meaningful) and the same `_check_new_inbound`
+  validation — including the transport rule the bot used to get
+  wrong (it forced tcp, so a bot-created Hysteria2 falsely clashed
+  with VLESS on TCP 443; the transport is now the protocol
+  default, like the web route). Every guided bot flow has
+  Skip/Back buttons (`c:skip` / `c:back`, step-driven in
+  `_on_create_callback`): Telegram cannot send an empty message,
+  so every optional step has a visible Skip button that submits
+  the default, and no bot prompt says "leave empty" anymore. The
+  users list gains a Clear-search button (the filter used to be
+  unescapable from the results). Web: the Users add form collapses
+  behind `<details>` like the inbounds form (the debug pass had
+  deliberately left it visible; Morteza then asked for it); the
+  mobile filter-search layout bug is fixed (the 220px flex-basis
+  became a 220px-tall empty area in column direction); the logs
+  page filter button says Apply and rotated files are labelled
+  Archived (not Disabled); the dashboard empty states link to the
+  add forms; the settings page shows the webhook live status once
+  (diagnostics), and the Telegram action buttons sit in two
+  wrapping rows. The full suite is 1101 tests; i18n parity is 495
+  keys each.
 
 ### 15.1 The admin password on re-install (installer trap, fixed)
 

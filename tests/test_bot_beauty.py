@@ -486,13 +486,22 @@ def test_protocol_picker_pairs_buttons(db, sender):
     _configure_bot(db)
     _dispatch(db, _callback("i:new"), sender)
     rows = sender.edited[0][3]["inline_keyboard"]
-    assert [len(row) for row in rows] == [2, 2, 1, 1]
+    assert [len(row) for row in rows] == [2, 2, 2, 2, 2, 2, 2, 1]
     assert _button_data(sender.edited[0][3]) == [
         "i:new:vless",
         "i:new:vmess",
         "i:new:trojan",
         "i:new:shadowsocks",
+        "i:new:hysteria2",
+        "i:new:tuic",
+        "i:new:anytls",
+        "i:new:naive",
+        "i:new:shadowtls",
         "i:new:wireguard",
+        "i:new:amneziawg",
+        "i:new:openvpn",
+        "i:new:openconnect",
+        "i:new:ikev2",
         "c:cancel",
     ]
 

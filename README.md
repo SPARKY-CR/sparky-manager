@@ -11,7 +11,7 @@ Public project, MIT licensed. **Built from scratch** — no fork, no copied
 code from 3X-UI, vpn-ui, Marzban, or any other panel.
 
 > **Status: professional upgrade complete on branch
-> `upgrade/professional`** (base: `main` at v1.2.0). 1067 tests pass;
+> `upgrade/professional`** (base: `main` at v1.2.0). 1101 tests pass;
 > the rendered Xray config passes `xray run -test` against real
 > Xray 26.11.9 and the rendered sing-box config passes `sing-box
 > check` against real sing-box 1.14.4. The panel is installed and
@@ -250,7 +250,7 @@ pip install pytest
 python -m pytest -q
 ```
 
-The suite (1067 tests) covers config rendering (golden configs
+The suite (1101 tests) covers config rendering (golden configs
 validated against real Xray/sing-box binaries where available), link
 builders, subscriptions, user/inbound management, the Telegram bot,
 CSRF/auth boundaries, the gRPC stats client, and the UI (every page
