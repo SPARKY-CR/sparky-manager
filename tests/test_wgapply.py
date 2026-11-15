@@ -234,6 +234,42 @@ def test_apply_syncconf_when_up(harness, tmp_path):
     assert "wg-quick up" not in calls
 
 
+def test_apply_strip_runs_unprivileged_syncconf_privileged(harness, tmp_path):
+    """`wg-quick strip` goes through ``run_unprivileged`` (it only
+    reads a file the panel wrote), while `wg show` / `wg syncconf`
+    go through the privileged ``run``. This split is what keeps
+    the strip temp path out of the sudoers file — newer sudo
+    rejects wildcards embedded in a command argument (CI run #24),
+    so no rule for the random temp name can be written at all."""
+    harness["set_state"]("up")
+    live = tmp_path / "wg0.conf"
+    live.write_text("[Interface]\nPrivateKey = old\n", encoding="utf-8")
+    privileged: list[str] = []
+    unprivileged: list[str] = []
+
+    def run(argv, timeout=30):
+        privileged.append(" ".join(argv))
+        return harness["run"](argv, timeout=timeout)
+
+    def run_unprivileged(argv, timeout=30):
+        unprivileged.append(" ".join(argv))
+        return harness["run"](argv, timeout=timeout)
+
+    result = wgapply.apply_config(
+        _good_config(),
+        config_path=live,
+        run=run,
+        run_unprivileged=run_unprivileged,
+        journal=harness["journal"],
+    )
+    assert result.ok, result.detail
+    assert result.method == "syncconf"
+    assert any("wg-quick strip" in call for call in unprivileged)
+    assert not any("wg-quick strip" in call for call in privileged)
+    assert any("wg syncconf wg0" in call for call in privileged)
+    assert any("wg show wg0" in call for call in privileged)
+
+
 def test_apply_start_when_down(harness, tmp_path):
     harness["set_state"]("down")
     live = tmp_path / "wg0.conf"

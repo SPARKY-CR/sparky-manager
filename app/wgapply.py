@@ -14,10 +14,17 @@ This module makes the apply step both robust and diagnosable:
    and checked (32-byte base64 keys, valid CIDRs, valid port) before
    anything is written. A bad render fails early with a message that
    names the problem.
-2. **`wg-quick strip` second.** ``wg-quick strip`` removes the
-   wg-quick-only keys (Address, DNS, MTU, hooks) and prints the
-   stripped config; a failure here means wg-quick itself rejects
-   the file, and its output is returned.
+2. **`wg-quick strip` second — unprivileged.** ``wg-quick strip``
+   removes the wg-quick-only keys (Address, DNS, MTU, hooks) and
+   prints the stripped config; a failure here means wg-quick
+   itself rejects the file, and its output is returned. Strip only
+   reads a file the panel itself wrote and prints text, so it
+   needs no privilege: it runs through ``run_unprivileged`` (no
+   sudo), which also keeps the strip temp path out of the sudoers
+   file entirely — newer sudo rejects wildcards embedded in a
+   command argument ("wildcards are not allowed in command
+   arguments", CI run #24), so a rule for the random temp name
+   cannot be written at all.
 3. **Live reload when the interface is already up.** ``wg syncconf``
    parses the whole stripped config *before* touching the interface
    (atomic on parse error) and applies only the diffs — no dropped
@@ -381,6 +388,7 @@ def apply_config(
     wg_quick_bin: str = "wg-quick",
     unit: str = "wg-quick@wg0",
     run: RunFn,
+    run_unprivileged: Optional[RunFn] = None,
     journal: Optional[JournalFn] = None,
     redact: RedactFn = lambda text: text,
     allow_dns: bool = False,
@@ -393,6 +401,14 @@ def apply_config(
     the file on disk are left untouched (or restored), and
     ``detail`` carries the failing command's output plus the journal
     tail when available.
+
+    ``run`` is the privileged runner (sudo) for ``wg show``,
+    ``wg syncconf`` and ``systemctl start``. ``run_unprivileged``
+    runs ``wg-quick strip`` only — strip needs no privilege, and
+    keeping it out of sudo means the sudoers file never has to
+    name the random strip temp path (newer sudo rejects embedded
+    wildcards in command arguments). Defaults to ``run`` when the
+    caller does not pass one (tests).
     """
     path = Path(config_path)
     problems = validate_config_text(
@@ -409,7 +425,7 @@ def apply_config(
     stripped, detail = strip_config(
         content,
         wg_quick_bin=wg_quick_bin,
-        run=run,
+        run=run_unprivileged if run_unprivileged is not None else run,
         tmpdir=str(path.parent),
         timeout=timeout,
     )

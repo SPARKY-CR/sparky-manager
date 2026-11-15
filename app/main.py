@@ -816,7 +816,9 @@ def _privileged_cmd(*args: str) -> list[str]:
     return list(args)
 
 
-def _run_privileged(*args: str, timeout: int = 30) -> tuple[int, str, str]:
+def _run_privileged(
+    *args: str, timeout: int = 30, use_sudo: bool = True
+) -> tuple[int, str, str]:
     """Run a privileged command (via ``sudo -n`` when available).
 
     Returns ``(returncode, stdout, stderr)``. Every invocation is
@@ -826,8 +828,12 @@ def _run_privileged(*args: str, timeout: int = 30) -> tuple[int, str, str]:
     exited``) while the real error went to the journal. Missing
     binary / timeout / OSError are reported as 127 / 124 / 1 with the
     reason on stderr, never raised.
+
+    ``use_sudo=False`` runs the plain command (same logging and
+    error handling) — for steps that need no privilege, like
+    ``wg-quick strip`` (see ``app.wgapply``).
     """
-    argv = _privileged_cmd(*args)
+    argv = _privileged_cmd(*args) if use_sudo else list(args)
     try:
         proc = subprocess.run(
             argv, timeout=timeout, capture_output=True, text=True
@@ -896,6 +902,12 @@ def _privileged_runner(argv: list[str], timeout: int = 30) -> tuple[int, str, st
     return _run_privileged(*argv, timeout=timeout)
 
 
+def _plain_runner(argv: list[str], timeout: int = 30) -> tuple[int, str, str]:
+    """Adapter so ``app.wgapply`` can run ``wg-quick strip`` without
+    sudo — strip only reads a file the panel wrote and prints text."""
+    return _run_privileged(*argv, timeout=timeout, use_sudo=False)
+
+
 def _apply_wireguard_config(
     content: str,
     *,
@@ -927,6 +939,7 @@ def _apply_wireguard_config(
         wg_quick_bin=wg_quick_bin,
         unit=unit,
         run=_privileged_runner,
+        run_unprivileged=_plain_runner,
         journal=_journal_tail,
         redact=_redact,
         extra_interface_keys=extra_interface_keys,

@@ -1,4 +1,4 @@
-"""Installer tests (v13): extraction tests under real ``set -euo pipefail``.
+"""Installer tests (v14): extraction tests under real ``set -euo pipefail``.
 
 The v9.2 lesson: installer logic must be tested under the real shell
 flags, or SIGPIPE-style bugs hide. These tests extract functions /
@@ -9,7 +9,7 @@ end here (it needs root, apt and the network).
 What is covered:
 * ``bash -n install.sh`` (syntax).
 * The sudoers block: valid under ``visudo -cf`` and carries every
-  command the panel needs (v13 additions included).
+  command the panel needs (v14 additions included).
 * ``pick_random_web_path`` (v9.2 regression): 12 chars, ``[a-z0-9]``,
   never exits 141 under ``set -euo pipefail``.
 * ``generate_vpn_ca``: creates a CA + server cert with the right
@@ -87,7 +87,7 @@ def test_installer_syntax():
     assert proc.returncode == 0, proc.stderr
 
 
-def test_sudoers_block_validates_and_covers_v13():
+def test_sudoers_block_validates_and_covers_v14():
     text = _install_text()
     block = _extract_heredoc(
         text, "cat > /etc/sudoers.d/sparky-manager <<'EOF'"
@@ -95,7 +95,13 @@ def test_sudoers_block_validates_and_covers_v13():
     # The file cat writes ends with a newline; visudo rejects a file
     # without the terminator ("missing line terminator at end of file").
     assert block.endswith("\n")
-    # Every command the panel needs (v13 additions included).
+    # Every command the panel needs (v14 additions included).
+    # NOTE: `wg-quick strip` has NO rule here — it runs unprivileged
+    # (see app.wgapply), and the syncconf temp path is a lone
+    # trailing `*`: newer sudo rejects wildcards embedded in a
+    # command argument ("wildcards are not allowed in command
+    # arguments", CI run #24) while the local 1.9.15p5 accepts them,
+    # so the embedded form would pass here and fail on CI.
     for needed in (
         "/usr/bin/systemctl restart openvpn-server@sparky-manager",
         "/usr/bin/systemctl restart ocserv",
@@ -104,10 +110,8 @@ def test_sudoers_block_validates_and_covers_v13():
         "/usr/bin/systemctl start awg-quick@awg0",
         "/usr/bin/wg show wg0",
         "/usr/bin/awg show awg0",
-        "/usr/bin/wg-quick strip /etc/wireguard/.wg-strip-*.conf",
-        "/usr/bin/wg syncconf wg0 /etc/wireguard/.wg-syncconf-*.conf",
-        "/usr/bin/awg-quick strip /etc/amnezia/amneziawg/.wg-strip-*.conf",
-        "/usr/bin/awg syncconf awg0 /etc/amnezia/amneziawg/.wg-syncconf-*.conf",
+        "/usr/bin/wg syncconf wg0 *",
+        "/usr/bin/awg syncconf awg0 *",
         "/usr/bin/swanctl --load-all",
         "/usr/bin/swanctl --list-conns",
         "/usr/bin/ocserv -t -c *",
@@ -118,6 +122,20 @@ def test_sudoers_block_validates_and_covers_v13():
         "/usr/bin/journalctl -u awg-quick@awg0 -n 50 --no-pager",
     ):
         assert needed in block, needed
+    # No embedded wildcards anywhere in the rule: every `*` must be
+    # a standalone argument (space before, comma/space/end after).
+    # This is the guard for the CI-run-#24 lesson — the local
+    # visudo would let an embedded `*` through, the CI runner's
+    # newer sudo rejects the whole file for it.
+    rule = next(
+        line for line in block.splitlines() if line.startswith("sparky-manager")
+    )
+    for index, char in enumerate(rule):
+        if char != "*":
+            continue
+        before = rule[index - 1] if index > 0 else ""
+        after = rule[index + 1] if index + 1 < len(rule) else ""
+        assert before == " " and after in (",", " ", ""), rule[max(0, index - 40):index + 10]
     # visudo validates the syntax (the file must not break sudo).
     import tempfile
 
