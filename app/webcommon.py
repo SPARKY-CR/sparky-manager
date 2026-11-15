@@ -20,6 +20,7 @@ import logging
 import re
 import secrets
 import uuid
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
@@ -27,6 +28,7 @@ from urllib.parse import quote
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import charts as charts_mod
@@ -625,6 +627,21 @@ def _notify_telegram(db: Session, text: str) -> bool:
         logger.warning("telegram notification failed")
         return False
 
+def clients_count_by_inbound(db: Session) -> dict[int, int]:
+    """``{inbound_id: client_count}`` in ONE grouped query.
+
+    The dashboard and inbounds pages used to issue one COUNT per
+    inbound (N+1 — audit Q6, fixed in Phase 6). Inbounds with no
+    clients are absent from the result (callers use ``.get(id, 0)``).
+    """
+    rows = (
+        db.query(Client.inbound_id, func.count(Client.id))
+        .group_by(Client.inbound_id)
+        .all()
+    )
+    return {inbound_id: count for inbound_id, count in rows}
+
+
 def _traffic_chart(
     db: Session, user_id: Optional[int] = None, today: Any = None
 ) -> tuple[str, int]:
@@ -634,11 +651,20 @@ def _traffic_chart(
     one user (user detail). Days with no recorded traffic are zero
     bars, never invented values. Returns ``("", 0)`` on failure.
     Never raises.
+
+    The query is bounded to the chart window (Phase 6): the series
+    only ever shows the last 14 days, so older rows are filtered at
+    the DB level instead of loaded and discarded in Python.
     """
     try:
         query = db.query(TrafficDaily)
         if user_id is not None:
             query = query.filter(TrafficDaily.user_id == user_id)
+        chart_today = today or date.today()
+        if isinstance(chart_today, datetime):
+            chart_today = chart_today.date()
+        first_day = chart_today - timedelta(days=charts_mod.CHART_DAYS - 1)
+        query = query.filter(TrafficDaily.date >= first_day)
         rows = [
             (row.date, (row.up_bytes or 0) + (row.down_bytes or 0))
             for row in query.all()

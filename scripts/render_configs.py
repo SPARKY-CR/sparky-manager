@@ -376,6 +376,12 @@ def _load_db(
                 "flow": row.get("flow"),
                 "extra_json": extra,
                 "name": user.get("name"),
+                # The renderer builds the Stats API email
+                # (user-<id>@sparky.local) from user_id — without
+                # it, the installer-rendered config has no
+                # per-client emails and Xray cannot attribute
+                # traffic per user (Phase 6 finding).
+                "user_id": row.get("user_id"),
             }
             tag = inbound.get("tag")
             if tag:

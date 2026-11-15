@@ -82,6 +82,7 @@ from app import auth as auth_mod  # noqa: E402
 from app import bot as bot_mod  # noqa: E402
 from app import main as main_mod  # noqa: E402
 from app import traffic as traffic_mod  # noqa: E402
+from app import xray_stats as xray_stats_mod  # noqa: E402
 from app.db import SessionLocal, get_engine, init_db  # noqa: E402
 from app.main import ensure_defaults  # noqa: E402
 from app.models import Client, Inbound, User, client_is_usable  # noqa: E402
@@ -565,16 +566,47 @@ def _isolate_process_globals():
     The login rate limiter (per-IP failure counters) and the traffic
     syncer's cumulative baselines are process-global; a test that
     fills them must not leak into the next test. Same for the
-    Telegram bot's in-memory conversations and seen update ids.
+    Telegram bot's in-memory conversations and seen update ids, and
+    the Xray Stats collector's previous snapshots (Phase 6: a test
+    in one file using ``collect_xray_deltas`` used to pollute the
+    next file's first tick).
     """
     auth_mod._failed_logins.clear()
     traffic_mod._last_wg.clear()
     traffic_mod._last_nft.clear()
+    xray_stats_mod.reset_snapshots()
     bot_mod._conversations.clear()
     bot_mod._seen_updates.clear()
     yield
     auth_mod._failed_logins.clear()
     traffic_mod._last_wg.clear()
     traffic_mod._last_nft.clear()
+    xray_stats_mod.reset_snapshots()
     bot_mod._conversations.clear()
     bot_mod._seen_updates.clear()
+
+
+@pytest.fixture(autouse=True)
+def _config_paths_to_tmp(tmp_path, monkeypatch):
+    """Every rendered config goes to tmp, in every test.
+
+    Phase 6 finding: the Telegram bot tests dispatch real re-renders
+    (they use the ``db`` fixture, not ``test_client``, so they never
+    got the path stubs) — and the suite was writing the rendered
+    Xray config to the REAL ``/usr/local/etc/xray/config.json`` on
+    this machine. Stubbing the paths here, autouse, makes that
+    impossible for any test; tests that stub the paths themselves
+    (``test_render``, ``test_protocols``, ``test_client``) simply
+    override these values for their own assertions.
+    """
+    for attr, name in (
+        ("XRAY_CONFIG_PATH", "xray.json"),
+        ("SINGBOX_CONFIG_PATH", "singbox.json"),
+        ("WG_CONFIG_PATH", "wg0.conf"),
+        ("OVPN_CONFIG_PATH", "openvpn.conf"),
+        ("OCSERV_CONFIG_PATH", "ocserv.conf"),
+        ("OCSERV_PASSWD_PATH", "ocpasswd"),
+        ("AWG_CONFIG_PATH", "awg0.conf"),
+        ("SWANCTL_CONFIG_PATH", "swanctl.conf"),
+    ):
+        monkeypatch.setattr(main_mod, attr, str(tmp_path / name))

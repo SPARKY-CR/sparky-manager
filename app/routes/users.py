@@ -303,8 +303,11 @@ def users_page(
     hand for exactly that reason — an ``int`` Query param would 422
     on ``?page=abc``)."""
     now = datetime.now(timezone.utc)
-    users = db.query(User).all()
-    total_users = len(users)
+    # One user load (Phase 6 — audit Q6): the expired-ids set used
+    # to re-query the whole table; it now derives from this load.
+    all_users = db.query(User).all()
+    total_users = len(all_users)
+    users = list(all_users)
 
     # Search: name or note, case-insensitive substring.
     needle = (q or "").strip().lower()
@@ -331,7 +334,7 @@ def users_page(
     # the template must never compare datetimes itself.
     expired_ids = {
         u.id
-        for u in db.query(User).all()
+        for u in all_users
         if _aware_dt(u.expires_at) is not None
         and _aware_dt(u.expires_at) <= now
     }

@@ -230,6 +230,7 @@ from app.webcommon import (  # noqa: E402
     _client_dict,
     _client_is_frozen,
     _create_clients_for_user,
+    clients_count_by_inbound,
     _inbound_dict,
     _links_for_user,
     _new_client_credentials,
@@ -377,15 +378,21 @@ def _run_privileged(
         logger.error("privileged command failed: %s", _redact(detail))
         return 1, "", detail
     tail = (proc.stderr or proc.stdout or "").strip()
+    # The argv itself goes through the redactor too (Phase 6 — the
+    # docstring always promised it, but only the output tail was
+    # redacted; no current call passes secrets in argv, yet a future
+    # one must not leak by default).
     if proc.returncode != 0:
         logger.error(
             "privileged command failed (rc=%s): %s — %s",
             proc.returncode,
-            " ".join(argv),
+            _redact(" ".join(argv)),
             _redact(tail[-800:]),
         )
     else:
-        logger.debug("privileged command ok (rc=0): %s", " ".join(argv))
+        logger.debug(
+            "privileged command ok (rc=0): %s", _redact(" ".join(argv))
+        )
     return proc.returncode, proc.stdout, proc.stderr
 
 
@@ -1104,6 +1111,11 @@ def ensure_defaults(db: Session) -> Optional[str]:
 #: pattern as the Telegram polling loop's constants.
 TRAFFIC_SYNC_INTERVAL_SECONDS = 60
 
+#: Seconds between expiry-sweeper ticks (re-render so expired /
+#: over-quota users drop out). A named constant like the traffic
+#: loop's, so tests can shrink it (Phase 6).
+EXPIRY_SWEEPER_INTERVAL_SECONDS = 300
+
 
 async def _traffic_sync_loop() -> None:
     """Every 60 s: poll traffic sources and roll usage into the DB."""
@@ -1147,7 +1159,7 @@ async def _expiry_sweeper_loop() -> None:
     """Every 5 min: re-render configs so expired/over-quota users drop
     out (the renderers omit unusable clients — DESIGN §4/§6.4)."""
     while True:
-        await asyncio.sleep(300)
+        await asyncio.sleep(EXPIRY_SWEEPER_INTERVAL_SECONDS)
         db = SessionLocal()
         try:
             errors = rerender_configs(db)
@@ -2655,10 +2667,14 @@ def dashboard(
     db: Session = Depends(db_session),
 ):
     users = db.query(User).order_by(User.created_at.desc()).limit(10).all()
-    total_users = db.query(User).count()
-    active_users = sum(1 for u in db.query(User).all() if user_is_usable(u))
+    # One full user load (Phase 6 — audit Q6): the total, the active
+    # count and the traffic sum all derive from it; the old code
+    # loaded the whole table three times.
+    all_users = db.query(User).all()
+    total_users = len(all_users)
+    active_users = sum(1 for u in all_users if user_is_usable(u))
     total_inbounds = db.query(Inbound).count()
-    traffic_used = sum(u.traffic_used_bytes or 0 for u in db.query(User).all())
+    traffic_used = sum(u.traffic_used_bytes or 0 for u in all_users)
     today = datetime.now(timezone.utc).date()
     # "Active today": users with any traffic recorded today. This is
     # NOT "online now" — real presence is not observable (audit U2);
@@ -2681,10 +2697,8 @@ def dashboard(
         server_status = None
     # Inbound node cards + protocol distribution (dashboard sections).
     inbounds = db.query(Inbound).order_by(Inbound.id).all()
-    clients_by_inbound = {
-        i.id: db.query(Client).filter(Client.inbound_id == i.id).count()
-        for i in inbounds
-    }
+    # One grouped COUNT (Phase 6 — audit Q6), not one COUNT per inbound.
+    clients_by_inbound = clients_count_by_inbound(db)
     recent_audit = (
         db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(6).all()
     )
@@ -2748,12 +2762,9 @@ def inbounds_page(
         "port": suggested_port,
         "sni": settings.get("reality_sni") or "www.microsoft.com",
     }
-    # Phase 4: client counts for the inbounds table (same query the
-    # dashboard node cards use).
-    clients_by_inbound = {
-        i.id: db.query(Client).filter(Client.inbound_id == i.id).count()
-        for i in inbounds
-    }
+    # Phase 4: client counts for the inbounds table (same grouped
+    # query the dashboard node cards use — one COUNT, not N).
+    clients_by_inbound = clients_count_by_inbound(db)
     return templates.TemplateResponse(request, "inbounds.html",
         _template_ctx(request, {
             "admin": admin,
