@@ -96,6 +96,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 from app import telegram as telegram_mod
+from app import links as links_mod
 from app.models import Admin, Client, Inbound, TrafficDaily, User, client_is_frozen
 from app.routes.users import (
     _addable_inbounds,
@@ -571,6 +572,16 @@ def _kb(rows: list[list[tuple[str, str]]]) -> dict[str, Any]:
             for row in rows
         ]
     }
+
+
+def _url_row(text: str, url: str) -> list[dict[str, str]]:
+    """One inline-keyboard row holding a single URL button.
+
+    Telegram opens the URL when the button is tapped (no callback
+    reaches the bot) — used for the ZedSecure deep link, which must
+    open the app, not answer in this chat.
+    """
+    return [{"text": text, "url": url}]
 
 
 def _main_menu_kb(t: dict[str, str]) -> dict[str, Any]:
@@ -1872,7 +1883,10 @@ def _send_links(ctx: _Ctx, message_id: Optional[int], user_id: int) -> None:
     the domain when set, else the subscription_host fallback (no
     domain needed) — without either it is omitted, not a broken
     link. The file exports need the host too, so the no-host case
-    stays an honest message."""
+    stays an honest message. When a subscription URL exists, the
+    keyboard also carries an "Add to ZedSecure" URL button
+    (``zedsecure://import`` deep link — tapping it opens the app's
+    confirmation dialog; the app fetches the subscription itself)."""
     t = ctx.t
     user = ctx.db.get(User, user_id)
     if user is None:
@@ -1949,11 +1963,21 @@ def _send_links(ctx: _Ctx, message_id: Optional[int], user_id: int) -> None:
         for filename, _media, _content in files:
             lines.append(f"📎 <code>{h(filename)}</code>")
         lines.append("")
+    keyboard = _kb([[(t["bot_back"], f"u:v:{user_id}")]])
+    if sub_url:
+        # One-tap import: the deep link opens ZedSecure's
+        # confirmation dialog; the app fetches the subscription
+        # itself. A URL button, not a callback — tapping it must
+        # leave this chat for the app.
+        deeplink = links_mod.zedsecure_deep_link(sub_url, user.name)
+        keyboard["inline_keyboard"].insert(
+            0, _url_row(t["add_to_zedsecure"], deeplink)
+        )
     _send_long(
         ctx,
         message_id,
         "\n".join(lines).rstrip("\n"),
-        _kb([[(t["bot_back"], f"u:v:{user_id}")]]),
+        keyboard,
     )
     for filename, _media, content in files:
         if not ctx.sender.document(

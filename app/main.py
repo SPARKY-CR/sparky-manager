@@ -5147,6 +5147,9 @@ def user_page(request: Request, token: str, db: Session = Depends(db_session)):
                 "links_available": True,
                 "sub_url": f"{base}/sub/{user.sub_token}",
                 "zedsecure_url": f"{base}/sub/{user.sub_token}/zedsecure.json",
+                "zedsecure_deeplink": links_mod.zedsecure_deep_link(
+                    f"{base}/sub/{user.sub_token}", user.name
+                ),
                 "user_url": f"{base}/u/{user.sub_token}",
                 "file_urls": _file_export_urls(db, user, base) if usable else {},
                 "host": host,
@@ -5504,9 +5507,10 @@ def _build_zedsecure_bundle(
         outbounds = _singbox_outbounds_for(db, client, inbound, user, host, settings)
         if outbounds:
             primary = outbounds[0]
-            if inbound.protocol == "wireguard":
-                # A WireGuard object is an endpoint, not an outbound
-                # (sing-box 1.13+): keep the bundle schema honest.
+            if primary.get("type") in subscription_mod.ENDPOINT_TYPES:
+                # WireGuard / OpenVPN / OpenConnect objects are
+                # endpoints, not outbounds (sing-box 1.13+):
+                # keep the bundle schema honest.
                 entry["singbox_endpoint"] = primary
             else:
                 entry["singbox_outbound"] = primary
@@ -5662,6 +5666,9 @@ def _subscription_response(request: Request, token: str, db: Session) -> Respons
                 "user": user,
                 "links": links,
                 "sub_url": str(request.url).split("?")[0],
+                "zedsecure_deeplink": links_mod.zedsecure_deep_link(
+                    str(request.url).split("?")[0], user.name
+                ),
                 "chosen_format": chosen,
             }),
         )
@@ -5737,11 +5744,17 @@ def subscription(request: Request, token: str, db: Session = Depends(db_session)
 @app.get("/sub/{token}/zedsecure.json")
 def zedsecure_bundle(request: Request, token: str, db: Session = Depends(db_session)):
     """ZedSecure bundle: one JSON document with all of the user's
-    configs (share links + sing-box outbounds + WireGuard ``.conf``),
-    made for the ZedSecure app to import in one action. Same access
-    rules as the other feeds: unknown / disabled / expired /
-    over-quota user → 403 with an empty body. Rotating the token
-    invalidates the old bundle URL."""
+    configs (share links + sing-box objects + file contents), kept
+    as a FILE EXPORT. The ZedSecure app does NOT understand this
+    format as a subscription (verified against its source, commit
+    201e82ce — no code references ``zedsecure-bundle``), so the
+    bundle URL must never be added as a subscription in the app: a
+    failed update wipes the subscription's servers. The app's
+    subscription is the standard ``/sub/<token>`` URL (the sing-box
+    fragment), plus the one-tap ``zedsecure://import`` deep link.
+    Same access rules as the other feeds: unknown / disabled /
+    expired / over-quota user → 403 with an empty body. Rotating
+    the token invalidates the old bundle URL."""
     user = db.query(User).filter(User.sub_token == token).first()
     if user is None or not user_is_usable(user):
         logger.warning("zedsecure bundle 403 for token %s", _token_fp(token))

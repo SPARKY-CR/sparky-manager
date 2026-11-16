@@ -803,7 +803,8 @@ def test_wireguard_render_mtu_and_custom_address():
     assert "AllowedIPs = 10.77.0.2/32" in content
     content_default = wireguard.render_wg_config(priv, [])
     assert "Address = 10.8.0.1/24" in content_default
-    assert "MTU" not in content_default
+    # Line-based: a random base64 key can contain the substring "MTU".
+    assert not any(line.startswith("MTU") for line in content_default.splitlines())
 
 
 def test_amneziawg_render_mtu_and_custom_address():
@@ -818,7 +819,8 @@ def test_amneziawg_render_mtu_and_custom_address():
     assert "AllowedIPs = 10.88.0.2/32" in content
     content_default = amneziawg.render_server_config(priv, [], params=params)
     assert "Address = 10.8.1.1/24" in content_default
-    assert "MTU" not in content_default
+    # Line-based: a random base64 key can contain the substring "MTU".
+    assert not any(line.startswith("MTU") for line in content_default.splitlines())
 
 
 def test_openvpn_render_dns(tmp_path):

@@ -6,13 +6,16 @@ ZedSecure imports both subscription formats, so the panel emits both
 from the same per-user data:
 
 * **v2rayNG** — base64 (standard, padded) of one share link per line.
-* **sing-box** — JSON ``{"outbounds": [...]}`` the client imports
-  directly (sing-box uses ``type`` + ``server``/``server_port``).
+* **sing-box** — a JSON fragment ``{"outbounds": [...], "endpoints":
+  [...]}`` the client imports directly (one profile per outbound /
+  endpoint): link protocols as outbounds, WireGuard / OpenVPN /
+  OpenConnect as endpoints (the native protocols carry their
+  credentials in the endpoint object).
 
 Format selection: an explicit ``?format=`` query value always wins;
-otherwise the User-Agent is sniffed (sing-box / SFA / Hiddify ->
-sing-box JSON; v2rayNG / v2rayN / NekoBox / Clash -> v2rayNG links);
-unknown or missing User-Agent defaults to v2rayNG.
+otherwise the User-Agent is sniffed (sing-box / SFA / Hiddify /
+ZedSecure -> sing-box JSON; v2rayNG / v2rayN / NekoBox / Clash ->
+v2rayNG links); unknown or missing User-Agent defaults to v2rayNG.
 """
 
 from __future__ import annotations
@@ -50,7 +53,11 @@ _SINGBOX_ALIASES = {"singbox", "sing-box"}
 
 # User-Agent markers, checked in this order (sing-box first: a UA
 # naming a sing-box client wins even if it also mentions something else).
-_SINGBOX_UA_MARKERS = ("sing-box", "singbox", "sfa", "hiddify")
+# "zedsecure" is in the sing-box list: the ZedSecure app's own UA gets
+# the fragment (its default v2rayNG UA still gets the link list, and
+# the app re-fetches with the sing-box UA to merge in the fragment-only
+# servers — see DESIGN.md §15.9).
+_SINGBOX_UA_MARKERS = ("sing-box", "singbox", "sfa", "hiddify", "zedsecure")
 _V2RAYNG_UA_MARKERS = ("v2rayng", "v2rayn", "nekobox", "clash")
 
 # Extra client markers for the browser check below: a UA naming any
@@ -242,9 +249,9 @@ def choose_format(
     (``v2rayng``/``v2ray`` -> v2rayNG, ``singbox``/``sing-box`` ->
     sing-box); an unrecognised explicit value is ignored and the
     User-Agent is sniffed instead. UA sniffing: a UA containing
-    ``sing-box``, ``SFA`` or ``Hiddify`` -> sing-box; one containing
-    ``v2rayNG``, ``v2rayN``, ``NekoBox`` or ``Clash`` -> v2rayNG.
-    Unknown or missing UA -> v2rayNG (the safer default).
+    ``sing-box``, ``SFA``, ``Hiddify`` or ``ZedSecure`` -> sing-box;
+    one containing ``v2rayNG``, ``v2rayN``, ``NekoBox`` or ``Clash``
+    -> v2rayNG. Unknown or missing UA -> v2rayNG (the safer default).
     """
     if query_format:
         normalised = query_format.strip().lower()
@@ -293,18 +300,29 @@ def decode_v2rayng_feed(body: bytes) -> list[str]:
 # sing-box feed (JSON outbounds)
 # ---------------------------------------------------------------------------
 
-def build_singbox_feed(outbounds: list[dict]) -> dict:
-    """Wrap sing-box objects into a subscription document.
+#: Object types that live under ``"endpoints"`` in the fragment, not
+#: ``"outbounds"``: WireGuard (an endpoint since sing-box 1.13) plus
+#: the ZedSecure native-protocol endpoints. The app's ``SingBoxJson``
+#: ENDPOINT_TYPES include ``openvpn-client`` and ``openconnect``;
+#: upstream sing-box has no OpenConnect endpoint and spells the
+#: OpenVPN one ``"openvpn"`` — the fragment is written for the app's
+#: parser (see DESIGN.md §15.9), which accepts both spellings.
+ENDPOINT_TYPES = ("wireguard", "openvpn-client", "openconnect")
 
-    Returns ``{"outbounds": [...]}`` — and, when any WireGuard
-    object is present, ``{"outbounds": [...], "endpoints": [...]}``:
-    sing-box removed the WireGuard *outbound* in 1.13.0, so
-    WireGuard objects (``type == "wireguard"``) are endpoints and
-    must live under ``"endpoints"`` or ``sing-box check`` rejects
-    the feed (``unknown field "server"``).
+
+def build_singbox_feed(outbounds: list[dict]) -> dict:
+    """Wrap sing-box objects into a subscription document (a fragment).
+
+    Returns ``{"outbounds": [...]}`` — and, when any endpoint object
+    is present, ``{"outbounds": [...], "endpoints": [...]}``: WireGuard
+    objects (``type == "wireguard"``) are endpoints since sing-box
+    1.13.0 (the WireGuard *outbound* was removed, so they must live
+    under ``"endpoints"`` or ``sing-box check`` rejects the feed with
+    ``unknown field "server"``), and so are the ZedSecure
+    native-protocol endpoints (``openvpn-client`` / ``openconnect``).
     """
-    endpoints = [o for o in outbounds if o.get("type") == "wireguard"]
-    plain = [o for o in outbounds if o.get("type") != "wireguard"]
+    endpoints = [o for o in outbounds if o.get("type") in ENDPOINT_TYPES]
+    plain = [o for o in outbounds if o.get("type") not in ENDPOINT_TYPES]
     feed: dict[str, list[dict]] = {"outbounds": list(plain)}
     if endpoints:
         feed["endpoints"] = list(endpoints)
@@ -500,14 +518,23 @@ def outbound_for_client(
     """Build the sing-box outbound object for one (client, inbound) pair.
 
     ``client`` keys: ``uuid``, ``password``, ``method``, ``flow``,
-    ``extra_json``. ``inbound`` keys: ``tag``, ``protocol``, ``port``,
-    ``stream_json`` (a dict with ``security`` / ``reality`` / ``tls`` /
-    ``network`` / ``path`` / ``host`` as applicable).
+    ``user_name``, ``extra_json``. ``inbound`` keys: ``tag``,
+    ``protocol``, ``port``, ``stream_json`` (a dict with ``security`` /
+    ``reality`` / ``tls`` / ``network`` / ``path`` / ``host`` as
+    applicable).
+
+    OpenVPN and OpenConnect return **endpoint** objects (``type``
+    ``openvpn-client`` / ``openconnect``) carrying the user's
+    username (``user_name`` — the panel user name, which is what
+    both servers authenticate) and password, so ZedSecure does not
+    prompt — the same credentials the ``.ovpn`` export embeds.
+    :func:`build_singbox_feed` moves them under ``"endpoints"``.
 
     Returns ``None`` for:
 
-    * ``ikev2``, ``openvpn`` and ``openconnect`` (no sing-box
-      outbound exists — they are exported as files instead);
+    * ``ikev2`` (no sing-box endpoint exists — the app takes IKEv2
+      via ZedLink only; the panel exports it as a ``.mobileconfig``
+      file instead);
     * ``amneziawg`` — upstream sing-box has no AmneziaWG support
       (only forks do: Hiddify's ``"type": "awg"`` endpoint,
       sing-box-lx's root-promoted AWG fields); emitting a plain
@@ -743,7 +770,49 @@ def outbound_for_client(
         }]
         return outbound
 
-    if protocol in ("ikev2", "openvpn", "openconnect", "amneziawg"):
+    if protocol == "openvpn":
+        # ZedSecure endpoint: the app's SingBoxJson ENDPOINT_TYPES
+        # include "openvpn-client" (upstream sing-box spells the
+        # endpoint "openvpn" — the app accepts both; the fragment
+        # uses the app's spelling). The credentials ride in the
+        # endpoint so the app does not prompt — the same
+        # username/password the .ovpn export embeds.
+        # `network` is the inbound transport (udp default — the
+        # same value the .ovpn uses).
+        username = (client.get("user_name") or "").strip()
+        password = client.get("password")
+        if not username:
+            raise ValueError("missing required value: username")
+        if not password:
+            raise ValueError("missing required value: password")
+        endpoint = _base_outbound("openvpn-client", tag, host, port)
+        network = str(stream.get("transport") or "udp").lower()
+        endpoint["network"] = (
+            network if network in ("tcp", "udp") else "udp"
+        )
+        endpoint["username"] = username
+        endpoint["password"] = password
+        return endpoint
+
+    if protocol == "openconnect":
+        # ZedSecure endpoint: the app's SingBoxJson ENDPOINT_TYPES
+        # include "openconnect" (upstream sing-box has no such
+        # endpoint — this one is written for the app's parser).
+        # ocserv binds TCP and UDP on the same port, so there is no
+        # `network` field: the app connects over TLS like any
+        # AnyConnect client.
+        username = (client.get("user_name") or "").strip()
+        password = client.get("password")
+        if not username:
+            raise ValueError("missing required value: username")
+        if not password:
+            raise ValueError("missing required value: password")
+        endpoint = _base_outbound("openconnect", tag, host, port)
+        endpoint["username"] = username
+        endpoint["password"] = password
+        return endpoint
+
+    if protocol in ("ikev2", "amneziawg"):
         # No sing-box outbound exists for these protocols (see the
         # docstring): file exports instead (see app.main).
         return None

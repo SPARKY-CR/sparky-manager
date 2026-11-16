@@ -917,7 +917,7 @@ sparky-manager/
 │   ├── sparky-manager.service
 │   ├── xray.service           # or use the cores' shipped units
 │   └── sing-box.service
-├── tests/                     # 1506 tests (conftest.py: seeded DB + CSRF client)
+├── tests/                     # 1528 tests (conftest.py: seeded DB + CSRF client)
 │   ├── test_links.py          # link round-trips for all 9 schemes
 │   ├── test_render.py         # golden configs → xray -test / sing-box check
 │   ├── test_subscription.py   # v2rayNG + sing-box feeds parse cleanly
@@ -1197,7 +1197,7 @@ found live issues and asked for a complete check of the project.
 `main.py` is 4,922 lines at this point (4,546 at the end of Phase 7;
 the post-upgrade batches added routes, diagnostics, the webhook
 set-on-save path, the Cores page and the bot UX work). The full suite
-is 1506 tests; i18n parity is 795 keys each.
+is 1528 tests; i18n parity is 797 keys each.
 
 - **Fix batch (evening, after the server upgrade).** The language
   toggle reverted on navigation (the `lang` cookie was only set on
@@ -1831,6 +1831,92 @@ The full suite is 1506 tests; i18n parity is 795 keys each
 Honest limitation: no live Telegram verification — the file
 delivery and credential display are verified by tests only; the
 first real /start + Links tap after deploy is the true check.
+
+### 15.9 ZedSecure sing-box fragment subscription (2026-11-16)
+
+The full suite is 1528 tests (1506 + 22 new); i18n parity is 797
+keys each (2 new keys: `add_to_zedsecure`,
+`zedsecure_bundle_warning`; `zedsecure_hint` reworded — the bundle
+is a file export, not an importable subscription). No schema
+change, no new dependency, no install.sh / sudoers / requirements
+/ CI change.
+
+The app does NOT understand the panel's `zedsecure-bundle` JSON —
+verified against its public source (`CluvexStudio/ZedSecure`,
+commit `201e82ce`, research report in
+`research_notes/zedsecure-sub-import-20261115-2256/report.md`):
+zero code references to `zedsecure-bundle` or any of its field
+names, and the import dispatcher has no such branch. What the app
+does understand: v2rayNG link lists and sing-box JSON (one profile
+per outbound/endpoint; `ENDPOINT_TYPES` include `wireguard`,
+`openvpn-client`, `openconnect`). Unrecognized JSON errors AND
+wipes the sub's servers (`updateSubscription` deletes the
+subscription's existing servers BEFORE parsing) — so the bundle
+URL must never be added as a subscription. Morteza's requirement:
+configs must come SEPARATELY in the sub, one entry per config,
+not nested in one bundle JSON.
+
+1. **The fragment.** The sing-box feed is now a fragment:
+   `{"outbounds": [...], "endpoints": [...]}` — one entry per
+   usable (client, inbound). Link protocols as outbounds;
+   WireGuard / OpenVPN / OpenConnect as endpoints
+   (`build_singbox_feed` splits on `ENDPOINT_TYPES`). The
+   OpenVPN endpoint is `type: openvpn-client` (the app accepts
+   both spellings; upstream sing-box spells it `openvpn`) with
+   `server` / `server_port` / `network` (the inbound transport,
+   UDP default) / `username` / `password`; the OpenConnect
+   endpoint is `type: openconnect` with `server` / `server_port` /
+   `username` / `password` (no `network` — ocserv binds TCP and
+   UDP on the same port). The username is the panel user name
+   (`user_name` — what both servers authenticate); the password
+   is the client's stored password (the same one the `.ovpn`
+   embeds and ocserv checks). The bundle's `singbox` key and its
+   per-entry `singbox_endpoint` label follow automatically
+   (the label check is now the object's type, not the protocol).
+   **Honest gaps (documented in docs/ZEDSECURE.md, not faked):**
+   AmneziaWG has no endpoint (upstream sing-box has none and the
+   app's endpoint types do not include one — it travels as the
+   `vpn://` link in the v2rayNG feed); IKEv2 has none either
+   (the app takes IKEv2 only via ZedLink — the `.mobileconfig`
+   download stays the IKEv2 path).
+
+2. **Serving.** Same `/sub/<token>` URL, User-Agent negotiation:
+   `zedsecure` joined the sing-box UA markers, so the app's own
+   UA gets the fragment; its default `v2rayNG` UA still gets the
+   link list — and the app then re-fetches with the sing-box UA
+   (`replaceSingBoxPlaceholders`) and merges in the fragment-only
+   servers, so a default-UA subscription carries everything
+   except IKEv2. `?format=` still wins; the browser copy-only
+   page and the placeholder feeds are untouched.
+
+3. **One-tap import.** `zedsecure://import?url=<sub>&name=<name>`
+   (both values percent-encoded; `app.links.zedsecure_deep_link`),
+   on the user detail page, the public `/u/` page, the `/sub/`
+   browser view, and the bot Links view (a URL button — the bot's
+   first; `_url_row` — tapping it leaves the chat for the app).
+   The app shows a confirmation dialog before fetching; there is
+   no `https` App Link. The bot shows the button only when a
+   subscription URL exists (no host → no button, same honesty as
+   the links themselves).
+
+4. **The bundle stays — as a file export.** The
+   `/sub/<token>/zedsecure.json` endpoint is unchanged (same
+   access rules, same schema), but it is no longer presented as
+   something the app imports: the route docstring, the
+   `zedsecure_hint` text, and docs/ZEDSECURE.md say plainly it
+   is a file export, and the user page carries a warning next to
+   it (`zedsecure_bundle_warning`): never add the bundle URL as
+   a subscription. The UI link tests (`test_phase6_ui.py`) now
+   whitelist the `zedsecure://` scheme (an app URL, not a web
+   link — its shape is pinned by the fragment tests).
+
+Honest limitation: no live app verification — the fragment shape
+is validated against the app's parser code (its `shapeOf`
+rules: object with outbounds/endpoints, every entry with
+type+tag, no `protocol` key), but the endpoint parser itself was
+not quoted in the research, only its endpoint type list. The
+first real deep-link import + connect per protocol is the true
+check (docs/ZEDSECURE.md lists it explicitly).
 
 ---
 

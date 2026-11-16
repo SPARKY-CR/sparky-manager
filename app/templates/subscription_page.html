@@ -19,6 +19,11 @@
     <button type="button" class="btn btn-small" data-copy="{{ sub_url }}">{{ t["copy"] }}</button>
   </div>
   <p class="muted"><a href="{{ sub_url }}?view=raw">{{ t.sub_raw_feed }}</a></p>
+  {% if zedsecure_deeplink is defined and zedsecure_deeplink %}
+  <p class="form-actions">
+    <a class="btn btn-small" href="{{ zedsecure_deeplink }}">{{ t.add_to_zedsecure }}</a>
+  </p>
+  {% endif %}
 </div>
 
 <div class="card">

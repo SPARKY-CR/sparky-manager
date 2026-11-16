@@ -39,6 +39,7 @@ __all__ = [
     "build_anytls_link",
     "build_naive_link",
     "build_share_link",
+    "zedsecure_deep_link",
     "parse_vless_link",
     "parse_vmess_link",
     "parse_trojan_link",
@@ -402,6 +403,27 @@ def build_naive_link(
     port = _validate_port(port)
     return (f"naive+https://{quote(username, safe='')}:"
             f"{quote(password, safe='')}@{host}:{port}#{_fragment(name)}")
+
+
+def zedsecure_deep_link(sub_url: str, name: str) -> str:
+    """One-tap ZedSecure subscription link.
+
+    ``zedsecure://import?url=<sub-url>&name=<name>`` — both values
+    percent-encoded (the app's DeepLinkParser percent-decodes the
+    ``url`` parameter and reads the name from ``name``). Tapping it
+    opens the app and shows a confirmation dialog ("Add this
+    subscription?"); only after the user confirms does the app
+    fetch the subscription URL itself. Raises :class:`ValueError`
+    on an empty subscription URL; an empty name falls back to the
+    URL's own default (the app names it from the URL).
+    """
+    sub_url = (sub_url or "").strip()
+    if not sub_url:
+        raise ValueError("missing required value: sub_url")
+    return (
+        "zedsecure://import?url=" + quote(sub_url, safe="")
+        + "&name=" + quote((name or "").strip(), safe="")
+    )
 
 
 # ---------------------------------------------------------------------------

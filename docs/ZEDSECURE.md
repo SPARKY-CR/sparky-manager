@@ -22,17 +22,75 @@ so a user never has to care which engine a protocol belongs to.
 | ShadowTLS v3 + SS | ⚠️ link form only | ✅ sing-box JSON | Carried as TWO outbounds: `shadowtls` (outer handshake) + a `shadowsocks` outbound that detours through it. The bare share-link form is unreliable; prefer the sing-box JSON or the ZedSecure bundle. Verify against ZedSecure before relying on the link form |
 | WireGuard | ❌ no share-link standard | ✅ endpoint (`type: wireguard` under `endpoints`) | sing-box 1.13+ removed the WireGuard *outbound*; the feed carries it as an endpoint (`address` + `peers[]`), plus a standard `.conf` file + QR code of the file content |
 | AmneziaWG | ✅ `vpn://` (base64url of the whole `.conf`) | ❌ upstream sing-box has no AmneziaWG | Only sing-box forks support it (Hiddify's `"type": "awg"` endpoint, sing-box-lx's root-promoted AWG fields) — the stock sing-box feed must not carry a plain WireGuard endpoint for it (the obfuscation parameters would be lost). Export is the `vpn://` link + the `.conf` file |
-| IKEv2 | ❌ | ❌ | Native strongSwan (EAP-MSCHAPv2 + server cert). Export is the `.mobileconfig` file (VPN payload + the panel CA as a trusted root). iOS 13+ needs the user to enable full trust for the CA in Settings after installing |
-| OpenVPN | ❌ | ❌ | Username/password auth; export is the `.ovpn` file (CA embedded, password prompt) + its QR code |
-| OpenConnect | ❌ | ❌ | Password auth; export is the AnyConnect profile XML + host / port / username / password in the bundle |
+| IKEv2 | ❌ | ❌ | Native strongSwan (EAP-MSCHAPv2 + server cert). Export is the `.mobileconfig` file (VPN payload + the panel CA as a trusted root). iOS 13+ needs the user to enable full trust for the CA in Settings after installing. The app takes IKEv2 only via ZedLink (a single-profile share link), not via a subscription — the `.mobileconfig` download stays the IKEv2 path |
+| OpenVPN | ❌ | ✅ endpoint (`type: openvpn-client` + `username` / `password`) | Username/password auth; export is the `.ovpn` file (CA embedded, credentials embedded in an inline `<auth-user-pass>` block so the app does not prompt) + its QR code. The sing-box fragment carries the same credentials in the endpoint |
+| OpenConnect | ❌ | ✅ endpoint (`type: openconnect` + `username` / `password`) | Password auth; export is the AnyConnect profile XML (host/port only — the format has no place for a password) + the username/password shown in the panel and bot. The sing-box fragment carries the credentials in the endpoint |
+
+## The sing-box fragment subscription (one entry per config)
+
+The standard subscription URL (`/sub/<token>`) serves a sing-box
+JSON **fragment** — `{"outbounds": [...], "endpoints": [...]}` — to
+sing-box and ZedSecure clients (User-Agent negotiation: a UA
+containing `sing-box`, `SFA`, `Hiddify` or `ZedSecure` gets the
+fragment; `v2rayNG` / `v2rayN` / `NekoBox` / `Clash` get the base64
+link list; `?format=singbox` / `?format=v2rayng` force a format).
+One entry per usable (client, inbound) pair: link protocols as
+outbounds, WireGuard / OpenVPN / OpenConnect as endpoints. The
+fragment is what the app's `SingBoxJson.shapeOf` recognises as a
+`Fragment` — one profile per outbound/endpoint.
+
+Two gaps are honest, not faked:
+
+- **AmneziaWG** is NOT in the fragment: upstream sing-box has no
+  AmneziaWG endpoint and the app's endpoint types do not include
+  one either (only Hiddify's fork has `"type": "awg"`). AmneziaWG
+  travels as the `vpn://` link in the v2rayNG feed — and the app
+  merges: a subscription fetched with the default v2rayNG UA gets
+  the link list first, then the app re-fetches the same URL with
+  the sing-box UA and adds the fragment-only servers (OpenVPN /
+  OpenConnect endpoints) to it. So a default-UA subscription
+  carries everything except IKEv2.
+- **IKEv2** is NOT in the fragment either: the app takes IKEv2
+  only via ZedLink (a single-profile share link), never as a
+  sing-box endpoint. The `.mobileconfig` download stays the
+  IKEv2 path.
+
+## One-tap import: the "Add to ZedSecure" deep link
+
+Every user page (admin detail page, the public `/u/<token>` page,
+and the bot's Links view) has an **Add to ZedSecure** button:
+
+```
+zedsecure://import?url=<subscription-url>&name=<user-name>
+```
+
+(both values percent-encoded). Tapping it opens the app and shows
+a confirmation dialog ("Add this subscription?"); only after the
+user confirms does the app fetch the subscription URL itself
+(default UA `v2rayNG/<version>`, then the sing-box re-fetch that
+merges in the fragment-only servers — see above). There is no
+`https` App Link — the app registers only custom schemes.
 
 ## The ZedSecure bundle (`/sub/<token>/zedsecure.json`)
 
-One JSON document with **everything** the app needs for one user, so
-ZedSecure can import all of the user's configs in a single action
-instead of choosing between the two generic feeds. The panel also
-shows it on the user's page as a "ZedSecure export" card with its own
-QR code.
+One JSON document with **everything** for one user — kept as a
+**file export**, NOT as a subscription.
+
+> ⚠️ **Never add the bundle URL as a subscription in the app.**
+> The app does not understand the `zedsecure-bundle` format
+> (verified against its source, `CluvexStudio/ZedSecure` commit
+> `201e82ce` — zero code references to `zedsecure-bundle` or any
+> of its field names). A subscription fetch that parses to zero
+> configs fails — and the app deletes the subscription's existing
+> servers BEFORE parsing, so a failed update wipes the sub's
+> servers. The panel shows this warning next to the bundle link
+> on the user page.
+
+The bundle's use is manual: one document holding every config
+(share links, sing-box objects, `.conf` / `.ovpn` / profile /
+`.mobileconfig` file contents) for an admin to read, copy from,
+or archive. The app's subscription is the standard `/sub/<token>`
+URL (the fragment above), plus the one-tap deep link.
 
 **Endpoint:** `GET /sub/<token>/zedsecure.json` (the token is the
 same subscription token; rotating it invalidates the old bundle URL).
@@ -145,13 +203,18 @@ over-quota user → HTTP 403 with an empty body. The
 
 ## How to import (per user)
 
-1. In the panel, open the user and copy their **subscription link**
-   (`/sub/<token>`) or scan the **QR code** on their page
-   (`/u/<token>`).
-2. In ZedSecure: add a subscription (paste the link or scan the QR).
-   ZedSecure picks the format by User-Agent: a sing-box-based client
-   gets sing-box JSON, a v2rayNG-style client gets the base64 link list.
-   Force a format with `?format=v2rayng` or `?format=singbox`.
+1. **One tap (easiest):** tap **Add to ZedSecure** on the user's
+   page (or in the bot's Links view). The app asks for
+   confirmation, then fetches the subscription itself.
+2. **Manual:** in the panel, open the user and copy their
+   **subscription link** (`/sub/<token>`) or scan the **QR code**
+   on their page (`/u/<token>`). In ZedSecure: add a subscription
+   (paste the link or scan the QR). ZedSecure picks the format by
+   User-Agent: a sing-box-based client gets the sing-box fragment,
+   a v2rayNG-style client gets the base64 link list (and the app
+   then re-fetches with the sing-box UA to merge in the
+   fragment-only servers). Force a format with
+   `?format=v2rayng` or `?format=singbox`.
 3. Single links and QR codes also work: paste/scan one protocol link
    at a time from the user's page.
 4. WireGuard: download the `.conf` file from the user's page, or scan
@@ -160,6 +223,8 @@ over-quota user → HTTP 403 with an empty body. The
    OpenVPN `.ovpn`, OpenConnect profile XML, AmneziaWG `.conf`
    (+ its `vpn://` link), and IKEv2 `.mobileconfig` are all
    downloadable — one file per protocol the user actually has.
+6. **Do NOT add the ZedSecure bundle URL** (`/sub/<token>/zedsecure.json`)
+   as a subscription — see the warning above.
 
 ## Subscription behaviour to know about
 
@@ -188,12 +253,18 @@ has nothing to run for them, and ZedSecure already bundles them:
 
 ## Before calling the feeds "done"
 
-Import **both** feeds into the real ZedSecure app on a phone and
-connect with each protocol — especially Naive (`naive+https://`) and
-ShadowTLS, whose link forms vary between clients. The spec alone is
-not a test. The same applies to the v12 file exports: import the
-`.ovpn` into ZedSecure's OpenVPN engine, the `vpn://` link / `.conf`
-into its AmneziaWG engine, the AnyConnect profile into its
-OpenConnect engine, and install the `.mobileconfig` on iOS — no
-public documentation exists for ZedSecure's import parser, so the
-real app is the only verification that matters.
+The import parser is no longer undocumented guesswork: it was
+verified against the app's public source (`CluvexStudio/ZedSecure`,
+commit `201e82ce`) — see the research report in
+`research_notes/zedsecure-sub-import-20261115-2256/report.md`.
+What still needs the real app on a phone is the live import:
+add the subscription via the deep link and via a manual paste,
+and connect with each protocol — especially the new
+`openvpn-client` / `openconnect` endpoints (the app's endpoint
+parser was not quoted in the report, only its endpoint type list),
+Naive (`naive+https://`), and ShadowTLS, whose link forms vary
+between clients. The same applies to the file exports: import
+the `.ovpn` into ZedSecure's OpenVPN engine, the `vpn://` link /
+`.conf` into its AmneziaWG engine, the AnyConnect profile into
+its OpenConnect engine, and install the `.mobileconfig` on iOS —
+the real app is the only verification that matters.

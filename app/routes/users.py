@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from app import devices as devices_mod
 from app import events as events_mod
 from app import lifecycle as lifecycle_mod
+from app import links as links_mod
 from app import plans as plans_mod
 from app import tags as tags_mod
 from app.i18n import get_lang, t_for
@@ -759,6 +760,9 @@ def user_detail(
                 "links_available": True,
                 "sub_url": f"{base}/sub/{user.sub_token}",
                 "zedsecure_url": f"{base}/sub/{user.sub_token}/zedsecure.json",
+                "zedsecure_deeplink": links_mod.zedsecure_deep_link(
+                    f"{base}/sub/{user.sub_token}", user.name
+                ),
                 "user_url": f"{base}/u/{user.sub_token}",
                 "file_urls": _file_export_urls(db, user, base),
                 "host": host,

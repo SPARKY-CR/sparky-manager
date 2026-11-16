@@ -548,19 +548,37 @@ def test_create_inbound_openvpn_stores_subnet_and_awg_params(
 # ---------------------------------------------------------------------------
 
 
-def test_new_protocols_absent_from_singbox_feed(db, seeded, proto):
+def test_native_protocols_in_singbox_fragment(db, seeded, proto):
+    """The fragment carries OpenVPN/OpenConnect as endpoints
+    (username/password in the endpoint object); AmneziaWG and
+    IKEv2 still have no sing-box form (no endpoint exists for
+    them — file exports stay their path)."""
     alice = seeded["users"]["alice"]
-    settings = main_mod.get_settings(db)
+    expected_types = {
+        "openvpn": "openvpn-client",
+        "openconnect": "openconnect",
+    }
     for client, inbound in main_mod._usable_clients(db, alice):
-        if inbound.protocol in ("openvpn", "openconnect", "ikev2", "amneziawg"):
-            outbounds = subscription.outbounds_for_client(
-                inbound.protocol,
-                main_mod._client_dict(client, alice),
-                main_mod._inbound_dict(inbound),
-                HOST,
-                f"{alice.name}-{inbound.tag}",
-            )
+        if inbound.protocol not in (
+            "openvpn", "openconnect", "ikev2", "amneziawg",
+        ):
+            continue
+        outbounds = subscription.outbounds_for_client(
+            inbound.protocol,
+            main_mod._client_dict(client, alice),
+            main_mod._inbound_dict(inbound),
+            HOST,
+            f"{alice.name}-{inbound.tag}",
+        )
+        if inbound.protocol in ("ikev2", "amneziawg"):
             assert outbounds == [], inbound.protocol
+            continue
+        assert len(outbounds) == 1, inbound.protocol
+        endpoint = outbounds[0]
+        assert endpoint["type"] == expected_types[inbound.protocol]
+        assert endpoint["tag"] == f"alice-{inbound.tag}"
+        assert endpoint["username"] == "alice", inbound.protocol
+        assert endpoint["password"] == client.password, inbound.protocol
 
 
 def test_amneziawg_vpn_link_in_v2rayng_feed(db, seeded, proto):

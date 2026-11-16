@@ -108,6 +108,11 @@ def _resolve_link(client, href, page_text):
     """
     if not href or href.startswith(("mailto:", "tel:", "javascript:")):
         return False, f"unexpected link scheme: {href}"
+    if href.startswith("zedsecure://"):
+        # The "Add to ZedSecure" deep link: an app URL, not a web
+        # link — there is nothing to resolve on the panel itself
+        # (its shape is pinned by tests/test_zedsecure_fragment.py).
+        return True, ""
     if href.startswith("#"):
         if href == "#":
             # The mobile drawer close/overlay: "#" clears the
@@ -179,6 +184,10 @@ def test_no_external_links_anywhere(authed_client, db, seeded):
     for page in _pages(seeded):
         resp = authed_client.get(page)
         for href in _HREF_RE.findall(resp.text):
+            if href.startswith("zedsecure://"):
+                # The "Add to ZedSecure" deep link: an app URL, not
+                # a web link (its "import" netloc is not a host).
+                continue
             host = urlparse(href).netloc
             if host and host.split(":")[0] not in allowed_hosts:
                 bad.append(f"{page}: {href}")
