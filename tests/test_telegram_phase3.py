@@ -438,9 +438,10 @@ def test_loop_records_polling_status(db, monkeypatch, fast_loop):
     last_update = main_mod.get_setting(db, "telegram_polling_last_update")
     assert last_poll, "last poll was not recorded"
     assert last_update, "last update was not recorded"
-    # Both are ISO timestamps from today.
-    assert last_poll.startswith("2026-11-15")
-    assert last_update.startswith("2026-11-15")
+    # Both are ISO timestamps from today (UTC, like the loop stamps).
+    today = datetime.now(timezone.utc).date().isoformat()
+    assert last_poll.startswith(today)
+    assert last_update.startswith(today)
 
 
 def test_loop_records_polling_error_on_fast_empty(db, monkeypatch, fast_loop):

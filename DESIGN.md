@@ -917,7 +917,7 @@ sparky-manager/
 │   ├── sparky-manager.service
 │   ├── xray.service           # or use the cores' shipped units
 │   └── sing-box.service
-├── tests/                     # 1472 tests (conftest.py: seeded DB + CSRF client)
+├── tests/                     # 1506 tests (conftest.py: seeded DB + CSRF client)
 │   ├── test_links.py          # link round-trips for all 9 schemes
 │   ├── test_render.py         # golden configs → xray -test / sing-box check
 │   ├── test_subscription.py   # v2rayNG + sing-box feeds parse cleanly
@@ -1197,7 +1197,7 @@ found live issues and asked for a complete check of the project.
 `main.py` is 4,922 lines at this point (4,546 at the end of Phase 7;
 the post-upgrade batches added routes, diagnostics, the webhook
 set-on-save path, the Cores page and the bot UX work). The full suite
-is 1472 tests; i18n parity is 769 keys each.
+is 1506 tests; i18n parity is 795 keys each.
 
 - **Fix batch (evening, after the server upgrade).** The language
   toggle reverted on navigation (the `lang` cookie was only set on
@@ -1749,6 +1749,88 @@ is 1472 tests; i18n parity is 769 keys each (one key added —
 Honest limitation: no live Telegram verification — the
 delete-after-send behaviour is verified by tests only; the first
 real /start after deploy is the true check.
+
+### 15.8 Bot client parity + native config files + credentials (2026-11-16)
+
+Three user-requested batches in one, no schema change, no new
+dependency, no install.sh / sudoers / requirements / CI change.
+The full suite is 1506 tests; i18n parity is 795 keys each
+(24 new bot keys + `credentials` + `openconnect_password_hint`).
+
+1. **Bot client parity.** The bot user view had Links / Edit /
+   Freeze / Extend / Reset / Delete only — no way to manage a
+   user's clients. It now has a Clients button (`u:cl:{user}`):
+   one button per client (frozen clients marked 🧊), each opening
+   a per-client view (`u:cv:{client}`) with inbound, protocol,
+   port, status, flow (VLESS), and — for OpenVPN/OpenConnect —
+   the username/password in `<code>` blocks (tap to copy).
+   Actions, all with the web's validation and audit actions,
+   reusing the web helpers from `app.routes.users`
+   (`_addable_inbounds`, `_move_targets`, `_client_flow_options`,
+   `_apply_client_move`): add-to-inbound (any protocol, incl.
+   shared; WG/AWG pool pre-checked; a double tap / race with the
+   web UI creates nothing), detach with confirmation (a distinct
+   warning for the last client — allowed, like the web),
+   per-client move (same-protocol targets only, re-validated on
+   tap; WG/AWG get a fresh address from the target subnet),
+   per-client freeze (the web edit page's checkbox; the bot's
+   `u:frz` still freezes ALL of the user's clients), and XTLS
+   flow edit (the options depend on the inbound's security, like
+   the web — Reality offers only the Vision variants; stored as
+   `None` for "none", like the web edit route). Every picker has
+   a Back button; stale taps get the friendly stale message, not
+   silence. Stranger authorization and `_on_text` label matching
+   are untouched.
+
+2. **Native config files in the bot.** OpenVPN / OpenConnect /
+   AmneziaWG / IKEv2 have no share link, so they never appeared
+   in the Links view. The Links view now sends each protocol's
+   file export as a document after the links message (same
+   builder as the token-gated `/sub/<token>/…` endpoints — one
+   file per protocol, first usable client), lists the filenames
+   in the message, and notes a failed send honestly instead of
+   staying silent. A user with ONLY native clients no longer gets
+   the "no links" message. The web side needed no change: the
+   download buttons already exist on the user detail page AND the
+   public /u/ page (`file_urls`, rendered by both routes) — this
+   batch only pins them with tests.
+
+3. **Credentials.** The ZedSecure app prompted for username /
+   password when importing the panel's `.ovpn` (bare
+   `auth-user-pass`). `render_client_config` now takes optional
+   `username` / `password` and embeds them in an inline
+   `<auth-user-pass>` block (username first line, password
+   second); `_openvpn_config_for` passes the user's name and the
+   client's stored password, so BOTH the file endpoint and the
+   ZedSecure bundle carry the credentials — the app reads the
+   block into its OpenVPN endpoint (`OvpnConfig.inlineCredentials`,
+   verified against the app's source) and does not prompt. A
+   credential containing a newline is never embedded (it would
+   break the block) — the prompt form is used instead. The
+   OpenVPN/OpenConnect username + password are also SHOWN: a
+   Credentials column in the admin clients table (copy button for
+   the password; admin-only — the public /u/ page has no clients
+   table) and in the bot (per-client view + Links view). The bot
+   module docstring's "no passwords in chat" rule was revised for
+   this deliberate, user-requested change: the bot serves only
+   the configured admin chat, the same trust boundary as the
+   admin panel, which shows the same passwords.
+   **OpenConnect limitation (documented, not worked around):**
+   the AnyConnect profile XML has no place for a password — the
+   format carries host/port only, by design — so the `.xml`
+   cannot embed one. The credentials are shown in the panel +
+   bot instead, and a hint next to the download button says so
+   (`openconnect_password_hint`). IKEv2 needed nothing: the
+   `.mobileconfig` already embeds the EAP password
+   (`AuthPassword`). All link protocols carry their credentials
+   in the link; WireGuard/AmneziaWG are key-based.
+   **Out of scope (later ZedSecure-sub batch):** carrying
+   openvpn-client/openconnect endpoints with username/password in
+   the sing-box fragment subscription.
+
+Honest limitation: no live Telegram verification — the file
+delivery and credential display are verified by tests only; the
+first real /start + Links tap after deploy is the true check.
 
 ---
 

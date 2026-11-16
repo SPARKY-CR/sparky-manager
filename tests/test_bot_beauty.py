@@ -431,10 +431,12 @@ def test_user_detail_keyboard_groups_actions(db, sender, seeded):
     alice = seeded["users"]["alice"]
     _dispatch(db, _callback(f"u:v:{alice.id}"), sender)
     rows = sender.edited[0][3]["inline_keyboard"]
-    assert [len(row) for row in rows] == [2, 2, 2, 1]
+    # Bot parity: the Clients button joined the first row.
+    assert [len(row) for row in rows] == [3, 2, 2, 1]
     assert _button_data(sender.edited[0][3]) == [
         f"u:links:{alice.id}",
         f"u:edit:{alice.id}",
+        f"u:cl:{alice.id}",
         f"u:frz:{alice.id}",
         f"u:ext:{alice.id}",
         f"u:rst:{alice.id}",

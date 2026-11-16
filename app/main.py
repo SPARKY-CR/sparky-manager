@@ -5285,7 +5285,14 @@ def _ca_cert_pem() -> str:
 def _openvpn_config_for(
     user: Any, client: Any, inbound: Any, host: str, settings: dict[str, Any]
 ) -> Optional[str]:
-    """Rendered client ``.ovpn`` for one user (None when unavailable)."""
+    """Rendered client ``.ovpn`` for one user (None when unavailable).
+
+    The user's credentials are embedded (``<auth-user-pass>`` block)
+    so the client app does not prompt for them — the file is
+    token-gated (the ``/sub/<token>/openvpn.ovpn`` download and the
+    ZedSecure bundle both go through here), so embedding is the
+    same trust boundary as the subscription token itself.
+    """
     ca_pem = _ca_cert_pem()
     if not ca_pem:
         return None
@@ -5295,6 +5302,8 @@ def _openvpn_config_for(
         port=int(inbound.port),
         proto=_stream_transport(stream, "openvpn"),
         ca_cert_pem=ca_pem,
+        username=getattr(user, "name", None),
+        password=getattr(client, "password", None),
     )
 
 

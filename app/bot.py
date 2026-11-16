@@ -27,8 +27,14 @@ Security
 - Only the configured admin chat ID (``telegram_chat_id`` setting) may
   use the bot. Updates from any other chat are ignored silently — no
   reply, no error, nothing that confirms the bot exists.
-- No secrets are ever sent in chat (no tokens, no passwords) and
-  update payloads are never logged.
+- No tokens are ever sent in chat, and update payloads are never
+  logged. Client passwords ARE shown to the admin (per-client view
+  and Links view, OpenVPN/OpenConnect only) — the bot serves only
+  the configured admin chat, so this is the same trust boundary as
+  the admin panel, which shows the same passwords; the user asked
+  for the credentials to be visible because the client app prompts
+  for them (OpenVPN's ``.ovpn`` embeds them; OpenConnect's profile
+  cannot — see DESIGN.md §15.8).
 - Duplicate ``update_id`` values are ignored (Telegram redelivers).
 
 State (in-memory only — no DB schema change)
@@ -66,6 +72,15 @@ so every optional step has a visible Skip button that submits the
 default, and every multi-step flow has a Back button (both are
 ``c:`` callbacks, handled step-by-step in
 :func:`_on_create_callback`). No prompt says "leave empty" anymore.
+
+Bot client parity adds: per-client management in the bot (the
+clients list, add-to-inbound, detach, per-client move, per-client
+freeze, XTLS flow edit — the web user page's operations, with the
+web's validation, reusing the web helpers from
+``app.routes.users``), native config files sent as documents from
+the Links view (OpenVPN/OpenConnect/AmneziaWG/IKEv2 have no share
+link), and the OpenVPN/OpenConnect username/password shown in the
+per-client view and the Links view.
 """
 
 from __future__ import annotations
@@ -82,6 +97,12 @@ from typing import Any, Optional
 
 from app import telegram as telegram_mod
 from app.models import Admin, Client, Inbound, TrafficDaily, User, client_is_frozen
+from app.routes.users import (
+    _addable_inbounds,
+    _apply_client_move,
+    _client_flow_options,
+    _move_targets,
+)
 
 logger = logging.getLogger("sparky-manager")
 
@@ -202,6 +223,15 @@ USERS_PAGE_SIZE = 8
 INBOUNDS_PAGE_SIZE = 8
 # Bot API messages cap at 4096 chars; chunk long texts below that.
 MESSAGE_CHUNK = 4000
+# Protocols whose auth is a username/password pair the admin may
+# need to see (and type once, where the config file cannot carry
+# it): OpenVPN (the .ovpn embeds it) and OpenConnect (the AnyConnect
+# profile cannot — see DESIGN.md §15.8). IKEv2 embeds its EAP
+# password in the .mobileconfig, so it needs no display.
+_CREDENTIAL_PROTOCOLS = ("openvpn", "openconnect")
+# Native protocols with a file export (no share link) — the bot
+# sends these as documents from the Links view, in this order.
+_NATIVE_FILE_PROTOCOLS = ("openvpn", "openconnect", "amneziawg", "ikev2")
 
 # Every STRINGS key this module reads — the test suite asserts each one
 # exists in both the fa and the en dict (a missing key would KeyError
@@ -356,6 +386,38 @@ BOT_STRING_KEYS = (
     "bot_skip_auto",
     "bot_skip_default",
     "bot_clear_search",
+    # Bot client parity: per-client management, native files,
+    # credentials display (plus the panel keys the bot newly reads).
+    "username",
+    "password",
+    "flow",
+    "add_to_inbound",
+    "detach",
+    "add_inbound_address_exhausted",
+    "bot_clients_title",
+    "bot_no_clients",
+    "bot_client_not_found",
+    "bot_add_inbound_pick",
+    "bot_add_inbound_none",
+    "bot_add_inbound_done",
+    "bot_detach_confirm",
+    "bot_detach_last_confirm",
+    "bot_detached",
+    "bot_move",
+    "bot_move_pick",
+    "bot_move_none",
+    "bot_move_done",
+    "bot_move_address_exhausted",
+    "bot_client_frozen",
+    "bot_client_unfrozen",
+    "bot_edit_flow",
+    "bot_flow_pick",
+    "bot_flow_none",
+    "bot_flow_set",
+    "bot_flow_cleared",
+    "bot_native_files",
+    "bot_file_send_failed",
+    "bot_credentials",
 )
 
 # ---------------------------------------------------------------------------
@@ -1604,7 +1666,11 @@ def _show_user(
         text += "\n\n" + note
     frozen = _user_frozen(ctx, user)
     kb_rows: list[list[tuple[str, str]]] = [
-        [(t["bot_links"], f"u:links:{user.id}"), (t["bot_edit"], f"u:edit:{user.id}")],
+        [
+            (t["bot_links"], f"u:links:{user.id}"),
+            (t["bot_edit"], f"u:edit:{user.id}"),
+            (t["clients"], f"u:cl:{user.id}"),
+        ],
         [
             (
                 t["bot_unfreeze"] if frozen else t["bot_freeze"],
@@ -1797,10 +1863,16 @@ def _flow_edit_expiry(ctx: _Ctx, conv: dict, text: str) -> None:
 
 def _send_links(ctx: _Ctx, message_id: Optional[int], user_id: int) -> None:
     """The user's share links + subscription link (same links the panel
-    generates). A host is required for share links (subscription_host
-    or domain setting); the subscription URL uses the domain when set,
-    else the subscription_host fallback (no domain needed) — without
-    either it is omitted, not a broken link."""
+    generates), the native config files (OpenVPN/OpenConnect/
+    AmneziaWG/IKEv2 have no share link — sent as documents after the
+    message), and the OpenVPN/OpenConnect username/password pairs
+    (the .ovpn embeds them now; the AnyConnect profile cannot, so
+    they are shown here). A host is required for share links
+    (subscription_host or domain setting); the subscription URL uses
+    the domain when set, else the subscription_host fallback (no
+    domain needed) — without either it is omitted, not a broken
+    link. The file exports need the host too, so the no-host case
+    stays an honest message."""
     t = ctx.t
     user = ctx.db.get(User, user_id)
     if user is None:
@@ -1825,7 +1897,29 @@ def _send_links(ctx: _Ctx, message_id: Optional[int], user_id: int) -> None:
         return
     links = ctx.panel._links_for_user(ctx.db, user, host, settings)
     sub_url = ctx.panel._subscription_panel_url(settings, f"/sub/{user.sub_token}")
-    if not links and not sub_url:
+    # Native config files, one per protocol (the first usable client
+    # of that protocol — same rule as the web's file-export URLs).
+    # One broken export must not hide the rest.
+    files: list[tuple[str, str, str]] = []
+    for protocol in _NATIVE_FILE_PROTOCOLS:
+        try:
+            found = ctx.panel._user_file_export(
+                ctx.db, user, protocol, host, settings
+            )
+        except Exception:  # noqa: BLE001 — see above
+            logger.exception("bot file export failed for %s", protocol)
+            continue
+        if found is not None:
+            files.append(found)
+    # Username/password pairs for the usable native clients (the
+    # app prompts for them where the file cannot carry them).
+    credentials: list[tuple[str, str, str]] = []
+    for client, inbound in ctx.panel._usable_clients(ctx.db, user):
+        if inbound.protocol in _CREDENTIAL_PROTOCOLS:
+            credentials.append(
+                (inbound.tag, user.name, client.password or "")
+            )
+    if not links and not sub_url and not files and not credentials:
         _show(
             ctx,
             message_id,
@@ -1842,12 +1936,33 @@ def _send_links(ctx: _Ctx, message_id: Optional[int], user_id: int) -> None:
         lines.append(_b(h(entry["inbound"].tag) + ":"))
         lines.append(h(entry["link"]))
         lines.append("")
+    if credentials:
+        lines.append(_b(t["bot_credentials"] + ":"))
+        for tag, username, password in credentials:
+            lines.append(
+                f"{h(tag)}: <code>{h(username)}</code> / "
+                f"<code>{h(password)}</code>"
+            )
+        lines.append("")
+    if files:
+        lines.append(_b(t["bot_native_files"] + ":"))
+        for filename, _media, _content in files:
+            lines.append(f"📎 <code>{h(filename)}</code>")
+        lines.append("")
     _send_long(
         ctx,
         message_id,
         "\n".join(lines).rstrip("\n"),
         _kb([[(t["bot_back"], f"u:v:{user_id}")]]),
     )
+    for filename, _media, content in files:
+        if not ctx.sender.document(
+            ctx.chat_id, filename, content.encode("utf-8")
+        ):
+            ctx.sender.send(
+                ctx.chat_id,
+                t["bot_file_send_failed"].format(filename=h(filename)),
+            )
 
 
 def _freeze_user(
@@ -1876,6 +1991,457 @@ def _freeze_user(
     errors = _rerender(ctx)
     _show_user(ctx, message_id, user_id, note=_rerender_note(ctx, errors))
     return t["bot_frozen"] if freeze else t["bot_unfrozen"]
+
+
+# ---------------------------------------------------------------------------
+# Per-client management (bot parity with the web user page)
+# ---------------------------------------------------------------------------
+
+
+def _client_rows(ctx: _Ctx, user_id: int) -> Optional[tuple[Any, list]]:
+    """``(user, [(client, inbound), ...])`` for the clients view, or
+    ``None`` when the user is gone."""
+    user = ctx.db.get(User, user_id)
+    if user is None:
+        return None
+    rows = []
+    for client in (
+        ctx.db.query(Client)
+        .filter(Client.user_id == user.id)
+        .order_by(Client.inbound_id)
+        .all()
+    ):
+        inbound = ctx.db.get(Inbound, client.inbound_id)
+        if inbound is None:
+            continue
+        rows.append((client, inbound))
+    return user, rows
+
+
+def _show_clients(
+    ctx: _Ctx, message_id: Optional[int], user_id: int, note: Optional[str] = None
+) -> None:
+    """The user's clients, one button each (the per-client view)."""
+    t = ctx.t
+    found = _client_rows(ctx, user_id)
+    if found is None:
+        _show(
+            ctx,
+            message_id,
+            t["bot_user_not_found"],
+            _kb([[(t["bot_back_users"], "u:list:0")]]),
+        )
+        return
+    user, rows = found
+    lines = [_b(t["bot_clients_title"].format(name=h(user.name)))]
+    kb_rows: list[list[tuple[str, str]]] = []
+    for client, inbound in rows:
+        mark = "🧊 " if client_is_frozen(client) else ""
+        kb_rows.append(
+            [(f"{mark}{inbound.tag} ({inbound.protocol})", f"u:cv:{client.id}")]
+        )
+    if not kb_rows:
+        lines.append("")
+        lines.append(t["bot_no_clients"])
+    text = "\n".join(lines)
+    if note:
+        text += "\n\n" + note
+    kb_rows.append([(t["add_to_inbound"], f"u:add:{user_id}")])
+    kb_rows.append([(t["bot_back"], f"u:v:{user_id}")])
+    _show(ctx, message_id, text, _kb(kb_rows))
+
+
+def _show_client(
+    ctx: _Ctx, message_id: Optional[int], client_id: int, note: Optional[str] = None
+) -> None:
+    """One client: inbound, status, flow (VLESS), and the
+    username/password pair for the protocols that have one
+    (OpenVPN/OpenConnect — in ``<code>`` blocks, tap to copy)."""
+    t = ctx.t
+    client = ctx.db.get(Client, client_id)
+    user = ctx.db.get(User, client.user_id) if client is not None else None
+    inbound = ctx.db.get(Inbound, client.inbound_id) if client is not None else None
+    if client is None or user is None or inbound is None:
+        _show(
+            ctx,
+            message_id,
+            t["bot_client_not_found"],
+            _kb([[(t["bot_back_users"], "u:list:0")]]),
+        )
+        return
+    frozen = client_is_frozen(client)
+    state = (
+        "🧊 " + t["bot_status_frozen"]
+        if frozen
+        else "✅ " + t["bot_status_enabled"]
+    )
+    lines = [
+        _b(f"🧩 {h(inbound.tag)}"),
+        f"{_b(t['protocol'] + ':')} {h(inbound.protocol)}",
+        f"{_b(t['port'] + ':')} {inbound.port}",
+        f"{_b(t['status'] + ':')} {state}",
+    ]
+    if inbound.protocol == "vless":
+        flow = client.flow or ""
+        lines.append(
+            f"{_b(t['flow'] + ':')} "
+            f"{h(flow) if flow else t['bot_flow_none']}"
+        )
+    if inbound.protocol in _CREDENTIAL_PROTOCOLS:
+        lines.append(f"{_b(t['username'] + ':')} <code>{h(user.name)}</code>")
+        lines.append(
+            f"{_b(t['password'] + ':')} <code>{h(client.password or '')}</code>"
+        )
+    text = "\n".join(lines)
+    if note:
+        text += "\n\n" + note
+    kb_rows: list[list[tuple[str, str]]] = [
+        [
+            (
+                t["bot_unfreeze"] if frozen else t["bot_freeze"],
+                f"u:{'cunfrz' if frozen else 'cfrz'}:{client.id}",
+            ),
+            (t["detach"], f"u:det:{client.id}"),
+        ]
+    ]
+    # Move / flow are offered only when they can do something: a
+    # same-protocol target must exist, and flow is VLESS-only.
+    second_row: list[tuple[str, str]] = []
+    if _move_targets(ctx.db, user, client):
+        second_row.append((t["bot_move"], f"u:mv:{client.id}"))
+    if _client_flow_options(inbound):
+        second_row.append((t["bot_edit_flow"], f"u:cfl:{client.id}"))
+    if second_row:
+        kb_rows.append(second_row)
+    kb_rows.append([(t["bot_back"], f"u:cl:{user.id}")])
+    _show(ctx, message_id, text, _kb(kb_rows))
+
+
+def _show_add_inbound(ctx: _Ctx, message_id: Optional[int], user_id: int) -> None:
+    """Picker of the inbounds the user has no client on yet (any
+    protocol, including shared ones — the web rule)."""
+    t = ctx.t
+    user = ctx.db.get(User, user_id)
+    if user is None:
+        _show(
+            ctx,
+            message_id,
+            t["bot_user_not_found"],
+            _kb([[(t["bot_back_users"], "u:list:0")]]),
+        )
+        return
+    addable = _addable_inbounds(ctx.db, user)
+    if not addable:
+        _show(
+            ctx,
+            message_id,
+            t["bot_add_inbound_none"],
+            _kb([[(t["bot_back"], f"u:cl:{user_id}")]]),
+        )
+        return
+    rows = [
+        [(f"{inbound.tag} ({inbound.protocol})", f"u:add:{user_id}:{inbound.id}")]
+        for inbound in addable
+    ]
+    rows.append([(t["bot_back"], f"u:cl:{user_id}")])
+    _show(ctx, message_id, t["bot_add_inbound_pick"], _kb(rows))
+
+
+def _add_user_to_inbound(
+    ctx: _Ctx, message_id: Optional[int], user_id: int, inbound_id: int
+) -> Optional[str]:
+    """Add the user to one inbound (same checks as the web route:
+    enabled inbound, no existing client, WG/AWG pool pre-check)."""
+    t = ctx.t
+    user = ctx.db.get(User, user_id)
+    if user is None:
+        _show(
+            ctx,
+            message_id,
+            t["bot_user_not_found"],
+            _kb([[(t["bot_back_users"], "u:list:0")]]),
+        )
+        return None
+    target = ctx.db.get(Inbound, inbound_id)
+    if target is None or not target.enabled:
+        _show_stale(ctx, message_id)
+        return None
+    existing = (
+        ctx.db.query(Client)
+        .filter(Client.user_id == user.id, Client.inbound_id == target.id)
+        .first()
+    )
+    if existing is not None:
+        # Raced with the web UI (or a double tap): the client is
+        # already there — show the list, create nothing.
+        _show_clients(ctx, message_id, user_id)
+        return None
+    if target.protocol in ("wireguard", "amneziawg"):
+        subnet = (target.stream or {}).get("subnet") or (
+            "10.8.0.0/24" if target.protocol == "wireguard" else "10.8.1.0/24"
+        )
+        try:
+            if target.protocol == "wireguard":
+                ctx.panel._next_wg_address(ctx.db, subnet, inbound_id=target.id)
+            else:
+                ctx.panel._next_awg_address(ctx.db, subnet, inbound_id=target.id)
+        except ValueError:
+            _show_clients(
+                ctx,
+                message_id,
+                user_id,
+                note=t["add_inbound_address_exhausted"],
+            )
+            return None
+    ctx.panel._create_clients_for_user(ctx.db, user, inbound_ids={target.id})
+    _audit(ctx, "user.add_inbound", f"{user.name} -> {target.tag} [telegram]")
+    errors = _rerender(ctx)
+    note = t["bot_add_inbound_done"].format(tag=h(target.tag))
+    rerender_note = _rerender_note(ctx, errors)
+    if rerender_note:
+        note += "\n\n" + rerender_note
+    _show_clients(ctx, message_id, user_id, note=note)
+    return t["bot_add_inbound_done"].format(tag=target.tag)
+
+
+def _show_detach_confirm(ctx: _Ctx, message_id: Optional[int], client_id: int) -> None:
+    """Detach confirmation — a distinct warning when it is the
+    user's last client (same as the web detail page)."""
+    t = ctx.t
+    client = ctx.db.get(Client, client_id)
+    user = ctx.db.get(User, client.user_id) if client is not None else None
+    inbound = ctx.db.get(Inbound, client.inbound_id) if client is not None else None
+    if client is None or user is None or inbound is None:
+        _show(
+            ctx,
+            message_id,
+            t["bot_client_not_found"],
+            _kb([[(t["bot_back_users"], "u:list:0")]]),
+        )
+        return
+    count = ctx.db.query(Client).filter(Client.user_id == user.id).count()
+    if count <= 1:
+        text = t["bot_detach_last_confirm"].format(tag=h(inbound.tag))
+    else:
+        text = t["bot_detach_confirm"].format(tag=h(inbound.tag))
+    _show(
+        ctx,
+        message_id,
+        text,
+        _kb(
+            [
+                [
+                    (t["bot_confirm_yes"], f"u:det:{client_id}:ok"),
+                    (t["bot_confirm_no"], f"u:cv:{client_id}"),
+                ]
+            ]
+        ),
+    )
+
+
+def _detach_client(
+    ctx: _Ctx, message_id: Optional[int], client_id: int
+) -> Optional[str]:
+    """Detach the user from ONE inbound (same as the web route:
+    the last client may be detached too — zero-client users are a
+    normal state, and add-to-inbound makes it reversible)."""
+    t = ctx.t
+    client = ctx.db.get(Client, client_id)
+    user = ctx.db.get(User, client.user_id) if client is not None else None
+    inbound = ctx.db.get(Inbound, client.inbound_id) if client is not None else None
+    if client is None or user is None:
+        _show(
+            ctx,
+            message_id,
+            t["bot_client_not_found"],
+            _kb([[(t["bot_back_users"], "u:list:0")]]),
+        )
+        return None
+    tag = inbound.tag if inbound is not None else str(client.inbound_id)
+    user_id = user.id
+    ctx.db.delete(client)
+    ctx.db.commit()
+    _audit(ctx, "user.detach_inbound", f"{user.name} from {tag} [telegram]")
+    errors = _rerender(ctx)
+    note = t["bot_detached"].format(tag=h(tag))
+    rerender_note = _rerender_note(ctx, errors)
+    if rerender_note:
+        note += "\n\n" + rerender_note
+    _show_clients(ctx, message_id, user_id, note=note)
+    return t["bot_detached"].format(tag=tag)
+
+
+def _freeze_client(
+    ctx: _Ctx, message_id: Optional[int], client_id: int, freeze: bool
+) -> Optional[str]:
+    """Freeze/unfreeze ONE client (the per-user freeze is ``u:frz`` —
+    this is the web edit page's per-client checkbox)."""
+    t = ctx.t
+    client = ctx.db.get(Client, client_id)
+    user = ctx.db.get(User, client.user_id) if client is not None else None
+    inbound = ctx.db.get(Inbound, client.inbound_id) if client is not None else None
+    if client is None or user is None or inbound is None:
+        _show(
+            ctx,
+            message_id,
+            t["bot_client_not_found"],
+            _kb([[(t["bot_back_users"], "u:list:0")]]),
+        )
+        return None
+    _set_frozen(client, freeze)
+    ctx.db.commit()
+    action = "user.freeze" if freeze else "user.unfreeze"
+    _audit(ctx, action, f"{user.name} ({inbound.tag}) [telegram]")
+    errors = _rerender(ctx)
+    _show_client(ctx, message_id, client_id, note=_rerender_note(ctx, errors))
+    return t["bot_client_frozen"] if freeze else t["bot_client_unfrozen"]
+
+
+def _show_move_picker(ctx: _Ctx, message_id: Optional[int], client_id: int) -> None:
+    """Picker of the same-protocol inbounds the client may move to."""
+    t = ctx.t
+    client = ctx.db.get(Client, client_id)
+    user = ctx.db.get(User, client.user_id) if client is not None else None
+    inbound = ctx.db.get(Inbound, client.inbound_id) if client is not None else None
+    if client is None or user is None or inbound is None:
+        _show(
+            ctx,
+            message_id,
+            t["bot_client_not_found"],
+            _kb([[(t["bot_back_users"], "u:list:0")]]),
+        )
+        return
+    targets = _move_targets(ctx.db, user, client)
+    if not targets:
+        _show_client(ctx, message_id, client_id, note=t["bot_move_none"])
+        return
+    rows = [
+        [(f"{target.tag} ({target.protocol})", f"u:mv:{client_id}:{target.id}")]
+        for target in targets
+    ]
+    rows.append([(t["bot_back"], f"u:cv:{client_id}")])
+    _show(ctx, message_id, t["bot_move_pick"], _kb(rows))
+
+
+def _move_client(
+    ctx: _Ctx, message_id: Optional[int], client_id: int, target_id: int
+) -> Optional[str]:
+    """Move one client to another same-protocol inbound (web rules:
+    the target is re-validated against the move targets — a stale
+    tap cannot move anywhere invalid; WG/AWG get a fresh address
+    from the target subnet)."""
+    t = ctx.t
+    client = ctx.db.get(Client, client_id)
+    user = ctx.db.get(User, client.user_id) if client is not None else None
+    inbound = ctx.db.get(Inbound, client.inbound_id) if client is not None else None
+    if client is None or user is None or inbound is None:
+        _show(
+            ctx,
+            message_id,
+            t["bot_client_not_found"],
+            _kb([[(t["bot_back_users"], "u:list:0")]]),
+        )
+        return None
+    target = ctx.db.get(Inbound, target_id)
+    valid = target is not None and any(
+        row.id == target.id for row in _move_targets(ctx.db, user, client)
+    )
+    if not valid:
+        _show_stale(ctx, message_id)
+        return None
+    error = _apply_client_move(ctx.db, client, target)
+    if error == "move_address_exhausted":
+        _show_client(
+            ctx, message_id, client_id, note=t["bot_move_address_exhausted"]
+        )
+        return None
+    ctx.db.commit()
+    _audit(
+        ctx,
+        "user.update",
+        f"{user.name} move {inbound.tag} -> {target.tag} [telegram]",
+    )
+    errors = _rerender(ctx)
+    note = t["bot_move_done"].format(tag=h(target.tag))
+    rerender_note = _rerender_note(ctx, errors)
+    if rerender_note:
+        note += "\n\n" + rerender_note
+    _show_client(ctx, message_id, client_id, note=note)
+    return t["bot_move_done"].format(tag=target.tag)
+
+
+def _show_flow_picker(ctx: _Ctx, message_id: Optional[int], client_id: int) -> None:
+    """Pick the XTLS flow for a VLESS client (web rules: the options
+    depend on the inbound's security — Reality offers only the
+    Vision variants, TLS offers none + Vision, none offers none)."""
+    t = ctx.t
+    client = ctx.db.get(Client, client_id)
+    user = ctx.db.get(User, client.user_id) if client is not None else None
+    inbound = ctx.db.get(Inbound, client.inbound_id) if client is not None else None
+    if client is None or user is None or inbound is None:
+        _show(
+            ctx,
+            message_id,
+            t["bot_client_not_found"],
+            _kb([[(t["bot_back_users"], "u:list:0")]]),
+        )
+        return
+    options = _client_flow_options(inbound)
+    if not options:
+        _show_stale(ctx, message_id)
+        return
+    current = client.flow or ""
+    rows = []
+    for option in options:
+        label = option if option else t["bot_flow_none"]
+        mark = "✅ " if current == option else ""
+        rows.append([(f"{mark}{label}", f"u:cfl:{client_id}:{option or 'none'}")])
+    rows.append([(t["bot_back"], f"u:cv:{client_id}")])
+    _show(ctx, message_id, t["bot_flow_pick"], _kb(rows))
+
+
+def _set_client_flow(
+    ctx: _Ctx, message_id: Optional[int], client_id: int, flow: str
+) -> Optional[str]:
+    """Set one client's XTLS flow (re-validated against the
+    inbound's options — a stale tap cannot set an invalid flow;
+    stored as ``None`` for "none", like the web edit route)."""
+    t = ctx.t
+    client = ctx.db.get(Client, client_id)
+    user = ctx.db.get(User, client.user_id) if client is not None else None
+    inbound = ctx.db.get(Inbound, client.inbound_id) if client is not None else None
+    if client is None or user is None or inbound is None:
+        _show(
+            ctx,
+            message_id,
+            t["bot_client_not_found"],
+            _kb([[(t["bot_back_users"], "u:list:0")]]),
+        )
+        return None
+    if flow == "none":
+        flow = ""
+    options = _client_flow_options(inbound)
+    if flow not in options:
+        _show_stale(ctx, message_id)
+        return None
+    client.flow = flow or None
+    ctx.db.commit()
+    _audit(
+        ctx,
+        "user.update",
+        f"{user.name} flow {inbound.tag}={flow or 'none'} [telegram]",
+    )
+    errors = _rerender(ctx)
+    if flow:
+        toast = t["bot_flow_set"].format(flow=flow)
+        note = t["bot_flow_set"].format(flow=h(flow))
+    else:
+        toast = note = t["bot_flow_cleared"]
+    rerender_note = _rerender_note(ctx, errors)
+    if rerender_note:
+        note += "\n\n" + rerender_note
+    _show_client(ctx, message_id, client_id, note=note)
+    return toast
 
 
 def _show_extend_menu(ctx: _Ctx, message_id: Optional[int], user_id: int) -> None:
@@ -2056,6 +2622,35 @@ def _on_user_callback(ctx: _Ctx, message_id: Optional[int], parts: list) -> Opti
         # dispatcher for non-"c:" taps — show the unfiltered list.
         _show_users(ctx, message_id, page=0)
         return None
+    if action in ("cv", "det", "mv", "cfrz", "cunfrz", "cfl"):
+        # Per-client actions: parts[2] is a CLIENT id, not a user id.
+        client_id = _parse_int(parts[2]) if len(parts) > 2 else None
+        if client_id is None:
+            _show_stale(ctx, message_id)
+            return None
+        if action == "cv":
+            _show_client(ctx, message_id, client_id)
+        elif action == "det":
+            if len(parts) > 3 and parts[3] == "ok":
+                return _detach_client(ctx, message_id, client_id)
+            _show_detach_confirm(ctx, message_id, client_id)
+        elif action == "mv":
+            if len(parts) > 3:
+                target_id = _parse_int(parts[3])
+                if target_id:
+                    return _move_client(ctx, message_id, client_id, target_id)
+                _show_stale(ctx, message_id)
+            else:
+                _show_move_picker(ctx, message_id, client_id)
+        elif action == "cfrz":
+            return _freeze_client(ctx, message_id, client_id, True)
+        elif action == "cunfrz":
+            return _freeze_client(ctx, message_id, client_id, False)
+        elif action == "cfl":
+            if len(parts) > 3:
+                return _set_client_flow(ctx, message_id, client_id, parts[3])
+            _show_flow_picker(ctx, message_id, client_id)
+        return None
     user_id = _parse_int(parts[2]) if len(parts) > 2 else None
     if user_id is None:
         _show_stale(ctx, message_id)
@@ -2064,6 +2659,16 @@ def _on_user_callback(ctx: _Ctx, message_id: Optional[int], parts: list) -> Opti
         _show_user(ctx, message_id, user_id)
     elif action == "links":
         _send_links(ctx, message_id, user_id)
+    elif action == "cl":
+        _show_clients(ctx, message_id, user_id)
+    elif action == "add":
+        if len(parts) > 3:
+            inbound_id = _parse_int(parts[3])
+            if inbound_id:
+                return _add_user_to_inbound(ctx, message_id, user_id, inbound_id)
+            _show_stale(ctx, message_id)
+        else:
+            _show_add_inbound(ctx, message_id, user_id)
     elif action == "edit":
         if len(parts) > 3:
             _start_edit(ctx, message_id, user_id, parts[3])
