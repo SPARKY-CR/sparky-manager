@@ -375,6 +375,8 @@ def test_rendered_config_has_stats_api_blocks():
     assert cfg["policy"]["levels"]["0"] == {
         "statsUserUplink": True,
         "statsUserDownlink": True,
+        # Phase C item 20: online-user stats for the IP-limit job.
+        "statsUserOnline": True,
     }
     api_inbound = cfg["inbounds"][0]
     assert api_inbound["tag"] == "api"

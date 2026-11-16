@@ -3,24 +3,33 @@
 Usable as ``python -m app.panel_cli <command>`` from the install dir,
 and installed as the ``sparky-manager`` wrapper by install.sh::
 
-    sparky-manager info | status | restart | update-cores | backup <path>
-    sparky-manager totp-disable
+    sparky-manager info | status | restart | backup <path> | restore <path>
+    sparky-manager users | user-add <name> | user-disable <name> | user-enable <name>
+    sparky-manager inbounds | health | totp-disable
 
 Every command is tolerant of a missing service / file: it prints what
 it knows and returns a non-zero exit code instead of crashing. The
 admin password is NEVER printed from anywhere except the installer's
 login box (``/root/sparky-manager-login.txt``); it is not stored in the DB
 in plaintext and cannot be recovered from anywhere else.
+
+``update-cores`` was removed in Phase C (item 23): core updates are
+install.sh's job, with its SHA256 verification and config
+validation — a second updater would duplicate that and could
+diverge (DESIGN.md §8). Re-run install.sh to update the cores.
 """
 
 from __future__ import annotations
 
 import argparse
 import shutil
+import ssl
 import subprocess
 import sys
 import tarfile
-from datetime import datetime, timezone
+import tempfile
+import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app import config as _config
@@ -56,14 +65,18 @@ def _run_systemctl(*args: str) -> tuple[bool, str]:
     ``ok`` is False on any failure (missing systemctl, timeout, non-zero
     exit) — callers decide how to report it; nothing here raises.
 
-    ``restart`` goes through ``sudo -n`` when sudo exists: the CLI is
-    usually run as root (``sudo sparky-manager ...``), but the panel
-    user may run it too, and the installer grants that user NOPASSWD
-    sudo for exactly these restarts. Read-only queries (``is-active``,
-    ``status``) stay plain — they work unprivileged.
+    ``restart`` / ``stop`` / ``start`` go through ``sudo -n`` when sudo
+    exists: the CLI is usually run as root (``sudo sparky-manager
+    ...``), but the panel user may run it too, and the installer
+    grants that user NOPASSWD sudo for exactly these restarts.
+    Read-only queries (``is-active``, ``status``) stay plain — they
+    work unprivileged. Note the sudoers block covers ``restart`` for
+    the panel but not ``stop``/``start`` — so ``restore`` (which
+    stops the panel) needs root; it fails honestly when it cannot
+    stop the service.
     """
     argv = ["systemctl", *args]
-    if args and args[0] == "restart" and shutil.which("sudo"):
+    if args and args[0] in ("restart", "stop", "start") and shutil.which("sudo"):
         argv = ["sudo", "-n", *argv]
     try:
         proc = subprocess.run(
@@ -213,23 +226,484 @@ def cmd_backup(path: str | None = None) -> int:
 
 
 # ---------------------------------------------------------------------------
-# update-cores — NOT implemented in the MVP
+# DB helpers (Phase C item 23)
 # ---------------------------------------------------------------------------
 
 
-def cmd_update_cores() -> int:
-    """Deliberately unimplemented in the MVP (exit 2).
+def _open_db():
+    """Open a session on the panel DB.
 
-    Downloading and swapping core binaries is install.sh's job, with
-    its SHA256 verification and config validation; a half-implemented
-    updater must never take the server down unattended (DESIGN.md §7).
+    Reuses the already-bound engine when one exists (tests bind
+    SessionLocal to a tmp DB); a bare init_db() would create the
+    default-path engine and rebind SessionLocal to it.
     """
-    print(
-        "update-cores is not implemented in the MVP — "
-        "run install.sh again to update Xray-core / sing-box.",
-        file=sys.stderr,
-    )
-    return 2
+    from app import db as db_mod
+
+    bound = db_mod.SessionLocal.kw.get("bind")
+    if bound is not None:
+        db_mod.init_db(bound)
+    else:
+        db_mod.init_db()
+    return db_mod.SessionLocal()
+
+
+def _rerender(db) -> list[str]:
+    """Re-render configs via ``main`` (lazy seam — same as the one in
+    :mod:`app.routes.users`, so the CLI never imports the FastAPI
+    app at module load)."""
+    from app.main import rerender_configs as _main_rerender
+
+    return _main_rerender(db)
+
+
+def _report_rerender_errors(errors: list[str], command: str) -> int:
+    """Report re-render errors; return 1 when any is fatal, else 0.
+
+    The renderers mark routine omissions with a ``warning:`` prefix
+    (``sing-box warning: ... no usable clients, omitted``,
+    ``... no TLS certificate configured, omitted`` — the only
+    ``warning:`` strings the renderers emit, see main.py): an
+    inbound with no usable clients after disabling its last user
+    is not a failure of the disable. Anything else (a config write
+    failure, a validation failure, a restart failure) is fatal.
+    """
+    warnings = [e for e in errors if "warning:" in e]
+    fatal = [e for e in errors if "warning:" not in e]
+    for warning in warnings:
+        print(f"{command}: re-render warning: {warning}", file=sys.stderr)
+    if fatal:
+        print(
+            f"{command}: config re-render failed: " + "; ".join(fatal),
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+def _format_bytes(value: int) -> str:
+    """A byte count as ``123 B`` / ``4.5 MiB`` / ``2.0 GiB``."""
+    number = float(value or 0)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if number < 1024 or unit == "TiB":
+            if unit == "B":
+                return f"{int(number)} B"
+            return f"{number:.1f} {unit}"
+        number /= 1024
+    return f"{int(number)} B"  # unreachable
+
+
+# ---------------------------------------------------------------------------
+# users — list users
+# ---------------------------------------------------------------------------
+
+
+def cmd_users() -> int:
+    """List users: name, state, traffic used/limit, expiry, clients."""
+    try:
+        db = _open_db()
+    except Exception as exc:  # noqa: BLE001 — CLI must not crash
+        print(f"users: cannot open the panel database: {exc}", file=sys.stderr)
+        return 1
+    try:
+        from app.models import Client, User
+
+        users = db.query(User).order_by(User.id).all()
+        if not users:
+            print("no users")
+            return 0
+        for user in users:
+            clients = (
+                db.query(Client).filter(Client.user_id == user.id).count()
+            )
+            state = "enabled" if user.enabled else "disabled"
+            limit = (
+                _format_bytes(user.traffic_limit_bytes)
+                if user.traffic_limit_bytes is not None
+                else "unlimited"
+            )
+            expiry = (
+                user.expires_at.date().isoformat()
+                if user.expires_at is not None
+                else "never"
+            )
+            print(
+                f"{user.name} [{state}] {clients} clients, "
+                f"used {_format_bytes(user.traffic_used_bytes)} / {limit}, "
+                f"expires {expiry}"
+            )
+    except Exception as exc:  # noqa: BLE001 — CLI must not crash
+        print(f"users failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        db.close()
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# user-add — create a user (clients on all enabled inbounds)
+# ---------------------------------------------------------------------------
+
+
+def cmd_user_add(
+    name: str,
+    traffic_limit_gb: float | None = None,
+    expires_days: int | None = None,
+) -> int:
+    """Create a user with clients on all enabled inbounds (the web
+    add-user flow, without a plan — same name rule, same duplicate
+    check, same client creation, same re-render). Prints the
+    subscription URL when a host is configured."""
+    from app import webcommon as webcommon_mod
+    from app.models import User
+
+    name = (name or "").strip()
+    if not webcommon_mod.NAME_RE.match(name):
+        print(
+            "user-add: invalid name (1-64 letters, digits, _ or -)",
+            file=sys.stderr,
+        )
+        return 1
+    traffic_limit_bytes = None
+    if traffic_limit_gb is not None:
+        if traffic_limit_gb <= 0:
+            print("user-add: --traffic-limit-gb must be positive",
+                  file=sys.stderr)
+            return 1
+        traffic_limit_bytes = int(traffic_limit_gb * 1024**3)
+    expires_at = None
+    if expires_days is not None:
+        if expires_days <= 0:
+            print("user-add: --expires-days must be positive",
+                  file=sys.stderr)
+            return 1
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            days=expires_days
+        )
+    try:
+        db = _open_db()
+    except Exception as exc:  # noqa: BLE001 — CLI must not crash
+        print(f"user-add: cannot open the panel database: {exc}",
+              file=sys.stderr)
+        return 1
+    try:
+        if db.query(User).filter(User.name == name).first() is not None:
+            print(f"user-add: a user named {name!r} already exists",
+                  file=sys.stderr)
+            return 1
+        user = User(
+            name=name,
+            enabled=True,
+            traffic_limit_bytes=traffic_limit_bytes,
+            expires_at=expires_at,
+        )
+        db.add(user)
+        db.flush()  # the id is needed for client creation
+        webcommon_mod._create_clients_for_user(db, user)
+        db.commit()
+        client_count = len(user.clients)
+        errors = _rerender(db)
+        settings = webcommon_mod.get_settings(db)
+        host = (settings.get("subscription_host") or "").strip() or (
+            settings.get("domain") or ""
+        ).strip()
+        cfg = _config.get_settings()
+        print(f"user {name!r} created with {client_count} clients")
+        if host:
+            print(
+                "subscription: "
+                f"https://{host}:{cfg.panel_port}{cfg.web_path}"
+                f"/sub/{user.sub_token}"
+            )
+        else:
+            print(
+                "subscription: no host configured "
+                "(set Subscription host in panel Settings); "
+                f"token {user.sub_token}"
+            )
+        return _report_rerender_errors(errors, "user-add")
+    except Exception as exc:  # noqa: BLE001 — CLI must not crash
+        db.rollback()
+        print(f"user-add failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        db.close()
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# user-disable / user-enable — toggle a user (with re-render)
+# ---------------------------------------------------------------------------
+
+
+def _set_user_enabled(name: str, enabled: bool) -> int:
+    """Shared body for user-disable / user-enable (idempotent)."""
+    from app.models import User
+
+    verb = "enable" if enabled else "disable"
+    state = "enabled" if enabled else "disabled"
+    try:
+        db = _open_db()
+    except Exception as exc:  # noqa: BLE001 — CLI must not crash
+        print(f"user-{verb}: cannot open the panel database: {exc}",
+              file=sys.stderr)
+        return 1
+    try:
+        user = db.query(User).filter(User.name == name).first()
+        if user is None:
+            print(f"user-{verb}: no user named {name!r}", file=sys.stderr)
+            return 1
+        if user.enabled == enabled:
+            print(f"user {name!r} is already {state}")
+            return 0
+        user.enabled = enabled
+        db.commit()
+        print(f"user {name!r} {state}")
+        errors = _rerender(db)
+        return _report_rerender_errors(errors, f"user-{verb}")
+    except Exception as exc:  # noqa: BLE001 — CLI must not crash
+        db.rollback()
+        print(f"user-{verb} failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        db.close()
+    return 0
+
+
+def cmd_user_disable(name: str) -> int:
+    """Disable a user (its clients drop out of the configs)."""
+    return _set_user_enabled(name, False)
+
+
+def cmd_user_enable(name: str) -> int:
+    """Enable a user (its clients come back into the configs)."""
+    return _set_user_enabled(name, True)
+
+
+# ---------------------------------------------------------------------------
+# inbounds — list inbounds
+# ---------------------------------------------------------------------------
+
+
+def cmd_inbounds() -> int:
+    """List inbounds: tag, protocol, port, state, client count."""
+    try:
+        db = _open_db()
+    except Exception as exc:  # noqa: BLE001 — CLI must not crash
+        print(f"inbounds: cannot open the panel database: {exc}",
+              file=sys.stderr)
+        return 1
+    try:
+        from app.models import Client, Inbound
+
+        inbounds = db.query(Inbound).order_by(Inbound.port).all()
+        if not inbounds:
+            print("no inbounds")
+            return 0
+        for inbound in inbounds:
+            clients = (
+                db.query(Client)
+                .filter(Client.inbound_id == inbound.id)
+                .count()
+            )
+            state = "enabled" if inbound.enabled else "disabled"
+            print(
+                f"{inbound.tag} {inbound.protocol} port {inbound.port} "
+                f"[{state}] {clients} clients"
+            )
+    except Exception as exc:  # noqa: BLE001 — CLI must not crash
+        print(f"inbounds failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        db.close()
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# restore — restore from a backup ZIP or bare .db (needs root)
+# ---------------------------------------------------------------------------
+
+
+def cmd_restore(path: str, preserve_identity: bool = True) -> int:
+    """Restore the panel DB from a backup file (ZIP or bare .db).
+
+    Mirrors the web restore (``POST /settings/restore``): validate
+    first, back up the current DB, swap atomically, re-apply this
+    machine's identity settings (default ON — a backup from another
+    install must not take over this panel's domain, bot or webhook
+    secret), audit, re-render. The panel is stopped before the swap
+    (it holds the engine + WAL open) and started again after — so
+    this command needs root (``sudo sparky-manager restore ...``);
+    a failed stop aborts before anything is touched.
+    """
+    from app import backup as backup_mod
+    from app import db as db_mod
+    from app import webcommon as webcommon_mod
+    from app.models import Admin
+
+    src = Path(path)
+    if not src.exists():
+        print(f"restore: no such file: {path}", file=sys.stderr)
+        return 1
+    try:
+        data = src.read_bytes()
+    except OSError as exc:
+        print(f"restore: cannot read {path}: {exc}", file=sys.stderr)
+        return 1
+    if len(data) > backup_mod.BACKUP_MAX_BYTES:
+        print("restore: backup is over 200 MiB", file=sys.stderr)
+        return 1
+    try:
+        db = _open_db()
+    except Exception as exc:  # noqa: BLE001 — CLI must not crash
+        print(f"restore: cannot open the panel database: {exc}",
+              file=sys.stderr)
+        return 1
+    try:
+        bind = db.get_bind()
+        db_path = Path(str(bind.url.database)) if bind is not None else None
+        if db_path is None or not db_path.exists():
+            print("restore: cannot locate the live database file",
+                  file=sys.stderr)
+            return 1
+        identity_snapshot: dict[str, str] = {}
+        if preserve_identity:
+            identity_snapshot = backup_mod.snapshot_identity_settings(
+                webcommon_mod.get_settings(db)
+            )
+        with tempfile.TemporaryDirectory(prefix="sparky-restore-") as tmp:
+            try:
+                info = backup_mod.validate_backup_bytes(data, tmp)
+            except backup_mod.BackupError as exc:
+                print(f"restore: invalid backup: {exc.detail or exc.code}",
+                      file=sys.stderr)
+                return 1
+            try:
+                pre_backup = backup_mod.backup_current_db(
+                    db_path, _config.DATA_DIR / "backups"
+                )
+            except Exception as exc:  # noqa: BLE001 — CLI must not crash
+                print(f"restore: pre-restore backup failed: {exc}",
+                      file=sys.stderr)
+                return 1
+            # Stop the panel BEFORE the swap: it holds the engine
+            # and the WAL open. A failed stop aborts the restore —
+            # nothing has been touched yet.
+            ok, _state = _run_systemctl("stop", "sparky-manager")
+            if not ok:
+                print(
+                    "restore: could not stop sparky-manager — "
+                    "restore needs root (run with sudo)",
+                    file=sys.stderr,
+                )
+                return 1
+            try:
+                db.close()
+                db_mod.dispose_engine()
+                backup_mod.swap_db_file(db_path, info.db_file)
+                db_mod.reset_engine()
+                fresh = db_mod.SessionLocal()
+                try:
+                    if preserve_identity:
+                        backup_mod.reapply_identity_settings(
+                            fresh, identity_snapshot
+                        )
+                    admin = fresh.query(Admin).order_by(Admin.id).first()
+                    webcommon_mod._audit(
+                        fresh,
+                        admin.id if admin is not None else None,
+                        "settings.restore",
+                        f"CLI restore: {info.users} users, "
+                        f"{info.inbounds} inbounds",
+                    )
+                    errors = _rerender(fresh)
+                finally:
+                    fresh.close()
+            except Exception as exc:  # noqa: BLE001 — CLI must not crash
+                print(f"restore failed: {exc}", file=sys.stderr)
+                _run_systemctl("start", "sparky-manager")
+                return 1
+            ok, _state = _run_systemctl("start", "sparky-manager")
+            if not ok:
+                print(
+                    "restore: the database was restored but the panel "
+                    "did not start — check systemctl status "
+                    "sparky-manager",
+                    file=sys.stderr,
+                )
+                return 1
+            print(
+                f"restored {info.users} users, {info.inbounds} inbounds "
+                f"from {path}"
+            )
+            print(f"pre-restore backup: {pre_backup}")
+            return _report_rerender_errors(errors, "restore")
+    except Exception as exc:  # noqa: BLE001 — CLI must not crash
+        print(f"restore failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        try:
+            db.close()
+        except Exception:  # noqa: BLE001 — already closed is fine
+            pass
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# health — DB + panel + services in one check
+# ---------------------------------------------------------------------------
+
+
+def cmd_health() -> int:
+    """Health check: the DB answers, the panel's /health endpoint
+    answers, and every managed service is active. One line each;
+    exit 0 only when everything is healthy (so scripts can test
+    it). The /health probe goes to loopback over HTTPS with an
+    unverified context (the panel's certificate is self-signed /
+    an IP cert — verification would fail by design, and this is a
+    local liveness probe, not an identity check)."""
+    healthy = True
+    # 1. The database answers.
+    try:
+        db = _open_db()
+        try:
+            from app.models import User
+
+            count = db.query(User).count()
+        finally:
+            db.close()
+        print(f"database: ok ({count} users)")
+    except Exception as exc:  # noqa: BLE001 — CLI must not crash
+        print(f"database: FAILED ({exc})", file=sys.stderr)
+        healthy = False
+    # 2. The panel's /health endpoint answers on loopback.
+    cfg = _config.get_settings()
+    url = f"https://127.0.0.1:{cfg.panel_port}{cfg.web_path}/health"
+    context = ssl._create_unverified_context()
+    try:
+        with urllib.request.urlopen(url, context=context, timeout=5) as resp:
+            body = resp.read()
+        if resp.status == 200 and b'"ok"' in body:
+            print("panel: ok")
+        else:
+            print(f"panel: FAILED (HTTP {resp.status})", file=sys.stderr)
+            healthy = False
+    except Exception as exc:  # noqa: BLE001 — CLI must not crash
+        print(f"panel: FAILED ({exc})", file=sys.stderr)
+        healthy = False
+    # 3. Every managed service is active.
+    for service in (*PANEL_SERVICES, WG_SERVICE):
+        _ok, state = _run_systemctl("is-active", service)
+        print(f"{service}: {state}")
+        if state != "active":
+            healthy = False
+    for service in VPN_SERVICES:
+        if not _unit_exists(service):
+            continue
+        _ok, state = _run_systemctl("is-active", service)
+        print(f"{service}: {state}")
+        if state != "active":
+            healthy = False
+    return 0 if healthy else 1
 
 
 # ---------------------------------------------------------------------------
@@ -244,16 +718,10 @@ def cmd_totp_disable() -> int:
     device and the recovery codes: it needs server SSH (root), so a
     stolen panel session cannot use it. Prints whether 2FA was on.
     """
-    from app import db as db_mod
     from app import totp as totp_mod
 
     try:
-        # Use the already-bound engine when one exists (tests bind
-        # SessionLocal to a tmp DB); a bare init_db() would create
-        # the default-path engine and rebind SessionLocal to it.
-        bound = db_mod.SessionLocal.kw.get("bind")
-        db_mod.init_db(bound) if bound is not None else db_mod.init_db()
-        db = db_mod.SessionLocal()
+        db = _open_db()
         try:
             was_enabled = totp_mod.disable_totp(db)
         finally:
@@ -282,9 +750,35 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("info", help="print the panel URL and login info")
     sub.add_parser("status", help="show panel / core / WireGuard service states")
     sub.add_parser("restart", help="restart the panel, Xray and sing-box")
+    sub.add_parser("users", help="list users")
+    user_add = sub.add_parser(
+        "user-add", help="create a user (clients on all enabled inbounds)"
+    )
+    user_add.add_argument("name", help="user name (1-64 letters, digits, _ or -)")
+    user_add.add_argument(
+        "--traffic-limit-gb",
+        type=float,
+        default=None,
+        help="traffic limit in GiB (default: unlimited)",
+    )
+    user_add.add_argument(
+        "--expires-days",
+        type=int,
+        default=None,
+        help="expiry in days from now (default: never)",
+    )
+    user_disable = sub.add_parser(
+        "user-disable", help="disable a user (its clients drop out)"
+    )
+    user_disable.add_argument("name", help="user name")
+    user_enable = sub.add_parser(
+        "user-enable", help="enable a user (its clients come back)"
+    )
+    user_enable.add_argument("name", help="user name")
+    sub.add_parser("inbounds", help="list inbounds")
     sub.add_parser(
-        "update-cores",
-        help="update Xray-core / sing-box (not implemented in the MVP)",
+        "health",
+        help="check the DB, the panel /health endpoint and all services",
     )
     backup = sub.add_parser(
         "backup", help="tarball the data dir + both core configs"
@@ -294,6 +788,17 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         default=None,
         help="destination .tar.gz (default: /root/sparky-manager-backup-<ts>.tar.gz)",
+    )
+    restore = sub.add_parser(
+        "restore",
+        help="restore the panel DB from a backup ZIP or bare .db (needs root)",
+    )
+    restore.add_argument("path", help="backup file (.zip or .db)")
+    restore.add_argument(
+        "--no-preserve-identity",
+        action="store_true",
+        help="import the backup's machine identity too (domain, bot, "
+        "webhook secret) instead of keeping this machine's",
     )
     return parser
 
@@ -311,8 +816,22 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_restart()
     if args.command == "backup":
         return cmd_backup(args.path)
-    if args.command == "update-cores":
-        return cmd_update_cores()
+    if args.command == "restore":
+        return cmd_restore(args.path, not args.no_preserve_identity)
+    if args.command == "users":
+        return cmd_users()
+    if args.command == "user-add":
+        return cmd_user_add(
+            args.name, args.traffic_limit_gb, args.expires_days
+        )
+    if args.command == "user-disable":
+        return cmd_user_disable(args.name)
+    if args.command == "user-enable":
+        return cmd_user_enable(args.name)
+    if args.command == "inbounds":
+        return cmd_inbounds()
+    if args.command == "health":
+        return cmd_health()
     return 2  # unreachable: argparse enforces a subcommand
 
 

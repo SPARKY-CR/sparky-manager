@@ -47,6 +47,13 @@ CSRF_EXEMPT_POSTS = {
     # the request is authenticated by the signed pending-login cookie
     # and still needs a valid 6-digit code (or a recovery code).
     "/login/totp",
+    # Phase C item 22: the passkey login steps — still no session;
+    # the begin step only issues a challenge, and the finish step is
+    # authenticated by the HMAC-signed challenge token and still
+    # needs the passkey assertion. Bad attempts count toward the
+    # login lockout, like bad passwords.
+    "/login/passkey/begin",
+    "/login/passkey/finish",
     # Unauthenticated external POST, authenticated by its path secret.
     "/telegram/webhook/{secret}",
 }
@@ -122,7 +129,9 @@ def test_every_admin_route_requires_auth():
     """Every GET route is either public-by-design (listed above) or
     guarded by require_admin / require_admin_api — or, for the Phase
     B item 12 API endpoints, by require_api_token (a scoped,
-    expiring, SHA-256-hashed bearer token)."""
+    expiring, SHA-256-hashed bearer token) — or, for the Phase C
+    item 21 /metrics endpoint, by require_metrics_auth (admin
+    session OR a status:read token)."""
     unguarded = []
     for methods, path, deps in _all_routes():
         if "GET" not in methods:
@@ -135,6 +144,7 @@ def test_every_admin_route_requires_auth():
             "require_admin" not in deps
             and "require_admin_api" not in deps
             and "require_api_token" not in deps
+            and "require_metrics_auth" not in deps
         ):
             unguarded.append(path)
     assert unguarded == [], f"GET routes without auth: {unguarded}"

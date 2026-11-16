@@ -1,6 +1,10 @@
 """Best-panel program, Phase B routes — ``/plans``, ``/audit``,
 ``/api-tokens``, ``/api/v1/*``, ``/webhooks``, TOTP setup, tags,
-devices and managed hosts.
+devices and managed hosts — plus the Phase C additions that belong
+here: ``/metrics`` (Prometheus, item 21) and passkey registration
+(item 22). The Phase C user-page additions (IP bans) live in
+``app/routes/users.py`` with the other user routes; the passkey
+*login* routes live in ``app.main`` with the other login routes.
 
 Mounted by ``app.main`` after the users router. Every HTML route
 uses the standard guards (``require_admin`` + ``require_csrf`` on
@@ -23,8 +27,9 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from sqlalchemy.orm import Session
+from webauthn.helpers import base64url_to_bytes
 
 from app import api_tokens as api_tokens_mod
 from app import devices as devices_mod
@@ -32,7 +37,10 @@ from app import events as events_mod
 from app import hosts as hosts_mod
 from app import lifecycle as lifecycle_mod
 from app import links as links_mod
+from app import metrics as metrics_mod
+from app import passkeys as passkeys_mod
 from app import plans as plans_mod
+from app import system_status as system_status_mod
 from app import tags as tags_mod
 from app import totp as totp_mod
 from app import webhooks as webhooks_mod
@@ -43,17 +51,21 @@ from app.models import (
     AuditLog,
     Inbound,
     ManagedHost,
+    PasskeyCredential,
     User,
     UserTemplate,
     WebhookEndpoint,
 )
 from app.webcommon import (
+    _admin_from_request,
     _audit,
     _redirect,
     _template_ctx,
     db_session,
     require_admin,
+    require_admin_api,
     require_csrf,
+    require_csrf_api,
     templates,
 )
 
@@ -376,6 +388,56 @@ def api_v1_list_inbounds(
 
 
 # ---------------------------------------------------------------------------
+# Prometheus /metrics (Phase C item 21)
+# ---------------------------------------------------------------------------
+
+
+def require_metrics_auth(
+    request: Request, db: Session = Depends(db_session)
+) -> Any:
+    """Auth for ``GET /metrics``: an admin session OR an API token
+    with ``status:read`` (the Phase B token machinery — ``admin``
+    scope satisfies every check). 401 without either, 403 with a
+    token that lacks the scope. A scraper uses the token; an admin
+    browsing to /metrics uses the session.
+
+    The Phase 6 route-table test recognises this by name (like
+    ``require_api_token``) — see tests/test_phase6_security.py.
+    """
+    admin = _admin_from_request(request, db)
+    if admin is not None:
+        return admin
+    auth = request.headers.get("Authorization", "")
+    raw = None
+    if auth.lower().startswith("bearer "):
+        raw = auth[7:].strip() or None
+    token = api_tokens_mod.verify_token(db, raw)
+    if token is None:
+        raise HTTPException(status_code=401, detail="invalid API token")
+    if not api_tokens_mod.token_has_scope(token, "status:read"):
+        raise HTTPException(status_code=403, detail="insufficient scope")
+    return token
+
+
+@router.get("/metrics")
+def metrics_endpoint(
+    _auth: Any = Depends(require_metrics_auth),
+    db: Session = Depends(db_session),
+):
+    """Prometheus exposition format (hand-rolled — see
+    :mod:`app.metrics`): aggregate counts only, never per-user data.
+    Core states come from the live service check; a failed check
+    omits the ``sparky_core_up`` family rather than inventing
+    values."""
+    try:
+        core_states = system_status_mod.service_states()
+    except Exception:  # noqa: BLE001 — metrics must not 500 on this
+        core_states = None
+    body = metrics_mod.render_metrics(db, core_states=core_states)
+    return Response(content=body, media_type=metrics_mod.CONTENT_TYPE)
+
+
+# ---------------------------------------------------------------------------
 # Outgoing webhooks (item 14)
 # ---------------------------------------------------------------------------
 
@@ -637,6 +699,115 @@ async def totp_disable_submit(
     logger.info("TOTP disabled for %s", admin.username)
     return _redirect(
         "/settings?section=security", request, msg=t["totp_disabled"]
+    )
+
+
+# ---------------------------------------------------------------------------
+# Passkeys (Phase C item 22) — registration, admin-only
+# ---------------------------------------------------------------------------
+
+
+def _passkey_origin(request: Request) -> str:
+    """The expected WebAuthn origin: scheme://host[:port] of the
+    panel (same helper as in app.main — duplicated, not imported,
+    to avoid a main <-> routes import cycle)."""
+    return str(request.base_url).rstrip("/")
+
+
+@router.post("/settings/passkeys/begin")
+async def passkey_register_begin(
+    request: Request,
+    admin: Any = Depends(require_admin_api),
+    csrf: None = Depends(require_csrf_api),
+    db: Session = Depends(db_session),
+):
+    """Step 1 of passkey registration: creation options + a
+    challenge token. JSON in (empty body), JSON out. The CSRF
+    token comes via the X-CSRF-Token header (passkey.js reads it
+    from the settings form); auth is 401, not a redirect, because
+    this is a JSON endpoint."""
+    rp_id = request.url.hostname or "localhost"
+    credentials = (
+        db.query(PasskeyCredential)
+        .filter(PasskeyCredential.admin_id == admin.id)
+        .order_by(PasskeyCredential.id)
+        .all()
+    )
+    options, token = passkeys_mod.begin_registration(
+        admin,
+        rp_id,
+        [base64url_to_bytes(c.credential_id) for c in credentials],
+    )
+    return JSONResponse(
+        {"options": options, "challenge_token": token}
+    )
+
+
+@router.post("/settings/passkeys/finish")
+async def passkey_register_finish(
+    request: Request,
+    admin: Any = Depends(require_admin_api),
+    csrf: None = Depends(require_csrf_api),
+    db: Session = Depends(db_session),
+):
+    """Step 2 of passkey registration: verify the response and
+    store the credential. JSON in (``{"credential": ...,
+    "challenge_token": ..., "name": ...}``), JSON out. A failed
+    verification is a 400 with a safe message (no internals)."""
+    lang = get_lang(request)
+    t = t_for(lang)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — malformed JSON: bad request
+        body = None
+    if not isinstance(body, dict):
+        return JSONResponse(
+            {"detail": t["passkey_failed"]}, status_code=400
+        )
+    try:
+        row = passkeys_mod.finish_registration(
+            db,
+            admin,
+            str(body.get("challenge_token") or ""),
+            body.get("credential"),
+            str(body.get("name") or ""),
+            _passkey_origin(request),
+        )
+    except ValueError:
+        return JSONResponse(
+            {"detail": t["passkey_failed"]}, status_code=400
+        )
+    _audit(db, admin.id, "settings.passkey.add", row.name)
+    logger.info("passkey registered for %s (%s)", admin.username, row.name)
+    return JSONResponse({"ok": True, "id": row.id, "name": row.name})
+
+
+@router.post("/settings/passkeys/{key_id}/delete")
+async def passkey_delete(
+    request: Request,
+    key_id: int,
+    admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
+    db: Session = Depends(db_session),
+):
+    """Delete a passkey (plain form POST from the Security tab).
+    Password + TOTP always remain usable, so deleting the last
+    passkey can never lock the admin out."""
+    t = t_for(get_lang(request))
+    row = db.get(PasskeyCredential, key_id)
+    if row is None or row.admin_id != admin.id:
+        return _redirect(
+            "/settings?section=security",
+            request,
+            err=t["passkey_not_found"],
+        )
+    name = row.name
+    db.delete(row)
+    db.commit()
+    _audit(db, admin.id, "settings.passkey.delete", name)
+    logger.info("passkey deleted for %s (%s)", admin.username, name)
+    return _redirect(
+        "/settings?section=security", request, msg=t["passkey_deleted"]
     )
 
 

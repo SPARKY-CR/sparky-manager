@@ -9,6 +9,14 @@
 #
 # Deliberately absent: argon2-cffi. Auth uses stdlib PBKDF2
 # (app/auth.py); nothing in the codebase imports argon2.
+#
+# Phase C item 22 (passkeys): the Duo Labs `webauthn` library —
+# the PyPI name is `webauthn`, NOT `py_webauthn` (that name is an
+# unrelated 0.0.8 package). WebAuthn verification is cryptographic
+# and is never hand-rolled. cbor2 / pyasn1 / pyasn1-modules /
+# pyOpenSSL are its dependencies (cryptography is already pinned
+# above); cbor2 6.3.0 has cp311/cp312/cp314 manylinux wheels
+# (verified with pip download --python-version).
 fastapi==0.163.0
 uvicorn[standard]==0.54.0
 sqlalchemy==2.1.8
@@ -18,3 +26,8 @@ python-multipart==0.0.33
 httpx==0.28.1
 cryptography==50.0.2
 grpcio==1.75.1
+webauthn==3.0.1
+cbor2==6.3.0
+pyasn1==0.6.5
+pyasn1-modules==0.4.2
+pyOpenSSL==26.4.0

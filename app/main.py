@@ -144,12 +144,14 @@ from app import devices as devices_mod
 from app import events as events_mod
 from app import hosts as hosts_mod
 from app import ikev2 as ikev2_mod
+from app import ip_limits as ip_limits_mod
 from app import lifecycle as lifecycle_mod
 from app import links as links_mod
 from app import totp as totp_mod
 from app import openconnect as openconnect_mod
 from app import openvpn as openvpn_mod
 from app import panel_log as panel_log_mod
+from app import passkeys as passkeys_mod
 from app import selfcheck as selfcheck_mod
 from app import singbox as singbox_mod
 from app import subscription as subscription_mod
@@ -185,6 +187,7 @@ from app.models import (
     Device,
     Inbound,
     ManagedHost,
+    PasskeyCredential,
     Setting,
     TrafficDaily,
     User,
@@ -1217,6 +1220,36 @@ async def _expiry_sweeper_loop() -> None:
             db.close()
 
 
+async def _ip_limit_loop() -> None:
+    """Every 10 s: run one IP-limit enforcement pass (Phase C item
+    20). The blocking gRPC call runs off the event loop (like the
+    traffic loop's); the DB work runs in this thread — a SQLAlchemy
+    session must never cross threads, so the collected stats are
+    handed to the enforcer via ``collect_fn`` instead of letting it
+    call the API itself. The log line counts bans only — the banned
+    IPs are already in the iplimit log, they don't belong in the
+    panel log too."""
+    while True:
+        await asyncio.sleep(ip_limits_mod.IP_LIMIT_INTERVAL_SECONDS)
+        db = SessionLocal()
+        try:
+            stats = await asyncio.to_thread(
+                xray_stats_mod.get_users_stats
+            )
+            summary = ip_limits_mod.enforce_ip_limits_once(
+                db, collect_fn=lambda: stats
+            )
+            if summary.get("banned"):
+                logger.info(
+                    "IP-limit enforcement banned %d IP(s)",
+                    len(summary["banned"]),
+                )
+        except Exception:  # noqa: BLE001
+            logger.exception("IP-limit enforcement failed")
+        finally:
+            db.close()
+
+
 # ---------------------------------------------------------------------------
 # Scheduled auto-backup (Phase A item 4) + client-eye self-check (item 7)
 # ---------------------------------------------------------------------------
@@ -1638,6 +1671,10 @@ async def lifespan(app: FastAPI):
         # a disabled setting (0) costs one cheap settings read.
         asyncio.create_task(_auto_backup_loop()),
         asyncio.create_task(_selfcheck_loop()),
+        # Phase C item 20: IP-limit enforcement (Xray online stats
+        # + fail2ban). Ticks every 10 s; a dead Stats API or a
+        # missing fail2ban just means no enforcement that tick.
+        asyncio.create_task(_ip_limit_loop()),
     ]
     yield
     for task in tasks:
@@ -2927,9 +2964,22 @@ def index(request: Request, db: Session = Depends(db_session)):
 
 
 @app.get("/login", response_class=HTMLResponse)
-def login_page(request: Request):
-    return templates.TemplateResponse(request, "login.html", _template_ctx(request, {"admin": None})
+def login_page(request: Request, db: Session = Depends(db_session)):
+    return templates.TemplateResponse(request, "login.html",
+        _template_ctx(request, {
+            "admin": None,
+            "passkey_login_available": _passkey_login_available(db),
+        }),
     )
+
+
+def _passkey_login_available(db: Session) -> bool:
+    """True when at least one passkey is registered (Phase C item
+    22) — the login page shows the passkey button only then."""
+    try:
+        return db.query(PasskeyCredential).count() > 0
+    except Exception:  # noqa: BLE001 — a broken query hides the button
+        return False
 
 
 @app.post("/login")
@@ -2954,7 +3004,11 @@ def login_submit(
             dedup_seconds=900,
         )
         return templates.TemplateResponse(request, "login.html",
-            _template_ctx(request, {"admin": None, "error": t["locked_out"]}),
+            _template_ctx(request, {
+                "admin": None,
+                "error": t["locked_out"],
+                "passkey_login_available": _passkey_login_available(db),
+            }),
             status_code=429,
         )
     admin = db.query(Admin).filter(Admin.username == username).first()
@@ -2962,7 +3016,11 @@ def login_submit(
         record_failed_login(ip)
         logger.warning("login failed for %r from %s", username, ip)
         return templates.TemplateResponse(request, "login.html",
-            _template_ctx(request, {"admin": None, "error": t["wrong_credentials"]}),
+            _template_ctx(request, {
+                "admin": None,
+                "error": t["wrong_credentials"],
+                "passkey_login_available": _passkey_login_available(db),
+            }),
             status_code=401,
         )
     # Phase B item 13 (TOTP): with 2FA on, the password step does
@@ -3051,6 +3109,124 @@ def login_totp_submit(
     token = create_session(db, admin, ip)
     response = _redirect("/dashboard", request)
     _clear_pending_cookie(response, request)
+    _set_session_cookie(response, request, token)
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Passkey login (Phase C item 22) — JSON endpoints for passkey.js
+# ---------------------------------------------------------------------------
+
+
+def _passkey_rp_id(request: Request) -> str:
+    """The relying-party ID: the request host, port stripped (the
+    browser binds the credential to it — see app.passkeys)."""
+    return request.url.hostname or "localhost"
+
+
+def _passkey_origin(request: Request) -> str:
+    """The expected WebAuthn origin: scheme://host[:port] of the
+    panel (``request.base_url`` is the server root, no web path)."""
+    return str(request.base_url).rstrip("/")
+
+
+@app.post("/login/passkey/begin")
+def login_passkey_begin(
+    request: Request, db: Session = Depends(db_session)
+):
+    """Step 1 of passkey login: authentication options + a
+    challenge token. JSON in (empty body), JSON out. CSRF-exempt
+    like /login — no session exists yet; the challenge token is an
+    HMAC-signed secret and the response still needs the passkey.
+    A locked-out IP gets 429, like the password login."""
+    lang = get_lang(request)
+    t = t_for(lang)
+    ip = request.client.host if request.client else "unknown"
+    if is_locked_out(ip):
+        return JSONResponse(
+            {"detail": t["locked_out"]}, status_code=429
+        )
+    admin = db.query(Admin).order_by(Admin.id).first()
+    if admin is None:
+        return JSONResponse(
+            {"detail": t["passkey_no_keys"]}, status_code=400
+        )
+    credentials = (
+        db.query(PasskeyCredential)
+        .filter(PasskeyCredential.admin_id == admin.id)
+        .order_by(PasskeyCredential.id)
+        .all()
+    )
+    try:
+        options, token = passkeys_mod.begin_login(
+            admin, _passkey_rp_id(request), credentials
+        )
+    except ValueError:
+        return JSONResponse(
+            {"detail": t["passkey_no_keys"]}, status_code=400
+        )
+    return JSONResponse(
+        {"options": options, "challenge_token": token}
+    )
+
+
+@app.post("/login/passkey/finish")
+async def login_passkey_finish(
+    request: Request, db: Session = Depends(db_session)
+):
+    """Step 2 of passkey login: verify the assertion and create the
+    session. JSON in (``{"credential": ..., "challenge_token":
+    ...}``), JSON out (``{"ok": true, "redirect": ...}`` — the JS
+    navigates there). A passkey login is a full login on its own
+    (the authenticator is a phishing-resistant possession factor —
+    see app.passkeys); password + TOTP remain the fallback. Bad
+    attempts count toward the login lockout, like bad passwords."""
+    lang = get_lang(request)
+    t = t_for(lang)
+    ip = request.client.host if request.client else "unknown"
+    if is_locked_out(ip):
+        return JSONResponse(
+            {"detail": t["locked_out"]}, status_code=429
+        )
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — malformed JSON: bad request
+        body = None
+    if not isinstance(body, dict):
+        record_failed_login(ip)
+        return JSONResponse(
+            {"detail": t["passkey_failed"]}, status_code=400
+        )
+    try:
+        credential = passkeys_mod.finish_login(
+            db,
+            str(body.get("challenge_token") or ""),
+            body.get("credential"),
+            _passkey_origin(request),
+        )
+    except ValueError:
+        record_failed_login(ip)
+        logger.warning("passkey login failed from %s", ip)
+        return JSONResponse(
+            {"detail": t["passkey_failed"]}, status_code=401
+        )
+    admin = db.get(Admin, credential.admin_id)
+    if admin is None:  # pragma: no cover — FK cascade prevents this
+        record_failed_login(ip)
+        return JSONResponse(
+            {"detail": t["passkey_failed"]}, status_code=401
+        )
+    admin.last_login_at = datetime.now(timezone.utc)
+    db.commit()
+    record_successful_login(ip)
+    logger.info(
+        "passkey login ok for %r from %s (credential %s)",
+        admin.username, ip, credential.id,
+    )
+    token = create_session(db, admin, ip)
+    response = JSONResponse(
+        {"ok": True, "redirect": f"{WEB_PATH}/dashboard"}
+    )
     _set_session_cookie(response, request, token)
     return response
 
@@ -3958,6 +4134,22 @@ def settings_page(
             "totp_enabled": totp_mod.is_totp_enabled(db),
             "totp_recovery_remaining": totp_mod.recovery_codes_remaining(db),
             "totp_pending": bool(totp_mod.get_pending_secret(db)),
+            # Phase C item 22 (passkeys): the registered passkeys
+            # (name, RP ID, created, last used — never the public
+            # key; the template has no use for it).
+            "passkeys": [
+                {
+                    "id": key.id,
+                    "name": key.name,
+                    "rp_id": key.rp_id,
+                    "created_at": key.created_at,
+                    "last_used_at": key.last_used_at,
+                }
+                for key in db.query(PasskeyCredential)
+                .filter(PasskeyCredential.admin_id == admin.id)
+                .order_by(PasskeyCredential.id)
+                .all()
+            ],
         }),
     )
 

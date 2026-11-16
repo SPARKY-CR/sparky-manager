@@ -19,6 +19,20 @@
       <button type="button" class="btn btn-ghost btn-block" data-toggle-password="password">{{ t.show_password }}</button>
     </div>
   </form>
+  {# Phase C item 22: passkey login (only when at least one passkey
+     is registered — the server hides the button otherwise). Needs
+     JavaScript (WebAuthn); the password form above always works. #}
+  {% if passkey_login_available %}
+  <div class="form-actions">
+    <button type="button" class="btn btn-block" id="passkey-login-btn"
+      data-begin-url="{{ base_path }}/login/passkey/begin"
+      data-finish-url="{{ base_path }}/login/passkey/finish"
+      data-error="{{ t.passkey_failed }}"
+      data-unsupported="{{ t.passkey_not_supported }}">🔑 {{ t.passkey_login }}</button>
+  </div>
+  <p id="passkey-status" class="muted" role="status"></p>
+  <noscript><p class="muted">{{ t.passkey_js_required }}</p></noscript>
+  {% endif %}
   {# The sidebar/topbar language switches only render for a logged-in
      admin, so the login page gets its own — otherwise a non-Persian
      speaker has no way to switch before signing in. The ?lang= query
@@ -31,4 +45,9 @@
     {% endif %}
   </div>
 </div>
+{% endblock %}
+{% block scripts %}
+{% if passkey_login_available %}
+<script src="{{ base_path }}/static/passkey.js"></script>
+{% endif %}
 {% endblock %}

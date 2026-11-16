@@ -150,5 +150,9 @@
   </div>
 </div>
 <script src="{{ base_path }}/static/app.js"></script>
+{# Per-page scripts (Phase C item 22: passkey.js on the login and
+   settings pages only — WebAuthn needs JS, and no other page uses
+   it). Pages override this block; the default is empty. #}
+{% block scripts %}{% endblock %}
 </body>
 </html>

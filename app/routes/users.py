@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from app import devices as devices_mod
 from app import events as events_mod
+from app import ip_limits as ip_limits_mod
 from app import lifecycle as lifecycle_mod
 from app import links as links_mod
 from app import plans as plans_mod
@@ -34,6 +35,7 @@ from app.models import (
     Client,
     Device,
     Inbound,
+    IpBan,
     User,
     UserLifecycle,
     UserTag,
@@ -779,8 +781,48 @@ def user_detail(
                 "renewal_preview": renewal_preview,
                 "tags": tags_mod.tags_for_user(db, user.id),
                 "devices": devices_mod.devices_for_user(db, user.id),
+                # Phase C item 20: active IP-limit bans, with the
+                # user's effective limit (min over Xray-core
+                # clients — None when no limit is set anywhere).
+                "ip_bans": ip_limits_mod.active_bans(db, user.id),
+                "effective_ip_limit": ip_limits_mod.effective_ip_limit(
+                    db, user
+                ),
             },
         ),
+    )
+
+
+@router.post("/users/{user_id}/ip-bans/{ban_id}/unban")
+def unban_ip(
+    request: Request,
+    user_id: int,
+    ban_id: int,
+    admin: Any = Depends(require_admin),
+    csrf: None = Depends(require_csrf),
+    db: Session = Depends(db_session),
+):
+    """Lift one IP-limit ban early (Phase C item 20): fail2ban
+    unban + delete the row. The job re-bans on the next tick if
+    the IP is still over the user's limit — unban is a reprieve,
+    not an exemption (raise the limit for that)."""
+    t = t_for(get_lang(request))
+    ban = db.get(IpBan, ban_id)
+    if ban is None or ban.user_id != user_id:
+        return _redirect(
+            f"/users/{user_id}", request, err=t["ip_ban_not_found"]
+        )
+    ip = ban.ip
+    ok = ip_limits_mod.unban_ip(db, ban)
+    _audit(db, admin.id, "ip_limit.unban", f"user {user_id}: {ip}")
+    if ok:
+        return _redirect(
+            f"/users/{user_id}", request, msg=t["ip_unbanned"]
+        )
+    return _redirect(
+        f"/users/{user_id}",
+        request,
+        err=t["ip_unban_failed"],
     )
 
 

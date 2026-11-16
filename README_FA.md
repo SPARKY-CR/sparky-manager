@@ -11,7 +11,7 @@ WireGuard** با یک رابط وب فارسی. برای کلاینت
 کد کپی‌شده از 3X-UI، vpn-ui، مرزبان یا هیچ پنل دیگری.
 
 > **وضعیت: ارتقای حرفه‌ای روی شاخهٔ `upgrade/professional` کامل شده
-> است** (مبناها: `main` در نسخهٔ ۱٫۲٫۰). ۱۵۲۸ تست قبول می‌شوند؛ کانفیگ
+> است** (مبناها: `main` در نسخهٔ ۱٫۲٫۰). ۱۶۱۲ تست قبول می‌شوند؛ کانفیگ
 > رندرشدهٔ Xray با Xray واقعی 26.11.9 (`xray run -test`) و کانفیگ
 > sing-box با sing-box واقعی 1.14.4 (`sing-box check`) تایید شده‌اند.
 > پنل روی یک سرور واقعی نصب شده و در حال اجراست. این ارتقا محافظت
@@ -117,6 +117,12 @@ sudo sparky-manager info      # چاپ دوبارهٔ جعبهٔ ورود
 sudo sparky-manager status    # وضعیت سرویس‌ها
 sudo sparky-manager restart   # راه‌اندازی دوبارهٔ پنل و هسته‌ها
 sudo sparky-manager backup    # پشتیبان در /root/sparky-manager-backup-<date>.tar.gz
+sudo sparky-manager restore <file>  # بازیابی از فایل پشتیبان ZIP یا ‎.db (نیاز به روت دارد)
+sudo sparky-manager users     # فهرست کاربران
+sudo sparky-manager user-add <name> [--traffic-limit-gb N] [--expires-days N]
+sudo sparky-manager user-disable <name> | user-enable <name>
+sudo sparky-manager inbounds  # فهرست اینباندها
+sudo sparky-manager health    # بررسی دیتابیس + ‎/health‎ پنل + سرویس‌ها در یک دستور
 ```
 
 ## پروتکل‌ها (بدون نیاز به دامنه)
@@ -245,7 +251,7 @@ pip install pytest
 python -m pytest -q
 ```
 
-مجموعهٔ تست (۱۵۲۸ تست) رندر کانفیگ (کانفیگ‌های طلایی که در صورت
+مجموعهٔ تست (۱۶۱۲ تست) رندر کانفیگ (کانفیگ‌های طلایی که در صورت
 دسترس بودن با باینری‌های واقعی Xray و sing-box اعتبارسنجی می‌شوند)،
 سازنده‌های لینک، سابسکریپشن‌ها، مدیریت کاربر و اینباند، ربات
 تلگرام، مرزهای CSRF/احراز هویت، کلاینت آمار gRPC و رابط کاربری

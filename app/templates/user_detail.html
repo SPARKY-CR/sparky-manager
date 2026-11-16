@@ -158,6 +158,45 @@
   </div>
   {% endif %}
 
+  {# Phase C item 20: active IP-limit bans (admin view only). The
+     effective limit is the minimum over the user's Xray-core
+     clients (None = no limit set anywhere = no enforcement). A
+     ban lasts 30 minutes; unban is a reprieve — the job re-bans
+     on the next tick if the IP is still over the limit. #}
+  {% if not public %}
+  <div class="card">
+    <h2>{{ t.ip_bans }}</h2>
+    <p class="field-hint">{{ t.ip_bans_desc }}</p>
+    <p class="muted">{{ t.effective_ip_limit }}: <b dir="ltr">{{ effective_ip_limit if effective_ip_limit is defined and effective_ip_limit is not none else t.unlimited }}</b></p>
+    {% if ip_bans is defined and ip_bans %}
+    <div class="table-wrap">
+      <table class="table-cards">
+        <thead>
+          <tr><th>{{ t.ip_ban_ip }}</th><th>{{ t.ip_ban_since }}</th><th>{{ t.ip_ban_until }}</th><th>{{ t.actions }}</th></tr>
+        </thead>
+        <tbody>
+          {% for ban in ip_bans %}
+          <tr>
+            <td data-label="{{ t.ip_ban_ip }}" dir="ltr">{{ ban.ip }}</td>
+            <td data-label="{{ t.ip_ban_since }}" dir="ltr">{{ ban.banned_at.strftime('%Y-%m-%d %H:%M') if ban.banned_at else '—' }}</td>
+            <td data-label="{{ t.ip_ban_until }}" dir="ltr">{{ ban.expires_at.strftime('%Y-%m-%d %H:%M') if ban.expires_at else '—' }}</td>
+            <td data-label="{{ t.actions }}">
+              <form method="post" action="{{ base_path }}/users/{{ user.id }}/ip-bans/{{ ban.id }}/unban" class="inline-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="btn btn-small">{{ t.ip_ban_unban }}</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="muted">{{ t.no_ip_bans }}</p>
+    {% endif %}
+  </div>
+  {% endif %}
+
   {% if not public and user_traffic_chart is defined and user_traffic_chart %}
   <div class="card">
     <div class="page-head">

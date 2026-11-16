@@ -836,7 +836,18 @@ def render_xray_config(
         "stats": {},
         "policy": {
             "levels": {
-                "0": {"statsUserUplink": True, "statsUserDownlink": True},
+                # statsUserOnline (Phase C item 20) feeds the
+                # GetUsersStats RPC the IP-limit job reads: a user
+                # counts as online from an IP while it has had
+                # connection activity within the last 20 s. Harmless
+                # on Xray versions that predate the RPC (unknown
+                # policy keys are ignored) — and the client probes
+                # the RPC lazily anyway.
+                "0": {
+                    "statsUserUplink": True,
+                    "statsUserDownlink": True,
+                    "statsUserOnline": True,
+                },
             },
         },
         "routing": {

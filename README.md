@@ -11,7 +11,7 @@ Public project, MIT licensed. **Built from scratch** — no fork, no copied
 code from 3X-UI, vpn-ui, Marzban, or any other panel.
 
 > **Status: professional upgrade complete on branch
-> `upgrade/professional`** (base: `main` at v1.2.0). 1528 tests pass;
+> `upgrade/professional`** (base: `main` at v1.2.0). 1612 tests pass;
 > the rendered Xray config passes `xray run -test` against real
 > Xray 26.11.9 and the rendered sing-box config passes `sing-box
 > check` against real sing-box 1.14.4. The panel is installed and
@@ -118,6 +118,12 @@ sudo sparky-manager info      # reprint the login box
 sudo sparky-manager status    # service status
 sudo sparky-manager restart   # restart panel + cores
 sudo sparky-manager backup    # backup to /root/sparky-manager-backup-<date>.tar.gz
+sudo sparky-manager restore <file>  # restore from a backup ZIP or .db (needs root)
+sudo sparky-manager users     # list users
+sudo sparky-manager user-add <name> [--traffic-limit-gb N] [--expires-days N]
+sudo sparky-manager user-disable <name> | user-enable <name>
+sudo sparky-manager inbounds  # list inbounds
+sudo sparky-manager health    # DB + panel /health + services in one check
 ```
 
 ## Protocols (no domain needed)
@@ -249,7 +255,7 @@ pip install pytest
 python -m pytest -q
 ```
 
-The suite (1528 tests) covers config rendering (golden configs
+The suite (1612 tests) covers config rendering (golden configs
 validated against real Xray/sing-box binaries where available), link
 builders, subscriptions, user/inbound management, the Telegram bot,
 CSRF/auth boundaries, the gRPC stats client, and the UI (every page

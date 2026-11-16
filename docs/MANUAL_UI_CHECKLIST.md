@@ -67,6 +67,34 @@
 - [ ] **Navigation**: every sidebar link, the brand link and the
       "add inbound" shortcut land on a real page (no dead ends).
 
+## Phase C (2026-11-16) — live checks automation cannot do
+
+- [ ] **Passkeys**: on the desktop browser, Settings → Security →
+      register a passkey (fingerprint / security key) with a name;
+      it appears in the list with its host and registration time.
+      Log out — the login page now shows the "Sign in with passkey"
+      button; signing in with it lands on the dashboard. Password
+      login still works afterwards. Delete the passkey — the button
+      disappears from the login page. (Automation stubs the WebAuthn
+      library, so this first real ceremony is the true check.)
+- [ ] **IP-limit ban**: set an IP limit of 1 on a test user's Xray
+      client, connect that user from two IPs (phone + desktop), and
+      within ~10 s the older IP is banned: the user page shows the
+      ban, `sudo fail2ban-client status sparky-ipl` lists the IP,
+      and the banned device cannot reconnect (a session already
+      open when the ban lands is NOT killed immediately — that is a
+      documented limitation). Unban from the user page lifts it.
+      Do NOT test with your own admin IP unless it is in the jail's
+      `ignoreip` — the ban blocks ALL ports, including SSH.
+- [ ] **Metrics**: `curl -s https://<server>:<port>/<web-path>/metrics -H
+      "Authorization: Bearer spk_..."` with a `status:read` token
+      returns Prometheus text (users/inbounds/traffic/core gauges);
+      without a token it returns 401. No user names or tokens appear
+      in the output.
+- [ ] **CLI**: `sudo sparky-manager users`, `inbounds` and `health`
+      print real data and exit 0; `user-add` on a throwaway user
+      prints its subscription link (delete the user afterwards).
+
 ## Mobile — portrait (360–414 px wide)
 
 - [ ] **No horizontal overflow anywhere**: no page scrolls sideways

@@ -259,6 +259,61 @@
         <a class="btn btn-primary" href="{{ base_path }}/settings/totp/setup">{{ t.totp_setup }}</a>
       </p>
       {% endif %}
+      {# Phase C item 22: passkeys (WebAuthn). An additional sign-in
+         method — password + TOTP always remain usable, so deleting
+         the last passkey can never lock the admin out. Registration
+         needs JavaScript (navigator.credentials); the button posts
+         via passkey.js with the CSRF token from its
+         data-csrf-token attribute. (The form is not a POST form,
+         so it carries no hidden csrf_token field — the UI tests
+         require POST forms and CSRF fields to match one-to-one.) A passkey only works on the host it was registered
+         for (rp_id) — register one per host used. #}
+      <h3>{{ t.passkey }}</h3>
+      <p class="field-hint">{{ t.passkey_desc }}</p>
+      {% if passkeys is defined and passkeys %}
+      <div class="table-wrap">
+        <table class="table-cards">
+          <thead>
+            <tr><th>{{ t.passkey_name }}</th><th>{{ t.passkey_rp_id }}</th><th>{{ t.passkey_created }}</th><th>{{ t.passkey_last_used }}</th><th>{{ t.actions }}</th></tr>
+          </thead>
+          <tbody>
+            {% for key in passkeys %}
+            <tr>
+              <td data-label="{{ t.passkey_name }}">{{ key.name }}</td>
+              <td data-label="{{ t.passkey_rp_id }}" dir="ltr">{{ key.rp_id }}</td>
+              <td data-label="{{ t.passkey_created }}" dir="ltr">{{ key.created_at.strftime('%Y-%m-%d %H:%M') if key.created_at else '—' }}</td>
+              <td data-label="{{ t.passkey_last_used }}" dir="ltr">{{ key.last_used_at.strftime('%Y-%m-%d %H:%M') if key.last_used_at else t.passkey_never_used }}</td>
+              <td data-label="{{ t.actions }}">
+                <form method="post" action="{{ base_path }}/settings/passkeys/{{ key.id }}/delete" class="inline-form" data-confirm="{{ t.confirm_delete }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <button type="submit" class="btn btn-small btn-danger">{{ t.delete }}</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="muted">{{ t.passkey_no_keys }}</p>
+      {% endif %}
+      <form id="passkey-register-form">
+        <label>
+          {{ t.passkey_name }}
+          <input type="text" name="name" id="passkey-name" maxlength="64" placeholder="{{ t.passkey_name_placeholder }}">
+        </label>
+        <div class="form-actions">
+          <button type="button" class="btn btn-primary" id="passkey-register-btn"
+            data-csrf-token="{{ csrf_token }}"
+            data-begin-url="{{ base_path }}/settings/passkeys/begin"
+            data-finish-url="{{ base_path }}/settings/passkeys/finish"
+            data-error="{{ t.passkey_register_failed }}"
+            data-unsupported="{{ t.passkey_not_supported }}"
+            data-done="{{ t.passkey_registered }}">🔑 {{ t.passkey_register }}</button>
+        </div>
+      </form>
+      <p id="passkey-status" class="muted" role="status"></p>
+      <noscript><p class="muted">{{ t.passkey_js_required }}</p></noscript>
     </div>
   </section>
 
@@ -400,4 +455,7 @@
     </div>
   </section>
 </div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ base_path }}/static/passkey.js"></script>
 {% endblock %}

@@ -90,7 +90,7 @@ def test_installer_syntax():
     assert proc.returncode == 0, proc.stderr
 
 
-def test_sudoers_block_validates_and_covers_v15():
+def test_sudoers_block_validates_and_covers_v16():
     text = _install_text()
     block = _extract_heredoc(
         text, "cat > /etc/sudoers.d/sparky-manager <<'EOF'"
@@ -98,7 +98,7 @@ def test_sudoers_block_validates_and_covers_v15():
     # The file cat writes ends with a newline; visudo rejects a file
     # without the terminator ("missing line terminator at end of file").
     assert block.endswith("\n")
-    # Every command the panel needs (v15 additions included).
+    # Every command the panel needs (v15 + v16 additions included).
     # NOTE: `wg-quick strip` has NO rule here — it runs unprivileged
     # (see app.wgapply), and the syncconf temp path is a lone
     # trailing `*`: newer sudo rejects wildcards embedded in a
@@ -136,6 +136,12 @@ def test_sudoers_block_validates_and_covers_v15():
         "/usr/bin/journalctl -u ocserv -n 50 --no-pager",
         "/usr/bin/journalctl -u strongswan -n 50 --no-pager",
         "/usr/bin/journalctl -u awg-quick@awg0 -n 50 --no-pager",
+        # Phase C item 20 (v16): fail2ban ban/unban for the IP-limit
+        # job — the IP is a lone trailing `*` (the only wildcard
+        # form newer sudo accepts; the lone-trailing-* guard below
+        # covers these too).
+        "/usr/bin/fail2ban-client set sparky-ipl banip *",
+        "/usr/bin/fail2ban-client set sparky-ipl unbanip *",
     ):
         assert needed in block, needed
     # No embedded wildcards anywhere in the rule: every `*` must be
@@ -164,6 +170,48 @@ def test_sudoers_block_validates_and_covers_v15():
         ["visudo", "-cf", path], capture_output=True, text=True, timeout=30
     )
     assert proc.returncode == 0, proc.stderr + proc.stdout
+
+
+def test_fail2ban_jail_and_filter_installed():
+    """Phase C item 20: the installer installs fail2ban, writes the
+    sparky-ipl jail + filter, and the uninstaller removes them.
+
+    The bantime (1800 s) must match IP_BAN_MINUTES in
+    app/ip_limits.py, and the filter must match the log lines
+    app/ip_limits.py writes (``[LIMIT_IP] <ip> user-<id>``) — a
+    mismatch here means bans silently never fire from the log
+    path."""
+    from app import ip_limits as ip_limits_mod
+
+    text = _install_text()
+    # fail2ban is installed with the other packages.
+    assert "fail2ban" in text
+    # The filter matches the panel's log lines.
+    filter_block = _extract_heredoc(
+        text, "cat > /etc/fail2ban/filter.d/sparky-ipl.conf <<'EOF'"
+    )
+    assert "failregex" in filter_block
+    assert r"\[LIMIT_IP\] <HOST> user-\d+" in filter_block
+    # The jail: enabled, one strike, 30-minute bantime, all ports,
+    # watching the panel's iplimit log.
+    jail_block = _extract_heredoc(
+        text, "cat > /etc/fail2ban/jail.d/sparky-ipl.local <<'EOF'"
+    )
+    assert "[sparky-ipl]" in jail_block
+    assert "enabled = true" in jail_block
+    assert "filter = sparky-ipl" in jail_block
+    assert "logpath = /opt/sparky-manager/data/logs/iplimit.log" in jail_block
+    assert "maxretry = 1" in jail_block
+    assert (
+        f"bantime = {ip_limits_mod.IP_BAN_MINUTES * 60}" in jail_block
+    )
+    assert "banaction = iptables-allports" in jail_block
+    assert "ignoreip = 127.0.0.1/8 ::1" in jail_block
+    # The jail + filter go with the panel on uninstall (fail2ban
+    # itself stays — it may protect other services).
+    uninstall = _extract_function(text, "uninstall_panel")
+    assert "rm -f /etc/fail2ban/jail.d/sparky-ipl.local" in uninstall
+    assert "/etc/fail2ban/filter.d/sparky-ipl.conf" in uninstall
 
 
 def test_pick_random_web_path_no_sigpipe():

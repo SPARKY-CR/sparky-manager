@@ -575,6 +575,10 @@ def _isolate_process_globals():
     traffic_mod._last_wg.clear()
     traffic_mod._last_nft.clear()
     xray_stats_mod.reset_snapshots()
+    # Phase C item 20: the GetUsersStats capability cache — a test
+    # that probes an old-Xray stub must not disable the RPC for the
+    # next test.
+    xray_stats_mod.reset_users_stats_capability()
     bot_mod._conversations.clear()
     bot_mod._seen_updates.clear()
     yield
@@ -583,6 +587,7 @@ def _isolate_process_globals():
     traffic_mod._last_wg.clear()
     traffic_mod._last_nft.clear()
     xray_stats_mod.reset_snapshots()
+    xray_stats_mod.reset_users_stats_capability()
     bot_mod._conversations.clear()
     bot_mod._seen_updates.clear()
 

@@ -725,9 +725,10 @@ not faked.
   validated 1–65535 and checked for clashes before render; usernames
   `[a-zA-Z0-9_-]` only (they appear in share-link fragments and file names).
 - **Updates:** the installer records the installed Xray + sing-box
-  versions in `/opt/sparky-manager/versions.env`. `sparky-manager
-  update-cores` is deliberately unimplemented (exit 2) — downloading
-  and swapping core binaries is install.sh's job, with its SHA256
+  versions in `/opt/sparky-manager/versions.env`. There is no
+  `sparky-manager update-cores` command (removed in Phase C, item
+  23 — it used to be a stub that exited 2): downloading and
+  swapping core binaries is install.sh's job, with its SHA256
   verification and config validation; re-run the installer to update
   the cores. No auto-update (a bad core must never take the server
   down unattended).
@@ -786,12 +787,14 @@ curl -Ls https://raw.githubusercontent.com/SPARKY-CR/sparky-manager/main/install
 ```
 
 `sparky-manager` CLI (a small wrapper, like `vpn-ui`'s menu but non-interactive
-first): `sparky-manager info | status | restart | backup` (`update-cores`
-exists but exits 2, deliberately unimplemented — re-run install.sh to
-update the cores). There is no CLI `restore` — restore is done from the
-panel's settings page. `backup` = tarball of `/opt/sparky-manager/data/`
+first): `sparky-manager info | status | restart | backup | restore | users |
+user-add | user-disable | user-enable | inbounds | health | totp-disable`
+(Phase C, item 23). `restore` mirrors the web restore (validate → back up
+current → stop the panel → swap → re-apply identity → audit → re-render →
+start) and needs root. `backup` = tarball of `/opt/sparky-manager/data/`
 + both `config.json` files (DB is the source of truth, so restoring the
-DB + re-rendering is enough).
+DB + re-rendering is enough). There is no `update-cores` command — core
+updates are install.sh's job (see §7).
 
 ---
 
@@ -860,13 +863,15 @@ sparky-manager/
 │   │   ├── users.py           # /users* routes (APIRouter, §13)
 │   │   └── phase_b.py         # /plans, /audit, /api-tokens, /api/v1/*,
 │   │                          #   /webhooks, TOTP setup, tags/devices/hosts (§15.6)
+│   │                          #   + Phase C: /metrics, passkey registration (§15.10)
 │   ├── config.py              # settings, paths, versions.env
 │   ├── db.py                  # SQLAlchemy engine/session, init
 │   ├── models.py              # admins, settings, inbounds, users, clients,
 │   │                          #   traffic_daily, audit_log (§4) + Phase B:
 │   │                          #   user_templates, user_lifecycle, api_tokens,
 │   │                          #   webhook_endpoints, user_tags, devices,
-│   │                          #   managed_hosts (§15.6)
+│   │                          #   managed_hosts (§15.6) + Phase C: ip_bans,
+│   │                          #   passkey_credentials (§15.10)
 │   ├── auth.py                # PBKDF2, sessions, rate limit
 │   ├── i18n.py                # fa (default) / en strings
 │   ├── xray.py                # render /usr/local/etc/xray/config.json + validate
@@ -888,7 +893,7 @@ sparky-manager/
 │   ├── backup.py              # backup ZIP / restore (§5.8)
 │   ├── system_status.py       # server status collector (§12)
 │   ├── panel_log.py           # rotating file log + redaction
-│   ├── panel_cli.py           # `sparky-manager info/status/restart/update-cores/backup/totp-disable`
+│   ├── panel_cli.py           # `sparky-manager` CLI: info/status/restart/backup/restore/users/user-add/user-disable/user-enable/inbounds/health/totp-disable (§8, §15.10)
 │   ├── events.py              # Telegram event bus (§15.5)
 │   ├── selfcheck.py           # client-eye self-check (§15.5)
 │   ├── plans.py               # user templates (§15.6)
@@ -899,6 +904,9 @@ sparky-manager/
 │   ├── tags.py                # per-user tags (§15.6)
 │   ├── devices.py             # HWID devices + TTL (§15.6)
 │   ├── hosts.py               # managed hosts (§15.6)
+│   ├── ip_limits.py           # IP-limit enforcement: GetUsersStats + fail2ban (§15.10)
+│   ├── metrics.py             # Prometheus /metrics exposition (§15.10)
+│   ├── passkeys.py            # WebAuthn passkeys (challenge tokens + library calls) (§15.10)
 │   ├── templates/             # Jinja2, RTL, Persian-first
 │   │   ├── base.html  dashboard.html  inbounds.html  inbound_edit.html
 │   │   ├── users.html  user_detail.html  user_edit.html
@@ -917,7 +925,7 @@ sparky-manager/
 │   ├── sparky-manager.service
 │   ├── xray.service           # or use the cores' shipped units
 │   └── sing-box.service
-├── tests/                     # 1528 tests (conftest.py: seeded DB + CSRF client)
+├── tests/                     # 1612 tests (conftest.py: seeded DB + CSRF client)
 │   ├── test_links.py          # link round-trips for all 9 schemes
 │   ├── test_render.py         # golden configs → xray -test / sing-box check
 │   ├── test_subscription.py   # v2rayNG + sing-box feeds parse cleanly
@@ -1197,7 +1205,7 @@ found live issues and asked for a complete check of the project.
 `main.py` is 4,922 lines at this point (4,546 at the end of Phase 7;
 the post-upgrade batches added routes, diagnostics, the webhook
 set-on-save path, the Cores page and the bot UX work). The full suite
-is 1528 tests; i18n parity is 797 keys each.
+is 1612 tests; i18n parity is 826 keys each.
 
 - **Fix batch (evening, after the server upgrade).** The language
   toggle reverted on navigation (the `lang` cookie was only set on
@@ -1917,6 +1925,141 @@ type+tag, no `protocol` key), but the endpoint parser itself was
 not quoted in the research, only its endpoint type list. The
 first real deep-link import + connect per protocol is the true
 check (docs/ZEDSECURE.md lists it explicitly).
+
+### 15.10 Best-panel program, Phase C — new dependencies (2026-11-16)
+
+Ideas 20–23: IP-limit enforcement, Prometheus `/metrics`,
+passkey (WebAuthn) login, and the CLI extension. Two new tables
+(`ip_bans`, `passkey_credentials` — `create_all` creates them on
+existing installs; no existing table changed). One new
+dependency: the Duo Labs `webauthn` library (PyPI name
+`webauthn` 3.0.1 — NOT `py_webauthn`, an unrelated 0.0.8
+package) + its deps `cbor2` 6.3.0, `pyasn1` 0.6.5,
+`pyasn1-modules` 0.4.2, `pyOpenSSL` 26.4.0 (all pinned in
+`requirements.txt`; cbor2 6.3.0 has cp311/cp312/cp314 wheels).
+i18n parity 826 keys each. Suite 1528 → 1612 tests.
+
+**Item 20 — IP limits, enforced (3x-ui's `3x-ipl` model).**
+Phase 2 stored a per-client IP limit but never enforced it — no
+honest observation hook existed. The hook is Xray's
+`GetUsersStats` RPC (`xray.app.stats.command.StatsService`,
+`command.proto`): with the `statsUserOnline` policy (now in the
+rendered config — a user counts as online from an IP while it
+has had activity within 20 s), one call returns every user's
+currently-online IPs. The hand-rolled codec in `app/xray_stats.py`
+covers it (same pattern as `QueryStats`); an Xray too old for
+the RPC answers UNIMPLEMENTED, which the client caches as
+"unsupported" so the job stops asking (3x-ui's per-process
+capability cache, same idea). A job (`_ip_limit_loop`, every
+10 s) keeps the newest `limit` IPs per user and bans the rest
+through fail2ban (jail `sparky-ipl`, 30-minute bantime,
+installed by `install.sh` with its filter).
+
+Three deliberate choices, all documented in `app/ip_limits.py`:
+
+1. **Ban only — no RemoveUser/AddUser force-cycle.** 3x-ui also
+   force-cycles the client to kill live sessions, but that needs
+   per-protocol account protobuf encoding for 9 protocols and a
+   failed re-add after a successful remove locks the user out —
+   and 3x-ui's own audit notes a hot RemoveUser cannot close
+   live sessions anyway (Xray has no KickUser API). The ban
+   already blocks reconnection, and the next Xray restart /
+   re-render drops live sessions. Documented limitation: an
+   established session from a banned IP is not killed
+   immediately.
+2. **Effective limit = min over the user's Xray-core clients.**
+   Observation is per user (Xray's email is `user-<id>`) while
+   the limit is stored per client — the minimum is the honest
+   reading. No limit set anywhere = no enforcement (off by
+   default; limit 0/absent = unlimited, as before).
+3. **Dual-path ban:** a direct `fail2ban-client set sparky-ipl
+   banip <ip>` call (immediate, deterministic) AND a
+   `[LIMIT_IP]` line in `<data>/logs/iplimit.log` (audit trail,
+   and the jail's filter matches it — belt and braces; fail2ban
+   dedups bans). An `IpBan` row per ban dedups the job and lets
+   the admin see active bans on the user page and unban early
+   (unban is a reprieve — the job re-bans on the next tick if
+   the IP is still over the limit).
+
+Sudoers v16 adds `fail2ban-client set sparky-ipl banip *` /
+`unbanip *` (the IP is a lone trailing `*` — the only wildcard
+form newer sudo accepts; the panel validates the IP with
+`ipaddress.ip_address` before calling). The jail's
+`banaction = iptables-allports` blocks ALL ports for the banned
+IP for 30 minutes, including SSH and the panel — the installer
+comment and this section both warn: an admin who is also a VPN
+user on the same IP should add their IP to the jail's
+`ignoreip`.
+
+Scope, honestly: Xray-core inbounds only. WireGuard /
+AmneziaWG have no hook to need — the kernel allows one
+endpoint per key, so a per-client IP limit above 1 is vacuous
+there. OpenVPN (status file), OpenConnect (`occtl show users`)
+and IKEv2 (`swanctl --list-sas`) have observation hooks in
+principle, but each needs a privileged reader + parser — not
+implemented in this phase. sing-box-core inbounds have no
+per-user observation API at all. (Hysteria2 *can* be Xray core
+— the filter is `inbound.core == "xray"`, not protocol.)
+
+**Item 21 — Prometheus `/metrics`.** `GET /metrics`, admin-gated
+(admin session OR an API token with `status:read` — the Phase B
+token machinery; the `admin` scope satisfies every check).
+Hand-rolled exposition format (`app/metrics.py`) — no
+`prometheus_client` dependency: the format is one line per
+sample and the project already hand-rolls its gRPC codec to stay
+lean. Metrics: users total/enabled/active, inbounds total + by
+protocol, traffic used total + today by direction, core up/down
+per unit, active IP bans. Aggregate counts only — no per-user
+data, no names, tokens, credentials or IPs ever appear (a
+scraper is a lower-trust reader than the admin UI).
+
+**Item 22 — passkey / WebAuthn login.** An additional sign-in
+method alongside password (+ TOTP). Registration is admin-only
+(Settings → Security); login via the passkey button on the
+login page (shown only when at least one passkey is registered).
+Verification is done by the `webauthn` library — signature
+verification is cryptographic and is never hand-rolled here.
+The challenge travels in a stateless HMAC-signed token (the
+TOTP pending-token shape: key = admin password hash, 5-minute
+TTL, dies on a password change, bound to the purpose +
+admin + RP ID, with a canonical-encoding check so trailing
+junk after the base64 padding is rejected). A passkey login is
+a full login on its own (the authenticator is a
+phishing-resistant possession factor with user verification —
+the GitHub model); password + TOTP always remain usable, so a
+lost passkey can never lock the admin out. Bad passkey attempts
+count toward the login lockout, like bad passwords. The RP ID
+is the request host (port stripped) — a passkey only works on
+the host it was registered for, so an admin reaching the panel
+by several hosts registers one passkey per host. Sign counts
+are verified + stored (a regression means a cloned credential
+and the login is rejected). WebAuthn needs JavaScript — the
+flow lives in `app/static/passkey.js` (no dependencies; the
+CSP is `script-src 'self'`), loaded on the login and settings
+pages only via a new `scripts` block in `base.html`.
+
+Honest limitation: no live browser verification — the
+ceremony is tested with the library boundary stubbed (the
+library itself is trusted, tested upstream). The first real
+registration + login in a browser is the true check.
+
+**Item 23 — CLI.** `sparky-manager` now covers users,
+inbounds, restore and health (§8). `update-cores` was REMOVED
+(not implemented for real): core updates are install.sh's job,
+with its SHA256 verification and config validation — a second
+updater would duplicate that and could diverge; re-running
+install.sh is the documented update path (and the operator
+already does that). The old stub printed "not implemented" and
+exited 2; argparse now rejects the subcommand with exit 2, so
+scripts testing for failure keep working. The restore command
+mirrors the web restore (validate → back up current → stop the
+panel → swap → re-apply identity → audit → re-render → start)
+and needs root (the sudoers block covers `restart` for the
+panel but not `stop`/`start`). Re-render errors are split by
+severity: the renderers' `warning:` notes (an inbound omitted
+— no usable clients, no TLS cert) are warnings, everything
+else is fatal — disabling the last user on an inbound must not
+"fail" the disable.
 
 ---
 

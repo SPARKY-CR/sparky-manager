@@ -616,6 +616,87 @@ class ManagedHost(Base):
     )
 
 
+class IpBan(Base):
+    """An IP-limit ban (Phase C item 20, 3x-ui ``3x-ipl`` jail).
+
+    One row per (user, IP) the IP-limit job banned through
+    fail2ban. The row is the panel's record of the ban — the ban
+    itself lives in fail2ban (jail ``sparky-ipl``, 30-minute
+    bantime) — and exists so the job can dedup (never re-ban an
+    IP that is already banned) and so the admin can see active
+    bans on the user page and unban early. Expired rows are pruned
+    by the job; an unban deletes the row. ``expires_at`` mirrors
+    the fail2ban bantime so the UI can show when the ban lifts.
+    """
+
+    __tablename__ = "ip_bans"
+    __table_args__ = (UniqueConstraint("user_id", "ip"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    ip: Mapped[str] = mapped_column(String(45), nullable=False)
+    banned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class PasskeyCredential(Base):
+    """A registered WebAuthn passkey (Phase C item 22).
+
+    One row per passkey the admin registered (Settings → Security).
+    ``credential_id`` is the base64url credential ID the browser
+    returns; ``public_key`` is the base64url COSE public key bytes
+    the ``webauthn`` library needs to verify assertions.
+    ``sign_count`` is the authenticator's signature counter at the
+    last successful login — a regression (a lower count than the
+    stored one) means the credential was cloned and the login is
+    rejected. ``rp_id`` is the relying-party ID the credential was
+    registered for (the panel host at registration time); a
+    passkey only works on the host it was registered for, so an
+    admin who reaches the panel by several hosts registers one
+    passkey per host. Password + TOTP always remain usable —
+    passkeys are an additional sign-in method, never a replacement.
+    """
+
+    __tablename__ = "passkey_credentials"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    admin_id: Mapped[int] = mapped_column(
+        ForeignKey("admins.id", ondelete="CASCADE"), nullable=False
+    )
+    credential_id: Mapped[str] = mapped_column(
+        String(255), unique=True, nullable=False
+    )
+    public_key: Mapped[str] = mapped_column(Text, nullable=False)
+    sign_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    transports_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    rp_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    @property
+    def transports(self) -> list[str]:
+        """Transport hints (``"usb"`` / ``"nfc"`` / ``"ble"`` /
+        ``"internal"`` / …) as a list; ``[]`` when unset."""
+        if not self.transports_json:
+            return []
+        try:
+            value = json.loads(self.transports_json)
+        except (ValueError, TypeError):
+            return []
+        return value if isinstance(value, list) else []
+
+
 # ---------------------------------------------------------------------------
 # Usability rules (DESIGN.md §4)
 # ---------------------------------------------------------------------------
@@ -721,6 +802,9 @@ __all__ = [
     "UserTag",
     "Device",
     "ManagedHost",
+    # Phase C tables (new tables only — no existing-table change).
+    "IpBan",
+    "PasskeyCredential",
     "generate_sub_token",
     "user_is_usable",
     "user_unusable_reason",
