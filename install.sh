@@ -250,6 +250,11 @@ uninstall_panel() {
           /etc/openvpn/server/sparky-manager.conf \
           /etc/swanctl/swanctl.conf \
           /etc/amnezia/amneziawg/awg0.conf
+    # The IP-limit jail + filter (Phase C item 20): they reference
+    # the panel's log file, so they go with the panel. fail2ban
+    # itself stays installed (it may protect other services).
+    rm -f /etc/fail2ban/jail.d/sparky-ipl.local /etc/fail2ban/filter.d/sparky-ipl.conf
+    fail2ban-client reload >/dev/null 2>&1 || true
     rm -f /usr/local/bin/xray /usr/local/bin/sing-box /usr/local/bin/sparky-manager
     if id sparky-manager >/dev/null 2>&1; then
         userdel sparky-manager 2>/dev/null || warn "Could not remove user sparky-manager."
@@ -516,7 +521,8 @@ apt-get install -y -qq curl ca-certificates git unzip \
     wireguard wireguard-tools nftables iproute2 openssl cron socat \
     openvpn ocserv \
     strongswan strongswan-swanctl strongswan-pki \
-    libcharon-extra-plugins libcharon-extauth-plugins
+    libcharon-extra-plugins libcharon-extauth-plugins \
+    fail2ban
 
 # ---------------------------------------------------------------------------
 # AmneziaWG — best-effort, never breaks the install.
@@ -614,7 +620,13 @@ if command -v sudo >/dev/null 2>&1 && command -v visudo >/dev/null 2>&1; then
 # trailing `*` is not needed here. The panel itself
 # (sparky-manager) is deliberately NOT start/stop-managed: stopping
 # the panel from inside the panel would strand the request.
-sparky-manager ALL=(root) NOPASSWD: /usr/bin/systemctl restart xray, /usr/bin/systemctl restart sing-box, /usr/bin/systemctl restart sparky-manager, /usr/bin/systemctl restart wg-quick@wg0, /usr/bin/systemctl restart awg-quick@awg0, /usr/bin/systemctl restart openvpn-server@sparky-manager, /usr/bin/systemctl restart ocserv, /usr/bin/systemctl restart strongswan, /usr/bin/systemctl start wg-quick@wg0, /usr/bin/systemctl start awg-quick@awg0, /usr/bin/systemctl start xray, /usr/bin/systemctl start sing-box, /usr/bin/systemctl start openvpn-server@sparky-manager, /usr/bin/systemctl start ocserv, /usr/bin/systemctl start strongswan, /usr/bin/systemctl stop xray, /usr/bin/systemctl stop sing-box, /usr/bin/systemctl stop wg-quick@wg0, /usr/bin/systemctl stop awg-quick@awg0, /usr/bin/systemctl stop openvpn-server@sparky-manager, /usr/bin/systemctl stop ocserv, /usr/bin/systemctl stop strongswan, /usr/bin/systemctl is-active xray, /usr/bin/systemctl is-active sing-box, /usr/bin/systemctl is-active sparky-manager, /usr/bin/systemctl is-active wg-quick@wg0, /usr/bin/systemctl status xray, /usr/bin/systemctl status sing-box, /usr/bin/systemctl status sparky-manager, /usr/bin/systemctl status wg-quick@wg0, /usr/bin/wg show wg0 transfer, /usr/bin/wg show wg0, /usr/bin/awg show awg0, /usr/bin/wg-quick up wg0, /usr/bin/wg-quick down wg0, /usr/bin/wg syncconf wg0 *, /usr/bin/awg syncconf awg0 *, /usr/bin/swanctl --load-all, /usr/bin/swanctl --list-conns, /usr/bin/ocserv -t -c *, /usr/bin/journalctl -u xray -n 50 --no-pager, /usr/bin/journalctl -u sing-box -n 50 --no-pager, /usr/bin/journalctl -u sparky-manager -n 50 --no-pager, /usr/bin/journalctl -u wg-quick@wg0 -n 50 --no-pager, /usr/bin/journalctl -u openvpn-server@sparky-manager -n 50 --no-pager, /usr/bin/journalctl -u ocserv -n 50 --no-pager, /usr/bin/journalctl -u strongswan -n 50 --no-pager, /usr/bin/journalctl -u awg-quick@awg0 -n 50 --no-pager
+# v16: IP-limit enforcement (Phase C item 20) bans excess IPs via
+# `fail2ban-client set sparky-ipl banip/unbanip <ip>`. The IP is a
+# lone trailing `*` (the only wildcard form newer sudo accepts —
+# see the v14 note); the panel validates the IP with
+# ipaddress.ip_address before calling, so the `*` can only ever
+# carry an IP address, never an extra argument.
+sparky-manager ALL=(root) NOPASSWD: /usr/bin/systemctl restart xray, /usr/bin/systemctl restart sing-box, /usr/bin/systemctl restart sparky-manager, /usr/bin/systemctl restart wg-quick@wg0, /usr/bin/systemctl restart awg-quick@awg0, /usr/bin/systemctl restart openvpn-server@sparky-manager, /usr/bin/systemctl restart ocserv, /usr/bin/systemctl restart strongswan, /usr/bin/systemctl start wg-quick@wg0, /usr/bin/systemctl start awg-quick@awg0, /usr/bin/systemctl start xray, /usr/bin/systemctl start sing-box, /usr/bin/systemctl start openvpn-server@sparky-manager, /usr/bin/systemctl start ocserv, /usr/bin/systemctl start strongswan, /usr/bin/systemctl stop xray, /usr/bin/systemctl stop sing-box, /usr/bin/systemctl stop wg-quick@wg0, /usr/bin/systemctl stop awg-quick@awg0, /usr/bin/systemctl stop openvpn-server@sparky-manager, /usr/bin/systemctl stop ocserv, /usr/bin/systemctl stop strongswan, /usr/bin/systemctl is-active xray, /usr/bin/systemctl is-active sing-box, /usr/bin/systemctl is-active sparky-manager, /usr/bin/systemctl is-active wg-quick@wg0, /usr/bin/systemctl status xray, /usr/bin/systemctl status sing-box, /usr/bin/systemctl status sparky-manager, /usr/bin/systemctl status wg-quick@wg0, /usr/bin/wg show wg0 transfer, /usr/bin/wg show wg0, /usr/bin/awg show awg0, /usr/bin/wg-quick up wg0, /usr/bin/wg-quick down wg0, /usr/bin/wg syncconf wg0 *, /usr/bin/awg syncconf awg0 *, /usr/bin/swanctl --load-all, /usr/bin/swanctl --list-conns, /usr/bin/ocserv -t -c *, /usr/bin/journalctl -u xray -n 50 --no-pager, /usr/bin/journalctl -u sing-box -n 50 --no-pager, /usr/bin/journalctl -u sparky-manager -n 50 --no-pager, /usr/bin/journalctl -u wg-quick@wg0 -n 50 --no-pager, /usr/bin/journalctl -u openvpn-server@sparky-manager -n 50 --no-pager, /usr/bin/journalctl -u ocserv -n 50 --no-pager, /usr/bin/journalctl -u strongswan -n 50 --no-pager, /usr/bin/journalctl -u awg-quick@awg0 -n 50 --no-pager, /usr/bin/fail2ban-client set sparky-ipl banip *, /usr/bin/fail2ban-client set sparky-ipl unbanip *
 EOF
     chmod 0440 /etc/sudoers.d/sparky-manager
     chown root:root /etc/sudoers.d/sparky-manager
@@ -627,6 +639,57 @@ else
 fi
 chown root:sparky-manager /etc/wireguard
 chmod 2770 /etc/wireguard
+
+# ---------------------------------------------------------------------------
+# fail2ban jail for IP-limit enforcement (Phase C item 20).
+# The panel bans excess IPs directly via `fail2ban-client set
+# sparky-ipl banip <ip>` AND writes a [LIMIT_IP] line to
+# /opt/sparky-manager/data/logs/iplimit.log; the jail's filter
+# matches those lines (belt and braces — fail2ban dedups bans).
+# The jail needs a filter to start cleanly, so both files are
+# written here. Bantime 1800 s (30 min) mirrors IP_BAN_MINUTES in
+# app/ip_limits.py — keep the two in sync.
+# WARNING: banaction iptables-allports blocks ALL ports for the
+# banned IP for 30 minutes, including SSH and the panel itself —
+# an admin who is also a VPN user on the same IP could lock
+# themselves out. Add trusted IPs to the jail's ignoreip (in
+# /etc/fail2ban/jail.d/sparky-ipl.local) to exempt them.
+# ---------------------------------------------------------------------------
+if command -v fail2ban-server >/dev/null 2>&1; then
+    cat > /etc/fail2ban/filter.d/sparky-ipl.conf <<'EOF'
+[Definition]
+# Matches the panel's iplimit log lines:
+# 2026-11-16 04:30:00 [LIMIT_IP] 203.0.113.7 user-12
+failregex = \[LIMIT_IP\] <HOST> user-\d+
+ignoreregex =
+EOF
+    cat > /etc/fail2ban/jail.d/sparky-ipl.local <<'EOF'
+[sparky-ipl]
+enabled = true
+filter = sparky-ipl
+logpath = /opt/sparky-manager/data/logs/iplimit.log
+maxretry = 1
+findtime = 600
+bantime = 1800
+banaction = iptables-allports
+# Trusted IPs are never banned (add the admin's own IP here if the
+# admin is also a VPN user — see the warning in install.sh).
+ignoreip = 127.0.0.1/8 ::1
+EOF
+    # The log file must exist for fail2ban to start the jail.
+    touch /opt/sparky-manager/data/logs/iplimit.log
+    chown sparky-manager:sparky-manager /opt/sparky-manager/data/logs/iplimit.log
+    systemctl enable fail2ban >/dev/null 2>&1 || true
+    if systemctl is-active --quiet fail2ban 2>/dev/null; then
+        # Reload (not restart): a restart drops all active bans,
+        # a reload re-reads the jail config and keeps them.
+        fail2ban-client reload >/dev/null 2>&1 || warn "fail2ban reload failed — IP-limit bans may not work until fail2ban is restarted."
+    else
+        systemctl start fail2ban >/dev/null 2>&1 || warn "fail2ban is installed but could not be started — IP-limit bans will fail until it runs."
+    fi
+else
+    warn "fail2ban not found — IP-limit enforcement needs it (the panel logs a warning per ban attempt until it is installed)."
+fi
 
 # ---------------------------------------------------------------------------
 # App source: use the local repo checkout when present, else clone it.
